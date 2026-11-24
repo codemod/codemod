@@ -668,6 +668,40 @@ export default async function main() {
     assert_eq!(git(&h, &["show", "codemod-a:one.txt"]), "one");
 }
 
+/// TypeScript wrappers around a callback (`satisfies`, `as`, `!`, `<T>`,
+/// parentheses) are only types: the build extracts the function inside.
+#[test]
+fn callbacks_wrapped_in_type_assertions_are_extracted() {
+    let h = Harness::new();
+    h.write(
+        "package-lock.json",
+        r#"{ "name": "app", "lockfileVersion": 3, "packages": { "": { "name": "app", "version": "1.0.0" } } }"#,
+    );
+    h.write("a.ts", "a\n");
+    h.write("b.ts", "b\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+type Graph = { workspaces(): unknown[] };
+export default async function main() {
+  const roots = await step("Graph", dependencyGraph(((g: Graph) => g.workspaces().length) satisfies (g: Graph) => number));
+  const lengths = await step("Lengths", forEachFile(
+    "*.ts",
+    ((file: { text: string }) => file.text.length) as (file: { text: string }) => number,
+    ((total: number, length: number) => total + length)!,
+    0,
+  ));
+  const cast = await step("Cast", forEachFile("*.ts", <(file: { path: string }) => string>((file) => file.path)));
+  const inline = await step("Inline", ((() => 7) as () => number));
+  return [roots, lengths.reduced, cast.outputs, inline];
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([1, 4, ["a.ts", "b.ts"], 7]));
+}
+
 /// Files that failed in a nested codemod are failed files of the run that
 /// called it.
 #[test]
