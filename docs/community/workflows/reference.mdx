@@ -403,7 +403,7 @@ Steps without git can still run in parallel, before or after. Separate checkouts
 
 Python packages have the ecosystem `pypi`, and their names are normalized as PyPI does, so `Typing_Extensions` is `typing-extensions`. `Pipfile.lock` keeps no dependencies between packages, so only the packages the `Pipfile` names are reached from the project.
 
-Without `lockfiles`, only the lockfiles at the target's root are read, since nested ones are usually fixtures or examples, and one that cannot be read is left out and listed in `g.skipped` as `{ lockfile, error }`. `lockfiles` picks which lockfiles are read instead, as a glob or a list of globs relative to the target: `**/yarn.lock` reads every `yarn.lock`, the root's included. A lockfile that `lockfiles` names and that cannot be read fails the step.
+Without `lockfiles`, only the lockfiles at the target's root are read, since nested ones are usually fixtures or examples, and one that cannot be read is left out and listed in `g.skipped` as `{ lockfile, error }`. A target with no lockfile at its root, or none that can be read, gets an empty graph: `g.lockfiles` is empty, and the callback still runs. `lockfiles` picks which lockfiles are read instead, as a glob or a list of globs relative to the target: `**/yarn.lock` reads every `yarn.lock`, the root's included. When you name lockfiles you expect them, so globs that match no lockfile fail the step, and so does a lockfile they match that cannot be read.
 
 `dependencyGraph`, `registry` and `semver` run with the codemod CLI. The Node.js host that `codemod/testing` uses by default doesn't have them yet: test a workflow that uses them with `{ host: "quickjs" }`.
 

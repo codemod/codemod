@@ -1519,18 +1519,60 @@ export default async function main() { await registry.npm("dnd"); }
 }
 
 #[test]
-fn a_dependency_graph_step_fails_when_the_target_has_no_lockfile() {
+fn a_dependency_graph_of_a_target_without_lockfiles_is_empty() {
     let h = Harness::new();
+    h.write("package.json", r#"{ "name": "app" }"#);
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
 import { dependencyGraph } from "codemod/deps";
-export default async function main() { await step("Deps", dependencyGraph({}, (g) => g.workspaces())); }
+export default async function main() {
+  return await step("Deps", dependencyGraph((g) => ({ read: g.lockfiles, skipped: g.skipped, nodes: g.nodes().length })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "read": [], "skipped": [], "nodes": 0 })
+    );
+}
+
+#[test]
+fn a_dependency_graph_step_fails_when_its_lockfiles_glob_matches_none() {
+    let h = Harness::new();
+    yarn_target(&h);
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() { await step("Deps", dependencyGraph({ lockfiles: "**/pnpm-lock.yaml" }, (g) => g.workspaces())); }
 "#,
         Value::Null,
     );
     let error = output(&report).unwrap_err();
     assert!(error.contains("step 'Deps' failed: no lockfile"), "{error}");
+}
+
+#[test]
+fn a_dependency_graph_whose_only_lockfile_cannot_be_read_lists_it_as_skipped() {
+    let h = Harness::new();
+    h.write("package.json", r#"{ "name": "app" }"#);
+    h.write("pnpm-lock.yaml", "lockfileVersion: [\n");
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph((g) => ({ read: g.lockfiles, skipped: g.skipped.map((s) => s.lockfile) })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "read": [], "skipped": ["pnpm-lock.yaml"] })
+    );
 }
 
 #[test]

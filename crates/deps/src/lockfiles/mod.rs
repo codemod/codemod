@@ -45,9 +45,10 @@ pub const LOCKFILES: [&str; 7] = [
 /// `node_modules` and `target` are skipped. A workspace keeps its lockfile
 /// at its root, so nested ones are usually fixtures or examples.
 ///
-/// A lockfile `only` names that cannot be read is an error. Without `only`,
-/// one that cannot be read is left out and listed in [`Graph::skipped`];
-/// it is an error only when no lockfile can be read.
+/// A lockfile `only` names that cannot be read is an error, and so are
+/// globs that match no lockfile. Without `only`, one that cannot be read is
+/// left out and listed in [`Graph::skipped`], and a root without lockfiles
+/// is an empty graph.
 pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
     let mut found: Vec<String> = ignore::WalkBuilder::new(root)
         .hidden(false)
@@ -67,20 +68,14 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
         })
         .collect();
     found.sort();
-    let nested = !found.is_empty();
     found.retain(|path| match only {
         [] => !path.contains('/'),
         globs => globs.iter().any(|glob| glob_match(glob, path)),
     });
-    if found.is_empty() {
-        let hint = if only.is_empty() && nested {
-            "; name nested ones with a glob such as **/yarn.lock"
-        } else {
-            ""
-        };
+    if found.is_empty() && !only.is_empty() {
         return Err(format!(
-            "no lockfile ({}) at {}{hint}",
-            LOCKFILES.join(", "),
+            "no lockfile matches {} under {}",
+            only.join(", "),
             root.display()
         ));
     }
@@ -108,17 +103,6 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
             Err(error) if only.is_empty() => graph.skipped.push(Skipped { lockfile, error }),
             Err(error) => return Err(format!("{lockfile}: {error}")),
         }
-    }
-    if graph.lockfiles.is_empty() {
-        let reasons: Vec<String> = graph
-            .skipped
-            .iter()
-            .map(|skipped| format!("{}: {}", skipped.lockfile, skipped.error))
-            .collect();
-        return Err(format!(
-            "no lockfile could be read ({})",
-            reasons.join("; ")
-        ));
     }
     Ok(graph)
 }

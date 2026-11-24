@@ -247,34 +247,61 @@ fn repository(files: &[(&str, &str)]) -> tempfile::TempDir {
     dir
 }
 
-const YARN_V1: &str = "# yarn lockfile v1\n\na@^1:\n  version \"1.0.0\"\n";
+/// A lockfile no parser can read.
+const BROKEN_PNPM: &str = "lockfileVersion: [\n";
 
 #[test]
 fn a_lockfile_that_cannot_be_read_is_skipped_when_none_were_named() {
-    let dir = repository(&[("package-lock.json", PACKAGE_LOCK), ("yarn.lock", YARN_V1)]);
+    let dir = repository(&[
+        ("package-lock.json", PACKAGE_LOCK),
+        ("pnpm-lock.yaml", BROKEN_PNPM),
+    ]);
     let graph = lockfiles::load(dir.path(), &[]).unwrap();
     assert_eq!(graph.lockfiles, vec!["package-lock.json".to_string()]);
     assert_eq!(graph.skipped.len(), 1);
-    assert_eq!(graph.skipped[0].lockfile, "yarn.lock");
-    assert_eq!(graph.skipped[0].error, "Yarn v1 lockfiles are not read yet");
+    assert_eq!(graph.skipped[0].lockfile, "pnpm-lock.yaml");
+    assert!(!graph.skipped[0].error.is_empty());
 }
 
 #[test]
 fn a_named_lockfile_that_cannot_be_read_fails() {
     let dir = repository(&[
         ("package-lock.json", PACKAGE_LOCK),
-        ("examples/old/yarn.lock", YARN_V1),
+        ("examples/old/pnpm-lock.yaml", BROKEN_PNPM),
     ]);
-    let error = lockfiles::load(dir.path(), &["examples/**/yarn.lock".to_string()]).unwrap_err();
-    assert!(error.contains("Yarn v1"), "{error}");
+    let error =
+        lockfiles::load(dir.path(), &["examples/**/pnpm-lock.yaml".to_string()]).unwrap_err();
+    assert!(
+        error.starts_with("examples/old/pnpm-lock.yaml: "),
+        "{error}"
+    );
 }
 
 #[test]
-fn loading_fails_when_no_lockfile_can_be_read() {
-    let dir = repository(&[("yarn.lock", YARN_V1)]);
-    let error = lockfiles::load(dir.path(), &[]).unwrap_err();
-    assert!(error.contains("no lockfile could be read"), "{error}");
-    assert!(error.contains("yarn.lock: Yarn v1"), "{error}");
+fn a_root_lockfile_that_cannot_be_read_is_skipped_even_when_it_is_the_only_one() {
+    let dir = repository(&[("pnpm-lock.yaml", BROKEN_PNPM)]);
+    let graph = lockfiles::load(dir.path(), &[]).unwrap();
+    assert!(graph.lockfiles.is_empty());
+    assert_eq!(graph.skipped[0].lockfile, "pnpm-lock.yaml");
+}
+
+#[test]
+fn a_target_without_lockfiles_is_an_empty_graph() {
+    let dir = repository(&[("package.json", r#"{ "name": "app" }"#)]);
+    let graph = lockfiles::load(dir.path(), &[]).unwrap();
+    assert!(graph.lockfiles.is_empty());
+    assert!(graph.skipped.is_empty());
+    assert!(graph.nodes.is_empty());
+}
+
+#[test]
+fn globs_that_match_no_lockfile_fail() {
+    let dir = repository(&[("package-lock.json", PACKAGE_LOCK)]);
+    let error = lockfiles::load(dir.path(), &["**/yarn.lock".to_string()]).unwrap_err();
+    assert!(
+        error.contains("no lockfile matches **/yarn.lock"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -282,7 +309,7 @@ fn only_root_lockfiles_are_read_when_none_were_named() {
     let dir = repository(&[
         ("package-lock.json", PACKAGE_LOCK),
         ("packages/web/package-lock.json", PACKAGE_LOCK),
-        ("examples/old/yarn.lock", YARN_V1),
+        ("examples/old/pnpm-lock.yaml", BROKEN_PNPM),
     ]);
     let graph = lockfiles::load(dir.path(), &[]).unwrap();
     assert_eq!(graph.lockfiles, vec!["package-lock.json".to_string()]);
@@ -290,10 +317,10 @@ fn only_root_lockfiles_are_read_when_none_were_named() {
 }
 
 #[test]
-fn nested_lockfiles_alone_point_to_a_glob() {
+fn nested_lockfiles_alone_are_not_read_without_a_glob() {
     let dir = repository(&[("packages/web/package-lock.json", PACKAGE_LOCK)]);
-    let error = lockfiles::load(dir.path(), &[]).unwrap_err();
-    assert!(error.contains("**/yarn.lock"), "{error}");
+    let graph = lockfiles::load(dir.path(), &[]).unwrap();
+    assert!(graph.lockfiles.is_empty());
 }
 
 #[test]

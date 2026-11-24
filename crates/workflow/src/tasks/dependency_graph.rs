@@ -44,12 +44,20 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         .ok_or_else(|| format!("unknown callback '{}'", request.callback))?;
     let only = request.lockfiles.map(Globs::into_vec).unwrap_or_default();
     let graph = codemod_deps::load(&run.target, &only)?;
-    task.log(format!(
-        "read {} ({} packages, {} dependencies)",
-        graph.lockfiles.join(", "),
-        graph.nodes.len(),
-        graph.edges.len()
-    ));
+    if graph.lockfiles.is_empty() && graph.skipped.is_empty() {
+        task.log(
+            "no lockfile at the target's root, so the graph is empty; nested ones are read when `lockfiles` names them, such as **/yarn.lock",
+        );
+    } else if graph.lockfiles.is_empty() {
+        task.log("no lockfile could be read, so the graph is empty");
+    } else {
+        task.log(format!(
+            "read {} ({} packages, {} dependencies)",
+            graph.lockfiles.join(", "),
+            graph.nodes.len(),
+            graph.edges.len()
+        ));
+    }
     for skipped in &graph.skipped {
         task.log(format!("skipped {}: {}", skipped.lockfile, skipped.error));
     }

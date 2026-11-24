@@ -84,7 +84,10 @@ declare module "codemod:deps" {
    * `dependencyGraph` callback; only what the callback returns is recorded.
    */
   export interface DependencyGraph {
-    /** Lockfiles read, relative to the target. */
+    /**
+     * Lockfiles read, relative to the target. Empty when the target has no
+     * lockfile at its root, or none that can be read: the graph is empty.
+     */
     readonly lockfiles: readonly string[];
     /**
      * Lockfiles found but not read, with why. Without a `lockfiles` option,
