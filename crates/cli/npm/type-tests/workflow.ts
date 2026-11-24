@@ -27,6 +27,7 @@ import { commit as oldCommit } from "codemod/workflow";
 // @ts-expect-error the git steps moved to codemod/git
 import { pullRequest as oldPullRequest } from "codemod/workflow";
 import migrate from "./scripts/migrate.ts";
+import sumByPackage from "./scripts/sum-by-package.ts";
 import shardFiles from "./scripts/shard.ts";
 import wouldChange from "./scripts/would-change.ts";
 import rules from "./rules/config.yml";
@@ -312,3 +313,48 @@ export const counts: Codemod<TS> = async (root) => ({
 export const aNumber: Codemod<TS> = async () => ({ data: 1 });
 // @ts-expect-error data is JSON
 export const notJson: Codemod<TS> = async () => ({ data: () => 1 });
+
+// ── forEachFile with a reducer ─────────────────────────────────────────
+
+export async function reducers() {
+  // The outputs are folded into `reduced`, typed by the initial value and
+  // what the reducer returns; there are no `outputs`.
+  const counted = await step(
+    forEachFile(
+      "**/*.ts",
+      (file) => (file.text.includes("var") ? { path: file.path, count: 1 } : undefined),
+      (total, output, path) => {
+        expectType<Equal<typeof output, { path: string; count: number }>>(true);
+        expectType<Equal<typeof path, string>>(true);
+        return total + output.count;
+      },
+      0,
+    ),
+  );
+  expectType<Equal<typeof counted.reduced, number>>(true);
+  expectType<Equal<(typeof counted.failures)[number]["path"], string>>(true);
+  // @ts-expect-error a reducer's result has no outputs
+  void counted.outputs;
+  const grouped = await step(
+    forEachFile(
+      { language: "typescript" },
+      async (file) => file.text.length,
+      async (sizes, size, path) => ({ ...sizes, [path]: size }),
+      {} as Record<string, number>,
+    ),
+  );
+  expectType<Equal<typeof grouped.reduced, { readonly [x: string]: number }>>(true);
+  // An imported reducer, typed with FileReducer.
+  const none: Record<string, number> = {};
+  const byPackage = await step(
+    forEachFile("**/*.ts", (file) => file.text.length, sumByPackage, none),
+  );
+  expectType<Equal<typeof byPackage.reduced, { readonly [x: string]: number }>>(true);
+  const paths = (file: { path: string }) => file.path;
+  // @ts-expect-error the reducer's result must be JSON: a Set is not
+  forEachFile("**/*.ts", paths, (all, path) => all.add(path), new Set<string>());
+  // @ts-expect-error the reducer returns what the initial value is
+  forEachFile("**/*.ts", paths, (count: number) => String(count), 0);
+  // @ts-expect-error astGrep(...) returns nothing per file: there is nothing to reduce
+  forEachFile("**/*.ts", astGrep(rules), (count: number) => count + 1, 0);
+}

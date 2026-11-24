@@ -107,6 +107,25 @@ function __plain(value: unknown): unknown {
   return value;
 }
 
+let __folded: unknown;
+
+/** Start a `forEachFile` reducer's fold; `initial` is JSON. */
+export function __reduceStart(initial: string): void {
+  __folded = JSON.parse(initial);
+}
+
+/** Fold one file's output (as JSON) into the result; throws what the reducer throws. */
+export async function __reduceOne(output: string, path: string): Promise<void> {
+  __folded = await __cb(__folded, JSON.parse(output), path);
+}
+
+/** The folded result, as JSON. */
+export function __reduceEnd(): string {
+  const result = __folded === undefined ? null : __folded;
+  __checkJson(result, "the reducer's result");
+  return JSON.stringify(result);
+}
+
 /** Call the function with arguments (a JSON array): a shard function. Never throws. */
 export async function __runCall(args: string): Promise<string> {
   try {
