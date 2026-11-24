@@ -29,7 +29,7 @@ use rquickjs::{CatchResultExt, Context, Ctx, Function, Module, Object, Promise, 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::build::{Built, DEPS_MODULE, FLOW_MODULE};
+use crate::build::{Built, DEPS_MODULE, FLOW_MODULE, GIT_MODULE};
 use crate::events::{Event, EventSink};
 use crate::interaction::Interaction;
 use crate::tasks::{self, TaskContext};
@@ -503,7 +503,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
     runtime.set_loader(
         (
             // The body's codemod modules: `codemod/<name>`, or `codemod:<name>`.
-            CodemodModuleResolver::new(&["ast-grep", "workflow", "deps"]),
+            CodemodModuleResolver::new(&["ast-grep", "workflow", "deps", "git"]),
             BodyPathResolver,
             llrt_resolver,
             BuiltinResolver::default()
@@ -516,6 +516,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             BuiltinLoader::default()
                 .with_module(FLOW_MODULE, crate::js::workflow_module())
                 .with_module(DEPS_MODULE, crate::js::deps_module())
+                .with_module(GIT_MODULE, crate::js::git_module())
                 .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator())
                 .with_module(SEMVER_MODULE, crate::js::semver_module())
                 .with_module(PATH_SHIM_MODULE, include_str!("js/path.js")),

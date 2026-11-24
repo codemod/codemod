@@ -38,6 +38,8 @@ const SCRIPT_EXTENSIONS: &[&str] = &["ts", "mts", "cts", "tsx", "js", "mjs", "cj
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Role {
     ForEachFile,
+    /// `forEachFile(selector, callback, reducer, initial)`'s reducer.
+    Reducer,
     ShardFunction,
     ShardFilter,
 }
@@ -46,6 +48,7 @@ impl Role {
     fn what(self) -> &'static str {
         match self {
             Role::ForEachFile => "forEachFile",
+            Role::Reducer => "forEachFile's reducer",
             Role::ShardFunction => "shard's method.function",
             Role::ShardFilter => "shard's filter",
         }
@@ -54,6 +57,7 @@ impl Role {
     fn example_name(self) -> &'static str {
         match self {
             Role::ForEachFile => "migrate",
+            Role::Reducer => "count",
             Role::ShardFunction => "shardFiles",
             Role::ShardFilter => "keep",
         }
@@ -62,6 +66,7 @@ impl Role {
     fn example_file(self) -> &'static str {
         match self {
             Role::ForEachFile => "./scripts/migrate.ts",
+            Role::Reducer => "./scripts/count.ts",
             Role::ShardFunction => "./scripts/shard.ts",
             Role::ShardFilter => "./scripts/keep.ts",
         }
@@ -70,15 +75,21 @@ impl Role {
     fn written(self, name: &str) -> String {
         match self {
             Role::ForEachFile => format!("forEachFile(selector, {name})"),
+            Role::Reducer => format!("forEachFile(selector, callback, {name}, initial)"),
             Role::ShardFunction => format!("shard({{ method: {{ function: {name} }} }})"),
             Role::ShardFilter => format!("shard({{ filter: {name}, ... }})"),
         }
     }
 
     /// Whether the engine runs it in an isolate on every host. A
-    /// `forEachFile` callback runs in place on the Node.js host.
+    /// `forEachFile` callback and reducer run in place on the Node.js host.
     pub fn isolated(self) -> bool {
-        self != Role::ForEachFile
+        !self.in_for_each_file()
+    }
+
+    /// Given to `forEachFile`, which checks what is not an imported function.
+    fn in_for_each_file(self) -> bool {
+        matches!(self, Role::ForEachFile | Role::Reducer)
     }
 }
 
@@ -327,7 +338,16 @@ impl<'a> Analyzer<'_, 'a> {
     }
 
     fn for_each_file(&mut self, call: &CallExpression<'a>) -> Result<(), BuildError> {
-        let Some(argument) = call.arguments.last().and_then(Argument::as_expression) else {
+        // `forEachFile(selector, callback, reducer, initial)`.
+        let callback = if call.arguments.len() > 2 {
+            if let Some(reducer) = call.arguments.get(2).and_then(Argument::as_expression) {
+                self.callback(reducer, None, Role::Reducer)?;
+            }
+            call.arguments.get(1)
+        } else {
+            call.arguments.last()
+        };
+        let Some(argument) = callback.and_then(Argument::as_expression) else {
             return Ok(());
         };
         // A file path where the callback goes: one that names a script.
@@ -481,7 +501,7 @@ impl<'a> Analyzer<'_, 'a> {
                         ),
                     ));
                 }
-                if role == Role::ForEachFile {
+                if role.in_for_each_file() {
                     return Ok(false);
                 }
                 return Err(self.error(at, takes()));
@@ -495,7 +515,7 @@ impl<'a> Analyzer<'_, 'a> {
         let Some((symbol, binding)) =
             symbol.and_then(|symbol| Some((symbol, self.bindings.get(&symbol)?.clone())))
         else {
-            if role == Role::ForEachFile {
+            if role.in_for_each_file() {
                 return Ok(false);
             }
             return Err(self.error(at, takes()));
@@ -590,7 +610,7 @@ impl<'a> Analyzer<'_, 'a> {
             return Err(self.error(
                 ident.span.start,
                 format!(
-                    "'{}' is the callback imported from \"{}\": only give it to forEachFile(...), or as shard's method.function or filter. The workflow body does not load it; it runs where callbacks run",
+                    "'{}' is the callback imported from \"{}\": only give it to forEachFile(...) as its callback or reducer, or as shard's method.function or filter. The workflow body does not load it; it runs where callbacks run",
                     ident.name, callback.specifier
                 ),
             ));

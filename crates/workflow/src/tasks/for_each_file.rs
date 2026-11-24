@@ -31,6 +31,7 @@ use serde_json::{json, Value};
 use super::changes::{self, Change, PlannedChange};
 use super::isolate::{self, module_name, StepIsolates};
 use super::overlay::Overlay;
+use super::reduce::{self, FinishOnDrop, Fold, InOrder, Reduce};
 use super::{block_on, parallel_map, TaskContext, TaskOutcome};
 use crate::run::RunContext;
 
@@ -83,6 +84,10 @@ struct Request {
     selector: Selector,
     callback: String,
     captures: Value,
+    /// `forEachFile(selector, callback, reducer, initial)`: fold the
+    /// outputs into one value instead of listing them.
+    #[serde(default)]
+    reduce: Option<Reduce>,
 }
 
 pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome, String> {
@@ -90,12 +95,17 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         serde_json::from_value(request).map_err(|e| format!("bad forEachFile task: {e}"))?;
     let run = task.run;
     let (selector, files) = select_paths(run, request.selector)?;
-    let (outcomes, other_changes) = run_callback(
+    let Ran {
+        outcomes,
+        other_changes,
+        reduced,
+    } = run_callback(
         task,
         &request.callback,
         &request.captures,
         &selector,
         &files,
+        request.reduce.as_ref(),
     )?;
 
     let mut total = 0;
@@ -104,14 +114,14 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     let mut planned = Vec::new();
     for (Selected { path, .. }, outcome) in files.into_iter().zip(outcomes) {
         let outcome = outcome.unwrap_or_else(|| Err("the file was not processed".to_string()));
-        if matches!(outcome, Ok(Ran::Skipped)) {
+        if matches!(outcome, Ok(Done::Skipped)) {
             continue;
         }
         total += 1;
         match outcome {
-            Ok(Ran::Skipped) => {}
+            Ok(Done::Skipped) => {}
             Err(error) => failures.push((path, error)),
-            Ok(Ran::Done { outcome, original }) => {
+            Ok(Done::Ran { outcome, original }) => {
                 if outcome.has_output {
                     outputs.push(outcome.output);
                 }
@@ -132,6 +142,9 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     if task.canceled() {
         return Err("canceled".to_string());
     }
+    // A reducer that failed fails the step before anything is written; the
+    // files left when it stopped are not failures of their own.
+    let reduced = reduced.transpose()?;
     task.log_failures(&failures);
     every_file_failed(&failures, total)?;
     planned.extend(changes::plan(task, &other_changes)?);
@@ -141,31 +154,45 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         .into_iter()
         .map(|(path, error)| json!({ "path": path, "error": error }))
         .collect();
-    Ok(TaskOutcome::new(json!({
-        "outputs": outputs,
-        "changes": changes,
-        "failures": failures,
-    }))
-    .with_failures(failed, total))
+    let result = match reduced {
+        Some(reduced) => json!({
+            "reduced": reduced,
+            "changes": changes,
+            "failures": failures,
+        }),
+        None => json!({
+            "outputs": outputs,
+            "changes": changes,
+            "failures": failures,
+        }),
+    };
+    Ok(TaskOutcome::new(result).with_failures(failed, total))
 }
 
 /// What became of one selected file.
-enum Ran {
+enum Done {
     /// Not UTF-8, or without the selector's `containing` text: not one of
     /// the step's files.
     Skipped,
     /// The callback ran. `original` is the text it was given, kept only when
-    /// it asked for changes.
-    Done {
+    /// it asked for changes. With a reducer, its output went to the fold.
+    Ran {
         outcome: FileOutcome,
         original: Option<String>,
     },
 }
 
-/// What became of each of a step's files, in their order (`None` for a file
-/// the callback did not get to), and the files jssg transforms changed
-/// through the step's unwritten files (see [`OtherFiles`]).
-type CallbackOutcomes = (Vec<Option<Result<Ran, String>>>, Vec<JssgFileChange>);
+/// What a step's callbacks did.
+struct Ran {
+    /// What became of each of the step's files, in their order (`None` for
+    /// a file the callback did not get to).
+    outcomes: Vec<Option<Result<Done, String>>>,
+    /// The files jssg transforms changed through the step's unwritten files
+    /// (see [`OtherFiles`]).
+    other_changes: Vec<JssgFileChange>,
+    /// With a reducer: the folded outputs, or why the fold failed.
+    reduced: Option<Result<Value, String>>,
+}
 
 /// Run the extracted callback `callback` on the selected `files`, in
 /// workers, as the selector says (language, concurrency, semantic analysis,
@@ -177,7 +204,8 @@ fn run_callback(
     captures: &Value,
     selector: &Selector,
     files: &[Selected],
-) -> Result<CallbackOutcomes, String> {
+    reduce: Option<&Reduce>,
+) -> Result<Ran, String> {
     let run = task.run;
     let module = run
         .callbacks
@@ -219,7 +247,7 @@ fn run_callback(
         .unwrap_or(1)
         .min(files.len().div_ceil(concurrency))
         .max(1);
-    let mut outcomes: Vec<Option<Result<Ran, String>>> = (0..files.len()).map(|_| None).collect();
+    let mut outcomes: Vec<Option<Result<Done, String>>> = (0..files.len()).map(|_| None).collect();
     let other_files = OtherFiles {
         pending: run
             .overlay
@@ -229,10 +257,24 @@ fn run_callback(
         renames: Mutex::default(),
     };
 
-    let worker_results: Vec<WorkerResult> = if files.is_empty() {
-        Vec::new()
-    } else {
-        std::thread::scope(|scope| {
+    // With a reducer, outputs are folded in their own isolate as files
+    // finish, in the files' order; a slow reducer holds the workers back
+    // rather than letting outputs pile up.
+    let fold = reduce
+        .map(|reduce| Fold::new(task, reduce, &isolates))
+        .transpose()?;
+    let (sender, entries) = std::sync::mpsc::sync_channel::<reduce::Entry>(64);
+    let in_order = fold
+        .is_some()
+        .then(|| InOrder::new(sender, reduce::window(workers, concurrency)));
+    let in_order = in_order.as_ref();
+
+    let (worker_results, reduced): (Vec<WorkerResult>, _) = std::thread::scope(|scope| {
+        let cancel = &*task.cancel;
+        let folding = fold.map(|fold| scope.spawn(move || fold.run(entries, cancel)));
+        let worker_results = if files.is_empty() {
+            Vec::new()
+        } else {
             let handles: Vec<_> = (0..workers)
                 .map(|_| {
                     let mut options = isolates.worker_options(task, selector.language.clone());
@@ -259,9 +301,17 @@ fn run_callback(
                         target: &run.target,
                         other_files: &other_files,
                         overlay: run.overlay.as_deref(),
+                        in_order,
                     };
                     let progress = &progress;
-                    scope.spawn(move || worker(job, progress))
+                    scope.spawn(move || {
+                        let stop = FinishOnDrop(in_order);
+                        let result = worker(job, progress);
+                        if result.is_ok() {
+                            stop.disarm();
+                        }
+                        result
+                    })
                 })
                 .collect();
             handles
@@ -272,14 +322,28 @@ fn run_callback(
                         .unwrap_or_else(|_| Err("a forEachFile worker panicked".to_string()))
                 })
                 .collect()
-        })
-    };
+        };
+        // Every file is done: the fold ends with what it was given.
+        if let Some(in_order) = in_order {
+            in_order.finish();
+        }
+        let reduced = folding.map(|folding| {
+            folding
+                .join()
+                .unwrap_or_else(|_| Err("the reducer panicked".to_string()))
+        });
+        (worker_results, reduced)
+    });
     for result in worker_results {
         for (index, outcome) in result? {
             outcomes[index] = Some(outcome);
         }
     }
-    Ok((outcomes, other_files.into_changes(run.overlay.as_deref())))
+    Ok(Ran {
+        outcomes,
+        other_changes: other_files.into_changes(run.overlay.as_deref()),
+        reduced,
+    })
 }
 
 /// A file's path, and what the callback returned for it or why it failed.
@@ -296,15 +360,15 @@ pub(crate) fn callback_outputs(
     files: &[Selected],
 ) -> Result<Vec<FileOutput>, String> {
     // A filter changes nothing: what transforms changed is dropped.
-    let (outcomes, _) = run_callback(task, callback, captures, selector, files)?;
+    let Ran { outcomes, .. } = run_callback(task, callback, captures, selector, files, None)?;
     Ok(files
         .iter()
         .zip(outcomes)
         .filter_map(|(Selected { path, .. }, outcome)| {
             let output =
                 match outcome.unwrap_or_else(|| Err("the file was not processed".to_string())) {
-                    Ok(Ran::Skipped) => return None,
-                    Ok(Ran::Done { outcome, .. }) => match outcome.error {
+                    Ok(Done::Skipped) => return None,
+                    Ok(Done::Ran { outcome, .. }) => match outcome.error {
                         Some(error) if !outcome.ok => Err(error),
                         _ => Ok(outcome.output),
                     },
@@ -513,7 +577,7 @@ pub(crate) fn read_selected(
         .collect()
 }
 
-type WorkerResult = Result<Vec<(usize, Result<Ran, String>)>, String>;
+type WorkerResult = Result<Vec<(usize, Result<Done, String>)>, String>;
 
 struct Job<'a> {
     options: WorkerOptions<OxcResolver>,
@@ -531,6 +595,8 @@ struct Job<'a> {
     target: &'a Path,
     other_files: &'a OtherFiles,
     overlay: Option<&'a Overlay>,
+    /// With a reducer: where each file's output goes.
+    in_order: Option<&'a InOrder>,
 }
 
 fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
@@ -550,6 +616,7 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
         target,
         other_files,
         overlay,
+        in_order,
     } = job;
     block_on(async move {
         let worker = isolate::start(options, registry).await?;
@@ -587,6 +654,10 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                 if range.is_empty() {
                     break;
                 }
+                // Not too far ahead of the reducer.
+                if in_order.is_some_and(|in_order| !in_order.wait_turn(start, cancel)) {
+                    break;
+                }
                 // Read this batch's files; the ones that are not the step's
                 // are done.
                 let mut indices = Vec::with_capacity(range.len());
@@ -598,7 +669,10 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                             texts.push(text);
                         }
                         None => {
-                            results.push((index, Ok(Ran::Skipped)));
+                            if let Some(in_order) = in_order {
+                                in_order.put(index, None);
+                            }
+                            results.push((index, Ok(Done::Skipped)));
                             progress();
                         }
                     }
@@ -716,10 +790,23 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                 for ((index, outcome), text) in indices.iter().zip(outcomes).zip(texts) {
                     // The text is only needed to commit changes: a jssg
                     // transform's are in the step's unwritten files already.
-                    let outcome = outcome.map(|outcome| {
+                    let outcome = outcome.map(|mut outcome| {
+                        // With a reducer the output goes to the fold, not
+                        // into the step's result.
+                        if let Some(in_order) = in_order {
+                            let entry = outcome.has_output.then(|| {
+                                let output = std::mem::take(&mut outcome.output);
+                                (files[*index].path.clone(), output.to_string())
+                            });
+                            outcome.has_output = false;
+                            in_order.put(*index, entry);
+                        }
                         let original = (!outcome.effects.is_empty()).then_some(text);
-                        Ran::Done { outcome, original }
+                        Done::Ran { outcome, original }
                     });
+                    if let (Some(in_order), Err(_)) = (in_order, &outcome) {
+                        in_order.put(*index, None);
+                    }
                     results.push((*index, outcome));
                     progress();
                 }
