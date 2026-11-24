@@ -51,8 +51,8 @@ pub(crate) mod serde;
 
 #[cfg(feature = "native")]
 pub use native::{
-    scan_file_with_combined_scan, scan_pass, scan_text_with_combined_scan, with_combined_scan,
-    with_combined_scan_of, ScanPass,
+    scan_file_with_combined_scan, scan_pass, scan_pass_as, scan_text_with_combined_scan,
+    with_combined_scan, with_combined_scan_of, LanguageScan, ScanPass,
 };
 
 /// The `codemod/ast-grep` runtime module. Public so other hosts can register

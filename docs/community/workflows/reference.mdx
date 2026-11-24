@@ -1,7 +1,7 @@
 ---
 title: "Workflow Reference"
 sidebarTitle: "Reference"
-description: "The workflow.ts API: steps, per-file callbacks, tasks, state, and resuming runs."
+description: "The workflow.ts API: steps, per-file callbacks, tasks, and resuming runs."
 ---
 
 A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow`, `codemod/git` and `codemod/deps`, and what else a workflow can import.
@@ -311,9 +311,9 @@ await step("Rename", forEachFile(astGrep({
 
 **Rules** are data: an object of the shape of an ast-grep YAML rule (`id`, `language`, `rule`, `fix`, `constraints`, `utils`, `transform`, ...), an array of them, or an imported YAML rule file. Import a YAML file with `import rules from "./rules/config.yml"` (no import attribute needed): the import gives the file's rule as an object, or an array when the file has several documents (`---`), and publishing includes the file. Rules can also be written in the workflow, or built from params and earlier results; they must be JSON (a function, a `RegExp` or a cycle in a rule is an error naming it; a field left `undefined` is left out). The rules are part of the step, so a changed rule runs the step again on resume. A YAML import is data anywhere: in the body, in callbacks, and in Node.js through `codemod/host`. The `AstGrepRule` type describes a rule, and `.yaml` imports are typed as rules.
 
-**The selector** is a glob, a list of globs, or an object with `include`, `exclude` and `containing`. Without `include`, the files of the rules' languages are selected; selected files of other languages are skipped, as no rule is for them. The callback options (`language`, `semanticAnalysis`, `capabilities`, `concurrency`) do not apply: each rule names its language, and rules have no semantic analysis.
+**The selector** is a glob, a list of globs, or an object with `include`, `exclude` and `containing`. Without `include`, the files of the rules' languages are selected; selected files of other languages are skipped, as no rule is for them. Each rule runs on the files with its language's extensions, parsed as that language: a `"typescript"` rule also runs on `.js`, `.mjs` and `.cjs` files, as TypeScript, and a `"tsx"` rule on `.jsx` files too. The callback options (`language`, `semanticAnalysis`, `capabilities`, `concurrency`) do not apply: each rule names its language, and rules have no semantic analysis.
 
-**Repeat until nothing changes.** Of overlapping matches, such as both calls in `console.log(console.log(x))`, one pass fixes only the outer one. `astGrep(rules, { repeat: true })` runs the rules again on the text they fixed until it no longer changes, up to 10 passes over each file (`{ repeat: 25 }` sets the most). The passes run on the text in memory, in the one step, so a dry run reports the same diff as a real run. A file still changing after the last pass, usually because a fix matches its own output, is a failure and is left as it was.
+**Repeat until nothing changes.** Of overlapping matches of one language's rules, such as both calls in `console.log(console.log(x))`, one pass fixes only the outer one. When rules of several languages apply to a file (a `typescript` and a `javascript` rule on a `.js` file), each language's rules run on the text the previous language's fixed, so they can fix nested matches in one pass; rules that undo each other's fixes fail the file. `astGrep(rules, { repeat: true })` runs the rules again on the text they fixed until it no longer changes, up to 10 passes over each file (`{ repeat: 25 }` sets the most). The passes run on the text in memory, in the one step, so a dry run reports the same diff as a real run. A file still changing after the last pass, usually because a fix matches its own output, is a failure and is left as it was.
 
 ```ts
 const consoleToLogger = { id: "console-to-logger", language: "typescript", rule: { pattern: "console.log($$$ARGS)" }, fix: "logger.info($$$ARGS)" };
@@ -358,7 +358,7 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 | `forEachFile(selector?, callback)` | Run a callback, inline or imported, on every selected file. See [`forEachFile`](#foreachfileselector-callback). |
 | `forEachFile(selector, callback, reducer, initial)` | Run a callback on every selected file and fold what it returns into one value. Result: `{ reduced, changes, failures }`. See [Reducing outputs](#reducing-outputs). |
 | `forEachFile(selector?, astGrep(rules, { repeat }?))` | Apply ast-grep rules, written in the workflow or imported from YAML, to the selected files; `repeat` runs them until nothing changes. Result: `{ changes, matches, failures }`. See [ast-grep rules](#ast-grep-rules). |
-| `shell(command, { env, cwd })`, ``shell`command` `` | Run a shell command. Result: `{ output }`. See [Shell commands](#shell-commands). |
+| `shell(command, { env, cwd, allowFailure })`, ``shell`command` `` | Run a shell command. Result: `{ stdout, stderr, exitCode }`. See [Shell commands](#shell-commands). |
 | `shard(options)` | Split files into groups. See [Sharding](/community/workflows/sharding). |
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
 | `agent(prompt, options)` | Hand a prompt to a coding agent. See [Coding agents](#coding-agents). |
@@ -507,6 +507,8 @@ const { major } = JSON.parse(stdout.trim().split("\n").at(-1)!);
 A command that exits with an error fails the step, and the error ends with what it printed on stderr. Pass `allowFailure: true` to get the result instead and check `exitCode` yourself. Each stream keeps its last 1 MiB of bytes. The result preserves line endings and replaces invalid UTF-8 with `�`.
 
 Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
+
+A dry run keeps what each step would change in memory, and later steps read that instead of the disk: `forEachFile` callbacks, `astGrep` rules, `jssgTransform` in function steps and nested `codemod()` runs see the text earlier steps left, renamed files at their new paths, and not the files they deleted. Shell commands don't run in a dry run, so they see none of it. When the run ends, the CLI prints a unified diff of everything the run would change (with `--format jsonl`, one `run_diff` event per file, with `path`, `diff`, `additions` and `deletions`). A renamed file shows as its old path removed and its new path added.
 
 If a `codemod()` step resolves a preview-only registry package during an apply run, the step fails before starting that package. Rerun the workflow with `--dry-run` to preview it. This also applies to packages called by nested workflows.
 

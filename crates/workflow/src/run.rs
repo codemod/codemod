@@ -159,6 +159,10 @@ pub(crate) struct RunContext {
     /// Serializes file commits from steps running at the same time, in this
     /// run and in the codemods nested in it.
     pub commit_lock: Arc<Mutex<()>>,
+    /// In a dry run, what its steps would have changed so far, which later
+    /// steps read instead of the disk; `None` otherwise. Shared with nested
+    /// codemods.
+    pub overlay: Option<Arc<crate::tasks::overlay::Overlay>>,
     /// For a nested codemod: the step running it, or one of its own parents,
     /// ran alongside other steps. Its managed git steps are refused then, as
     /// they share the checkout with those steps.
@@ -254,6 +258,7 @@ impl RunContext {
             services: Arc::clone(&self.services),
             cancel,
             commit_lock: Arc::clone(&self.commit_lock),
+            overlay: self.overlay.clone(),
             alongside: self.alongside || alongside,
             chain,
             test: None,

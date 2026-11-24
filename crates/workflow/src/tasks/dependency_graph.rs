@@ -67,8 +67,8 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     let attach_name = module_name(task, "dependency-graph");
 
     let (json, failure, changes) = block_on(async move {
-        let sandbox = isolate::start(options, registry).await?;
-        let sandbox = &sandbox;
+        let worker = isolate::start(options, registry).await?;
+        let sandbox = &worker;
         let json: Result<String, String> = async_with!(sandbox.context => |ctx| {
             let run = async {
                 install_graph(&ctx, walk)?;
@@ -88,6 +88,9 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         })
         .await;
         let (failure, changes) = side_effects(sandbox);
+        // Timers or promises the code left running would abort the process
+        // when the runtime is freed: wait for them a little, else leak it.
+        worker.shutdown(isolate::SHUTDOWN_GRACE).await;
         Ok::<_, String>((json?, failure, changes))
     })?;
 

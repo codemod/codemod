@@ -93,7 +93,7 @@ A module you import yourself is loaded without the build's changes, which `runWo
 
 Both hosts run the same orchestrator: `step()`, replay on resume, `until` and `given` work the same way. Tasks the engine owns run in the engine on both: `astGrep`, `shell`, `shard` (with its function and filter, in the engine's isolates), `codemod`, `agent` and the git steps, and so do selecting files for `forEachFile` and writing what callbacks change. `forEachFile` callbacks, inline or imported, run in Node.js; `codemod/host` applies the build's changes to the workflow file as it loads it, when it loads it by path on Node.js (not for a module you imported yourself, nor on Bun: see [Import workflows yourself](#import-workflows-yourself)).
 
-A workflow file is checked as the CLI checks it before it runs: a callback that assigns to an outer variable, `fs` in the workflow body, and the other things the CLI refuses are errors here too, so a workflow that passes its tests also runs with the CLI. State, `codemod/runtime` logs and failures behave the same in steps and callbacks on both.
+A workflow file is checked as the CLI checks it before it runs: a callback that assigns to an outer variable, `fs` in the workflow body, and the other things the CLI refuses are errors here too, so a workflow that passes its tests also runs with the CLI. `codemod/runtime` logs and failures behave the same in steps and callbacks on both.
 
 On the Node.js host:
 

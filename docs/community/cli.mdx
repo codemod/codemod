@@ -382,7 +382,7 @@ npx codemod <package-name>
 </ResponseField>
 
 <ResponseField name="--dry-run" type="boolean">
-  Run every step without changing files. Shell commands, agents and skill installs are skipped, and the run is not saved.
+  Run every step without changing files. Later steps see what earlier steps would have changed, and the run ends by printing the diff of all of it (`run_diff` events with `--format jsonl`). Shell commands, agents and skill installs are skipped, and the run is not saved.
 </ResponseField>
 
 <ResponseField name="--approve" type="boolean">

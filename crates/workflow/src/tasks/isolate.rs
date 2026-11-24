@@ -83,7 +83,12 @@ impl StepIsolates {
             target_directory: run.target.clone(),
             default_language,
             semantic_provider: self.semantic_provider.clone(),
-            pending_files: None,
+            // In a dry run, `jssgTransform` starts from what earlier steps
+            // would have left.
+            pending_files: run
+                .overlay
+                .as_ref()
+                .map(super::overlay::Overlay::pending_files),
         }
     }
 }
@@ -207,6 +212,11 @@ pub(crate) fn module_name(task: &TaskContext<'_>, id: &str) -> String {
         .to_string_lossy()
         .into_owned()
 }
+
+/// How long an isolate waits, once its code is done, for work the code left
+/// running (a timer, an unawaited promise) before it is dropped; see
+/// [`Worker::shutdown`].
+pub(crate) const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Start one isolate, with `__dependencyHost` installed for
 /// `codemod-internal:dependencies`.

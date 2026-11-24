@@ -371,3 +371,24 @@ export default async function main() {{
     assert!(output(&resumed).is_err());
     assert_eq!(h.read("a.txt"), "a\n!!");
 }
+
+/// In a dry run, a step with a reducer reads what earlier steps would have
+/// left, as one without does.
+#[test]
+fn a_dry_run_folds_what_earlier_steps_would_have_left() {
+    let h = Harness::new();
+    h.write("a.txt", "1\n");
+    h.write("b.txt", "1\n");
+    let report = h.dry_run(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step("Bump", forEachFile("*.txt", (file) => file.write("2\n")));
+  const { reduced } = await step("Sum", forEachFile("*.txt", (file) => Number(file.text), (sum, n) => sum + n, 0));
+  return reduced;
+}
+"#,
+    );
+    assert_eq!(output(&report).unwrap(), json!(4));
+    assert_eq!(h.read("a.txt"), "1\n");
+}

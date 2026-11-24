@@ -30,6 +30,7 @@ use serde_json::{json, Value};
 
 use super::changes::{self, Change, PlannedChange};
 use super::isolate::{self, module_name, StepIsolates};
+use super::overlay::Overlay;
 use super::reduce::{self, FinishOnDrop, Fold, InOrder, Reduce};
 use super::{block_on, parallel_map, TaskContext, TaskOutcome};
 use crate::run::RunContext;
@@ -247,7 +248,14 @@ fn run_callback(
         .min(files.len().div_ceil(concurrency))
         .max(1);
     let mut outcomes: Vec<Option<Result<Done, String>>> = (0..files.len()).map(|_| None).collect();
-    let other_files = OtherFiles::default();
+    let other_files = OtherFiles {
+        pending: run
+            .overlay
+            .as_ref()
+            .map(Overlay::pending_files)
+            .unwrap_or_default(),
+        renames: Mutex::default(),
+    };
 
     // With a reducer, outputs are folded in their own isolate as files
     // finish, in the files' order; a slow reducer holds the workers back
@@ -292,6 +300,7 @@ fn run_callback(
                         workflow_path: &run.workflow_path,
                         target: &run.target,
                         other_files: &other_files,
+                        overlay: run.overlay.as_deref(),
                         in_order,
                     };
                     let progress = &progress;
@@ -332,7 +341,7 @@ fn run_callback(
     }
     Ok(Ran {
         outcomes,
-        other_changes: other_files.into_changes(),
+        other_changes: other_files.into_changes(run.overlay.as_deref()),
         reduced,
     })
 }
@@ -388,7 +397,11 @@ pub(crate) fn select_files(
     selector: Selector,
 ) -> Result<(Selector, Vec<(String, String)>), String> {
     let (selector, selected) = select_paths(run, selector)?;
-    let files = read_selected(selected, selector.containing.as_deref());
+    let files = read_selected(
+        selected,
+        selector.containing.as_deref(),
+        run.overlay.as_deref(),
+    );
     Ok((selector, files))
 }
 
@@ -411,7 +424,20 @@ pub(crate) fn select_paths(
     if selector.language.is_none() && default_languages.len() == 1 {
         selector.language = default_languages.first().cloned();
     }
-    let paths = select(&run.target, &selector, &default_languages)?;
+    let mut paths = select(&run.target, &selector, &default_languages)?;
+    // In a dry run, the files earlier steps would have removed are gone, and
+    // the ones they would have renamed into place are there.
+    if let Some(overlay) = &run.overlay {
+        paths.retain(|selected| !overlay.is_gone(&selected.path));
+        let include = include_globs(&selector, &default_languages)?;
+        for path in overlay.created(&include, &selector.exclude)? {
+            paths.push(Selected {
+                file: changes::under(&run.target, &path),
+                path,
+            });
+        }
+        paths.sort_by(|a, b| a.path.cmp(&b.path));
+    }
     Ok((selector, paths))
 }
 
@@ -485,20 +511,7 @@ pub(crate) fn select(
     selector: &Selector,
     default_languages: &[String],
 ) -> Result<Vec<Selected>, String> {
-    let include: Vec<String> = if !selector.include.is_empty() {
-        selector.include.clone()
-    } else {
-        let languages: Vec<&str> = match selector.language.as_deref() {
-            Some(language) => vec![language],
-            None => default_languages.iter().map(String::as_str).collect(),
-        };
-        let mut globs = Vec::new();
-        for language in languages {
-            globs.extend(language_globs(language)?);
-        }
-        globs
-    };
-
+    let include = include_globs(selector, default_languages)?;
     execution::select_files(target, &include, &selector.exclude)?
         .into_iter()
         .map(|file| {
@@ -512,10 +525,34 @@ pub(crate) fn select(
         .collect()
 }
 
+/// The globs a selector picks files by: its own, or its language's files.
+fn include_globs(selector: &Selector, default_languages: &[String]) -> Result<Vec<String>, String> {
+    if !selector.include.is_empty() {
+        return Ok(selector.include.clone());
+    }
+    let languages: Vec<&str> = match selector.language.as_deref() {
+        Some(language) => vec![language],
+        None => default_languages.iter().map(String::as_str).collect(),
+    };
+    let mut globs = Vec::new();
+    for language in languages {
+        globs.extend(language_globs(language)?);
+    }
+    Ok(globs)
+}
+
 /// The text of a selected file, or `None` when it is not one of the step's
-/// files: unreadable, not UTF-8, or without the `containing` text.
-fn read_selected_file(file: &Path, containing: Option<&str>) -> Option<String> {
-    let text = fs::read_to_string(file).ok()?;
+/// files: unreadable, not UTF-8, or without the `containing` text. In a dry
+/// run, the text earlier steps would have left.
+fn read_selected_file(
+    selected: &Selected,
+    containing: Option<&str>,
+    overlay: Option<&Overlay>,
+) -> Option<String> {
+    let text = match overlay {
+        Some(overlay) => overlay.read(&selected.path, &selected.file).ok()?,
+        None => fs::read_to_string(&selected.file).ok()?,
+    };
     match containing {
         Some(needle) if !text.contains(needle) => None,
         _ => Some(text),
@@ -528,9 +565,10 @@ fn read_selected_file(file: &Path, containing: Option<&str>) -> Option<String> {
 pub(crate) fn read_selected(
     selected: Vec<Selected>,
     containing: Option<&str>,
+    overlay: Option<&Overlay>,
 ) -> Vec<(String, String)> {
     let texts = parallel_map(&selected, |selected| {
-        read_selected_file(&selected.file, containing)
+        read_selected_file(selected, containing, overlay)
     });
     selected
         .into_iter()
@@ -556,6 +594,7 @@ struct Job<'a> {
     workflow_path: &'a Path,
     target: &'a Path,
     other_files: &'a OtherFiles,
+    overlay: Option<&'a Overlay>,
     /// With a reducer: where each file's output goes.
     in_order: Option<&'a InOrder>,
 }
@@ -576,6 +615,7 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
         workflow_path,
         target,
         other_files,
+        overlay,
         in_order,
     } = job;
     block_on(async move {
@@ -623,7 +663,7 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                 let mut indices = Vec::with_capacity(range.len());
                 let mut texts = Vec::with_capacity(range.len());
                 for index in range {
-                    match read_selected_file(&files[index].file, containing) {
+                    match read_selected_file(&files[index], containing, overlay) {
                         Some(text) => {
                             indices.push(index);
                             texts.push(text);
@@ -700,22 +740,23 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                     match (transaction, outcomes.as_mut_slice()) {
                         // One file, in its own transaction.
                         (Some(transaction), [outcome]) => {
-                            let keep = match (outcome.as_mut(), compat) {
-                                (Err(_), _) => false,
+                            let (keep, renames) = match (outcome.as_mut(), compat) {
+                                (Err(_), _) => (false, Vec::new()),
                                 (Ok(file), Some(compat)) => {
-                                    match keep_changes(target, other_files, file, compat, effects.other_files) {
-                                        Ok(keep) => keep,
+                                    match keep_changes(target, file, compat, effects.other_files) {
+                                        Ok(Some(renames)) => (true, renames),
+                                        Ok(None) => (false, Vec::new()),
                                         Err(error) => {
                                             *outcome = Err(error);
-                                            false
+                                            (false, Vec::new())
                                         }
                                     }
                                 }
                                 (Ok(_), None) if !effects.other_files.is_empty() => {
                                     *outcome = Err(NOT_SUPPORTED.to_string());
-                                    false
+                                    (false, Vec::new())
                                 }
-                                (Ok(_), None) => true,
+                                (Ok(_), None) => (true, Vec::new()),
                             };
                             // A transform still running would change files after
                             // they are given back: refuse what the callback did.
@@ -725,6 +766,14 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                             } else {
                                 keep
                             };
+                            // Its renames count only when its changes do.
+                            if keep {
+                                other_files
+                                    .renames
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .extend(renames);
+                            }
                             transaction.finish(keep);
                         }
                         _ if !effects.other_files.is_empty() => {
@@ -765,14 +814,10 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
             Ok(results)
         })
         .await;
-        worker.shutdown(SHUTDOWN_GRACE).await;
+        worker.shutdown(isolate::SHUTDOWN_GRACE).await;
         results
     })
 }
-
-/// How long a worker waits, once its files are done, for work its callbacks
-/// left running.
-const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Why a callback's `jssgTransform` calls on other files fail.
 const NOT_SUPPORTED: &str = "jssgTransform() is not supported in forEachFile callbacks yet; change each file from its own callback";
@@ -790,7 +835,6 @@ const RETRIES: usize = 50;
 /// files with `jssgTransform`, as workflow.yaml's `js-ast-grep` step let
 /// them: the step's unwritten files, so every change to a file adds up
 /// whichever file's transform made it, and the renames among them.
-#[derive(Default)]
 struct OtherFiles {
     pending: PendingFiles,
     /// By the renamed file's canonical path: where it goes, absolute.
@@ -799,7 +843,7 @@ struct OtherFiles {
 
 impl OtherFiles {
     /// Every file the step's transforms changed this way, renames included.
-    fn into_changes(self) -> Vec<JssgFileChange> {
+    fn into_changes(self, overlay: Option<&Overlay>) -> Vec<JssgFileChange> {
         let mut renames = self.renames.into_inner().unwrap_or_else(|e| e.into_inner());
         let mut changes = Vec::new();
         for (path, original, content) in self.pending.changed() {
@@ -812,7 +856,11 @@ impl OtherFiles {
         }
         // Files only renamed.
         for (path, to) in renames {
-            if let Ok(text) = fs::read_to_string(&path) {
+            let text = match overlay {
+                Some(overlay) => overlay.read_file(&path),
+                None => fs::read_to_string(&path),
+            };
+            if let Ok(text) = text {
                 changes.push(JssgFileChange {
                     path,
                     original: text.clone(),
@@ -887,17 +935,16 @@ fn install_compat_host<'js>(
 
 /// Put what a jssg transform did to its file into the step's unwritten
 /// files, with the renames it and its `jssgTransform` calls made. Its
-/// effects are then committed from there. Gives whether to keep the
-/// transaction's changes.
+/// effects are then committed from there. Gives the renames to keep, or
+/// `None` when the transaction's changes are dropped.
 fn keep_changes(
     target: &Path,
-    other_files: &OtherFiles,
     outcome: &mut FileOutcome,
     compat: CompatFile,
     changed: Vec<FileChange>,
-) -> Result<bool, String> {
+) -> Result<Option<Vec<(PathBuf, PathBuf)>>, String> {
     if compat.discard {
-        return Ok(false);
+        return Ok(None);
     }
     let mut renames = Vec::new();
     for effect in std::mem::take(&mut outcome.effects) {
@@ -929,12 +976,7 @@ fn keep_changes(
             renames.push((path, to));
         }
     }
-    other_files
-        .renames
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .extend(renames);
-    Ok(true)
+    Ok(Some(renames))
 }
 
 /// What a callback's effects leave of one file. `delete()` wins over

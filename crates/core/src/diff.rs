@@ -127,9 +127,10 @@ pub fn generate_unified_diff(
         // Add hunk header
         let hunk_header = hunk.header().to_string();
         if config.color {
-            diff_text.push_str(&format!("\x1b[36m{}\x1b[0m", hunk_header));
+            diff_text.push_str(&format!("\x1b[36m{}\x1b[0m\n", hunk_header));
         } else {
             diff_text.push_str(&hunk_header);
+            diff_text.push('\n');
         }
 
         for change in hunk.iter_changes() {
@@ -189,6 +190,25 @@ pub fn generate_unified_diff(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn each_hunk_header_is_a_line_of_its_own() {
+        let config = DiffConfig {
+            color: false,
+            ..Default::default()
+        };
+        let result = generate_unified_diff(
+            &PathBuf::from("a.js"),
+            "console.log(1);\n",
+            "logger.info(1);\n",
+            &config,
+            DiffMetadata::default(),
+        );
+        assert_eq!(
+            result.diff_text,
+            "--- [before] a.js\n+++ [after]  a.js\n@@ -1 +1 @@\n-console.log(1);\n+logger.info(1);\n"
+        );
+    }
 
     #[test]
     fn test_generate_unified_diff_basic() {
