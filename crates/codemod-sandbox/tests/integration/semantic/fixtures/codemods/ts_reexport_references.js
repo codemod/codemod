@@ -2,14 +2,19 @@
 function summarize(refs) {
   const out = {};
   for (const r of refs) {
-    const file = r.root.filename().replace(/\\/g, "/").replace(/^.*\/packages\//, "packages/");
+    const file = r.root
+      .filename()
+      .replace(/\\/g, "/")
+      .replace(/^.*\/packages\//, "packages/");
     out[file] = r.nodes.map((n) => n.text());
   }
   return out;
 }
 
 export default function transform(root) {
-  const decl = root.root().find({ rule: { kind: "identifier", regex: "^toMoment$", inside: { kind: "function_declaration" } } });
+  const decl = root.root().find({
+    rule: { kind: "identifier", regex: "^toMoment$", inside: { kind: "function_declaration" } },
+  });
   const got = summarize(decl.references());
   const want = {
     "packages/shared/src/index.ts": ["toMoment"],
@@ -24,10 +29,17 @@ export default function transform(root) {
     }
   }
 
-  const fmt = root.root().find({ rule: { kind: "identifier", regex: "^formatDay$", inside: { kind: "function_declaration" } } });
+  const fmt = root.root().find({
+    rule: { kind: "identifier", regex: "^formatDay$", inside: { kind: "function_declaration" } },
+  });
   const fmtRefs = summarize(fmt.references());
-  for (const file of ["packages/shared/src/index.ts", "packages/shared/src/local.ts", "packages/web/src/app.ts"]) {
-    if (!fmtRefs[file]) throw new Error(`formatDay references missing ${file}: ${JSON.stringify(fmtRefs)}`);
+  for (const file of [
+    "packages/shared/src/index.ts",
+    "packages/shared/src/local.ts",
+    "packages/web/src/app.ts",
+  ]) {
+    if (!fmtRefs[file])
+      throw new Error(`formatDay references missing ${file}: ${JSON.stringify(fmtRefs)}`);
   }
   return null;
 }

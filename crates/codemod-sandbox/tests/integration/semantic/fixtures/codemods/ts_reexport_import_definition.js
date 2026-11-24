@@ -1,10 +1,18 @@
 // Imported names must follow barrel re-exports (named, `export *`, renamed,
 // and `import` + `export { x }`) to the original declaration.
 const expected = {
-  toMoment: { file: "packages/shared/src/dates.ts", name: "toMoment", decl: "function_declaration" },
+  toMoment: {
+    file: "packages/shared/src/dates.ts",
+    name: "toMoment",
+    decl: "function_declaration",
+  },
   deepFn: { file: "packages/shared/src/deep.ts", name: "deepFn", decl: "function_declaration" },
   renamed: { file: "packages/shared/src/inner.ts", name: "inner", decl: "variable_declarator" },
-  viaImport: { file: "packages/shared/src/dates.ts", name: "formatDay", decl: "function_declaration" },
+  viaImport: {
+    file: "packages/shared/src/dates.ts",
+    name: "formatDay",
+    decl: "function_declaration",
+  },
 };
 
 function check(label, def, want) {
@@ -13,10 +21,13 @@ function check(label, def, want) {
   const file = def.root.filename().replace(/\\/g, "/");
   if (!file.endsWith(want.file)) throw new Error(`${label}: expected ${want.file}, got ${file}`);
   if (def.node.text() !== want.name) {
-    throw new Error(`${label}: expected node text ${want.name}, got ${def.node.kind()} ${JSON.stringify(def.node.text())}`);
+    throw new Error(
+      `${label}: expected node text ${want.name}, got ${def.node.kind()} ${JSON.stringify(def.node.text())}`,
+    );
   }
   const parentKind = def.node.parent()?.kind();
-  if (parentKind !== want.decl) throw new Error(`${label}: expected parent ${want.decl}, got ${parentKind}`);
+  if (parentKind !== want.decl)
+    throw new Error(`${label}: expected parent ${want.decl}, got ${parentKind}`);
 }
 
 export default function transform(root) {
@@ -28,10 +39,17 @@ export default function transform(root) {
     check(`import ${name.text()}`, name.definition(), want);
 
     // A call site resolves to its import first; following that lands on the declaration.
-    const call = root.root().find({ rule: { kind: "identifier", regex: `^${name.text()}$`, inside: { kind: "call_expression" } } });
+    const call = root.root().find({
+      rule: {
+        kind: "identifier",
+        regex: `^${name.text()}$`,
+        inside: { kind: "call_expression" },
+      },
+    });
     if (!call) throw new Error(`no call for ${name.text()}`);
     const local = call.definition();
-    if (!local || local.kind !== "local") throw new Error(`call ${name.text()}: expected local, got ${local && local.kind}`);
+    if (!local || local.kind !== "local")
+      throw new Error(`call ${name.text()}: expected local, got ${local && local.kind}`);
     check(`call ${name.text()} -> import`, local.node.definition(), want);
   }
   return null;

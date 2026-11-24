@@ -17,11 +17,15 @@ export default function transform(root) {
     const want = expected[node.text()];
     const def = node.definition();
     if (!def) throw new Error(`${node.text()}: definition() returned null`);
-    if (def.kind !== "external") throw new Error(`${node.text()}: expected external, got ${def.kind}`);
+    if (def.kind !== "external")
+      throw new Error(`${node.text()}: expected external, got ${def.kind}`);
     const file = def.root.filename().replace(/\\/g, "/");
-    if (!file.endsWith(want.file)) throw new Error(`${node.text()}: expected ${want.file}, got ${file}`);
+    if (!file.endsWith(want.file))
+      throw new Error(`${node.text()}: expected ${want.file}, got ${file}`);
     if (def.node.text() !== want.name) {
-      throw new Error(`${node.text()}: expected ${want.name}, got ${def.node.kind()} ${JSON.stringify(def.node.text())}`);
+      throw new Error(
+        `${node.text()}: expected ${want.name}, got ${def.node.kind()} ${JSON.stringify(def.node.text())}`,
+      );
     }
   }
 
