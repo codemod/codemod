@@ -379,3 +379,97 @@ fn a_pypi_release_without_files_is_left_out() {
         .collect();
     assert_eq!(versions, ["1.0"]);
 }
+
+/// A path dependency outside the repository is someone else's package: a
+/// plain node, not one of the repository's own. One inside it stays a
+/// workspace, also from a lockfile in a subdirectory.
+#[test]
+fn a_path_dependency_outside_the_repository_is_not_one_of_its_packages() {
+    let poetry_lock = r#"
+[[package]]
+name = "vendored"
+version = "0.3.0"
+
+[package.source]
+type = "directory"
+url = "../vendor"
+
+[[package]]
+name = "shared"
+version = "0.1.0"
+
+[package.source]
+type = "directory"
+url = "../shared"
+"#;
+    let pyproject = "[tool.poetry]\nname = \"app\"\nversion = \"1.0.0\"\n\n[tool.poetry.dependencies]\nvendored = { path = \"../vendor\" }\n";
+    let uv_lock = r#"
+version = 1
+
+[[package]]
+name = "tool"
+version = "0.1.0"
+source = { editable = "." }
+
+[[package]]
+name = "outside"
+version = "2.0.0"
+source = { directory = "../../../outside" }
+"#;
+    let pipfile_lock = r#"{ "default": { "local": { "path": "../pipvendor" } }, "develop": {} }"#;
+    let workspaces = |graph: &Graph| -> Vec<String> {
+        let mut found: Vec<String> = graph
+            .nodes
+            .iter()
+            .filter_map(|n| Some(format!("{}@{}", n.name, n.workspace.as_ref()?)))
+            .collect();
+        found.sort();
+        found
+    };
+
+    // At the root, ../vendor is outside.
+    let dir = repository(&[("poetry.lock", poetry_lock), ("pyproject.toml", pyproject)]);
+    let graph = lockfiles::load(dir.path(), &[]).unwrap();
+    assert_eq!(workspaces(&graph), ["app@."]);
+    assert!(graph
+        .nodes
+        .iter()
+        .any(|n| n.name == "vendored" && n.version == "0.3.0" && n.workspace.is_none()));
+
+    // From apps/py, ../vendor and ../shared are inside; from apps/tool,
+    // ../../../outside is not.
+    let dir = repository(&[
+        ("apps/py/poetry.lock", poetry_lock),
+        ("apps/py/pyproject.toml", pyproject),
+        ("apps/tool/uv.lock", uv_lock),
+        ("Pipfile.lock", pipfile_lock),
+    ]);
+    let graph = lockfiles::load(
+        dir.path(),
+        &[
+            "**/poetry.lock".into(),
+            "**/uv.lock".into(),
+            "Pipfile.lock".into(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        workspaces(&graph),
+        [
+            "app@apps/py",
+            "shared@apps/shared",
+            "tool@apps/tool",
+            "vendored@apps/vendor"
+        ]
+    );
+    for name in ["outside", "local"] {
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|n| n.name == name && n.workspace.is_none()),
+            "{name}: {:#?}",
+            graph.nodes
+        );
+    }
+}

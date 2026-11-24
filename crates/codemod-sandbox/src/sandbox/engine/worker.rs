@@ -31,6 +31,41 @@ use crate::sandbox::errors::{ExecutionError, RuntimeError};
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::sandbox::runtime_module::{RuntimeEventCallback, RuntimeFailure, RuntimeHooksContext};
 
+/// Keeps the ids of the timers the code has running, so
+/// [`Worker::shutdown`] can clear them: llrt holds their callbacks in a
+/// table outside the runtime, which freeing the runtime does not empty.
+const TRACK_TIMERS: &str = r#"(() => {
+  const g = globalThis;
+  if (typeof g.setTimeout !== "function") return;
+  const live = new Set();
+  const { setTimeout, setInterval, setImmediate, clearTimeout, clearInterval } = g;
+  const once = (start) => function (callback, ...rest) {
+    if (typeof callback !== "function") return start(callback, ...rest);
+    let id;
+    id = start(function (...args) {
+      live.delete(id);
+      return callback.apply(this, args);
+    }, ...rest);
+    live.add(id);
+    return id;
+  };
+  g.setTimeout = once(setTimeout);
+  g.setImmediate = once(setImmediate);
+  g.setInterval = function (callback, ...rest) {
+    const id = setInterval(callback, ...rest);
+    live.add(id);
+    return id;
+  };
+  g.clearTimeout = (id) => { live.delete(id); return clearTimeout(id); };
+  g.clearInterval = (id) => { live.delete(id); return clearInterval(id); };
+  Object.defineProperty(g, Symbol.for("codemod.clearTimers"), {
+    value: () => {
+      for (const id of live) clearTimeout(id);
+      live.clear();
+    },
+  });
+})();"#;
+
 /// How to build a [`Worker`].
 pub struct WorkerOptions<R> {
     /// `fs`, `fetch` and `child_process` are only available when granted.
@@ -192,6 +227,7 @@ impl Worker {
                         .map_err(|e| fail(format!("{e:?}")))?;
                 }
                 globals.attach(&ctx)?;
+                ctx.eval::<(), _>(TRACK_TIMERS)?;
                 install_console_bridge(&ctx)
             };
             store().map_err(|e| e.to_string())
@@ -207,17 +243,46 @@ impl Worker {
         })
     }
 
-    /// Let work the code left running (an unawaited promise, a timer)
-    /// finish, for up to `grace`, then drop the worker. QuickJS aborts the
-    /// process when a runtime is freed with such work still holding values,
-    /// so a worker whose work does not finish (an interval) is leaked instead.
+    /// Free the worker. Timers the code left (a pending `setTimeout`, an
+    /// interval) are cleared: llrt keeps their callbacks outside the
+    /// runtime, and QuickJS aborts the process when a runtime is freed
+    /// while something outside it still holds its values. Other leftover
+    /// work (an unawaited promise) gets up to `grace` to finish; whatever
+    /// is still pending then is freed with the runtime, which drops pending
+    /// jobs and futures before it frees itself.
     pub async fn shutdown(self, grace: std::time::Duration) {
-        let finished = tokio::time::timeout(grace, self.runtime.idle())
-            .await
-            .is_ok();
-        if !finished || self.runtime.is_job_pending().await {
-            std::mem::forget(self);
+        // Leftover work may start timers while it finishes: clear them as
+        // it goes.
+        let deadline = tokio::time::Instant::now() + grace;
+        loop {
+            self.clear_timers().await;
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let slice = left.min(std::time::Duration::from_millis(50));
+            if tokio::time::timeout(slice, self.runtime.idle())
+                .await
+                .is_ok()
+                || left <= slice
+            {
+                break;
+            }
         }
+        self.clear_timers().await;
+    }
+
+    async fn clear_timers(&self) {
+        async_with!(self.context => |ctx| {
+            let clear: rquickjs::Result<()> = (|| {
+                let symbol: rquickjs::Symbol = ctx.eval(r#"Symbol.for("codemod.clearTimers")"#)?;
+                match ctx.globals().get::<_, Option<rquickjs::Function>>(symbol)? {
+                    Some(clear) => clear.call(()),
+                    None => Ok(()),
+                }
+            })();
+            if clear.is_err() {
+                let _ = ctx.catch();
+            }
+        })
+        .await;
     }
 
     /// What the code did since the last call besides returning a value.
@@ -243,5 +308,111 @@ impl Worker {
             .as_ref()
             .map(PendingFiles::changed)
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::sandbox::resolvers::InMemoryResolver;
+
+    async fn worker() -> Worker {
+        Worker::new(WorkerOptions {
+            capabilities: HashSet::new(),
+            resolver: Arc::new(InMemoryResolver::new()),
+            modules: Vec::new(),
+            codemod_modules: Vec::new(),
+            llm_request_handler: None,
+            runtime_event_callback: None,
+            cancel: Arc::new(AtomicBool::new(false)),
+            dry_run: true,
+            target_directory: std::env::temp_dir(),
+            default_language: None,
+            semantic_provider: None,
+            pending_files: None,
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn eval<T>(worker: &Worker, code: &'static str) -> T
+    where
+        T: for<'js> rquickjs::FromJs<'js> + Send + 'static,
+    {
+        async_with!(worker.context => |ctx| {
+            ctx.eval::<T, _>(code).map_err(|e| format!("{e}: {:?}", ctx.catch()))
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Timers left running (llrt keeps their callbacks outside the
+    /// runtime) are cleared, so the runtime is freed without waiting out
+    /// the grace period.
+    #[tokio::test]
+    async fn a_worker_with_timers_left_running_is_freed() {
+        let worker = worker().await;
+        eval::<()>(
+            &worker,
+            "setInterval(() => {}, 5); setTimeout(() => {}, 1e7); setImmediate(() => {});\
+             new Promise((resolve) => setTimeout(resolve, 1e7)).then(() => setInterval(() => {}, 5));",
+        )
+        .await;
+        let runtime = worker.runtime.weak();
+        let started = Instant::now();
+        worker.shutdown(Duration::from_secs(10)).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(runtime.try_ref().is_none(), "the runtime was kept");
+    }
+
+    /// Timers started while leftover work finishes are cleared too.
+    #[tokio::test]
+    async fn timers_started_by_leftover_work_are_cleared() {
+        let worker = worker().await;
+        eval::<()>(
+            &worker,
+            "Promise.resolve().then(() => setInterval(() => {}, 5)); setTimeout(() => setInterval(() => {}, 5), 1);",
+        )
+        .await;
+        let runtime = worker.runtime.weak();
+        let started = Instant::now();
+        worker.shutdown(Duration::from_secs(10)).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(runtime.try_ref().is_none(), "the runtime was kept");
+    }
+
+    /// The tracking keeps timers working as before.
+    #[tokio::test]
+    async fn timers_still_fire_and_clear() {
+        let worker = worker().await;
+        eval::<()>(
+            &worker,
+            "globalThis.fired = [];\
+             setTimeout(() => fired.push('timeout'), 1);\
+             clearTimeout(setTimeout(() => fired.push('cleared'), 1));\
+             const every = setInterval(() => { fired.push('interval'); clearInterval(every); }, 1);\
+             setImmediate(() => fired.push('immediate'));",
+        )
+        .await;
+        worker.runtime.idle().await;
+        let fired: Vec<String> = eval(&worker, "fired").await;
+        assert_eq!(fired, ["immediate", "timeout", "interval"]);
+        let thrown: String = eval(
+            &worker,
+            "(() => { try { setTimeout('not a function', 1); return 'no error'; } catch (e) { return 'threw'; } })()",
+        )
+        .await;
+        assert_eq!(thrown, "threw");
+        worker.shutdown(Duration::from_secs(1)).await;
     }
 }

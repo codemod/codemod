@@ -33,6 +33,11 @@ test("shouldBootstrapLatestNoCommand only bootstraps bare invocation", () => {
   assert.equal(shouldBootstrapLatestNoCommand([], { [CODEMOD_BOOTSTRAPPED_ENV]: "1" }), false);
 });
 
+test("a prerelease never bootstraps codemod@latest, another release line", () => {
+  assert.equal(shouldBootstrapLatestNoCommand([], {}, "2.0.0-alpha.7"), false);
+  assert.equal(shouldBootstrapLatestNoCommand([], {}, "1.18.7"), true);
+});
+
 test("latest bootstrap args target codemod@latest with prefer-online", () => {
   assert.deepEqual(latestBootstrapArgs(), [
     "exec",

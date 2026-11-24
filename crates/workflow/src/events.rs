@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use butterflow_state::run_store::{RunStatus, StepStatus};
+use butterflow_state::run_store::{RunStatus, StepRecord, StepStatus};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -75,7 +75,39 @@ pub enum Event {
         run_id: String,
         status: RunStatus,
         error: Option<String>,
+        /// How many files failed in the run's partial steps, counting steps a
+        /// resume reused. A run that succeeded with failed files did not
+        /// change those files.
+        failed_files: usize,
+        /// The steps some files failed in, by position.
+        partial_steps: Vec<PartialStep>,
     },
+}
+
+/// A step that finished with some of its files failed.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PartialStep {
+    pub position: u64,
+    pub label: String,
+    pub failed_files: usize,
+    /// How many files the step ran on, when known.
+    pub files: usize,
+}
+
+impl PartialStep {
+    /// The partial steps among `steps`.
+    pub fn of(steps: &[StepRecord]) -> Vec<PartialStep> {
+        steps
+            .iter()
+            .filter(|step| step.status == StepStatus::Partial)
+            .map(|step| PartialStep {
+                position: step.position,
+                label: step.label.clone(),
+                failed_files: step.failed_files(),
+                files: step.files.map_or(0, |files| files.total),
+            })
+            .collect()
+    }
 }
 
 pub trait EventSink: Send + Sync {

@@ -124,6 +124,9 @@ pub struct Command {
     workflow: Option<String>,
 
     #[command(flatten)]
+    start: crate::workflow_exec::StartFlags,
+
+    #[command(flatten)]
     flags: crate::workflow_exec::RunFlags,
 }
 
@@ -322,7 +325,8 @@ pub async fn handler(
         name: Some(canonical_codemod_name.clone()),
         dry_run,
         settings: crate::workflow_exec::ExecSettings {
-            approve_all: pro_dry_run_required,
+            approve_all: args.start.approve || pro_dry_run_required,
+            managed_git: args.start.managed_git,
             skip_shard_steps: pro_dry_run_required,
             nested_observer: Some(run_telemetry.nested_observer(telemetry.clone())),
             ..args
@@ -337,7 +341,7 @@ pub async fn handler(
     }
     .err();
 
-    let outcome = match run_result.and_then(|outcome| outcome.result().map(|_| outcome)) {
+    let outcome = match run_result.and_then(|outcome| outcome.ended().map(|_| outcome)) {
         Ok(outcome) => outcome,
         Err(e) => {
             let error_msg = match llm_usage_output_error.as_ref() {
@@ -434,7 +438,8 @@ pub async fn handler(
         crate::report_server::serve_report(report).await?;
     }
 
-    Ok(())
+    // Some files failed: exit code 2, after the summary.
+    outcome.result()
 }
 
 /// Returns an error for a failed legacy codemod command.

@@ -946,6 +946,63 @@ export default async function main() {
   },
 );
 
+test(
+  "node: a dry run lets later steps see what earlier ones would change",
+  HOSTS.node,
+  async () => {
+    const { runWorkflow: runOnHost } = await import("../runtime/host.mjs");
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, forEachFile, astGrep, shard } from "codemod/workflow";
+export default async function main() {
+  await step("One", forEachFile("**/*.ts", (file) => {
+    if (file.path === "gone.ts") return file.delete();
+    file.write(file.text.replace("1", "2"));
+    if (file.path === "old.ts") file.rename("new.ts");
+  }));
+  const seen = await step("Two", forEachFile("**/*.ts", (file) => {
+    file.write(file.text.replace("2", "3"));
+    return file.path;
+  }));
+  const rules = await step("Three", forEachFile(astGrep({ id: "let", language: "typescript", rule: { pattern: "const $A = 3" }, fix: "let $A = 3;" })));
+  const shards = await step("Four", shard({ method: { type: "directory", maxFilesPerShard: 10 }, files: "**/*.ts", filter: (file) => file.text.includes("let") }));
+  return { seen: seen.outputs, matches: rules.matches, sharded: shards.flatMap((s: any) => s._meta_files).sort() };
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const files = {
+      "a.ts": "const a = 1;\n",
+      "old.ts": "const o = 1;\n",
+      "gone.ts": "const g = 1;\n",
+    };
+    const expected = { seen: ["a.ts", "new.ts"], matches: 2, sharded: ["a.ts", "new.ts"] };
+
+    const real = scratch(files);
+    const realRun = await runOnHost(path, { target: real });
+    assert.equal(realRun.status, "succeeded", realRun.error);
+    assert.deepEqual(realRun.output, expected);
+    assert.equal(readFileSync(join(real, "new.ts"), "utf8"), "let o = 3;\n");
+
+    const dry = scratch(files);
+    const dryRun = await runOnHost(path, { target: dry, dryRun: true });
+    assert.equal(dryRun.status, "succeeded", dryRun.error);
+    assert.deepEqual(dryRun.output, expected);
+    // Nothing is written.
+    for (const [file, text] of Object.entries(files)) {
+      assert.equal(readFileSync(join(dry, file), "utf8"), text);
+    }
+    assert.throws(() => readFileSync(join(dry, "new.ts")));
+    // The run's diff is what the real run changed.
+    const diffs = dryRun.events
+      .filter((event) => event.event === "run_diff")
+      .map((event) => event.path);
+    assert.deepEqual(diffs, ["a.ts", "gone.ts", "new.ts", "old.ts"]);
+  },
+);
+
 test("node: runWorkflow takes the workflow module itself", HOSTS.node, async () => {
   const path = workflow();
   const module = await import(pathToFileURL(path).href);

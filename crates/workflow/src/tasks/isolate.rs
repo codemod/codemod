@@ -221,8 +221,8 @@ pub(crate) fn module_name(task: &TaskContext<'_>, id: &str) -> String {
 }
 
 /// How long an isolate waits, once its code is done, for work the code left
-/// running (a timer, an unawaited promise) before it is dropped; see
-/// [`Worker::shutdown`].
+/// running (an unawaited promise; timers are cleared) before it is freed;
+/// see [`Worker::shutdown`].
 pub(crate) const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Start one isolate, with `__dependencyHost` installed for

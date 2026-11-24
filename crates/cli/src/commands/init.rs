@@ -1452,7 +1452,7 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     let codemod_dir_name = get_codemod_dir_name(&config.name);
     let package_manager = selected_package_manager(config);
     let codemod_command = if installs_codemod(config) {
-        installed_codemod_command(package_manager)
+        installed_codemod_command(package_manager).to_string()
     } else {
         codemod_cli_command_for_package_manager(package_manager)
     };
@@ -1657,15 +1657,15 @@ fn installed_codemod_command(package_manager: &str) -> &'static str {
 }
 
 /// `codemod` for someone who has not installed it, such as a user running a
-/// published package.
-fn codemod_cli_command_for_package_manager(package_manager: &str) -> &'static str {
-    match package_manager {
-        "npm" => "npx codemod@latest",
-        "yarn" => "yarn dlx codemod@latest",
-        "pnpm" => "pnpm dlx codemod@latest",
-        "bun" => "bunx codemod@latest",
-        _ => "npx codemod@latest",
-    }
+/// published package: this version of it, which the package was made with.
+fn codemod_cli_command_for_package_manager(package_manager: &str) -> String {
+    let runner = match package_manager {
+        "yarn" => "yarn dlx",
+        "pnpm" => "pnpm dlx",
+        "bun" => "bunx",
+        _ => "npx",
+    };
+    format!("{runner} {}", crate::utils::cli_command::codemod_package())
 }
 
 fn package_manager_install_command(package_manager: &str) -> String {
@@ -1742,7 +1742,10 @@ mod tests {
         assert!(workflow.contains("path: \"./agents/skill/sample-skill/SKILL.md\""));
 
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
-        assert!(readme.contains("npx codemod@latest @codemod/sample-skill"));
+        assert!(readme.contains(&format!(
+            "npx codemod@{} @codemod/sample-skill",
+            crate::CLI_VERSION
+        )));
     }
 
     #[test]
@@ -1774,7 +1777,10 @@ mod tests {
         assert!(workflow.contains("path: \"./agents/skill/sample-skill/SKILL.md\""));
 
         let readme = fs::read_to_string(codemod_path.join("README.md")).unwrap();
-        assert!(readme.contains("npx codemod@latest @codemod/sample-skill"));
+        assert!(readme.contains(&format!(
+            "npx codemod@{} @codemod/sample-skill",
+            crate::CLI_VERSION
+        )));
         assert!(root_readme.contains("## One-time setup"));
         assert!(root_readme.contains("codemods/<slug>/"));
         assert!(root_readme.contains("`@codemod/*`"));
@@ -1905,9 +1911,14 @@ mod tests {
         assert_eq!(installed_codemod_command("yarn"), "yarn codemod");
         assert_eq!(installed_codemod_command("bun"), "bunx codemod");
         // Someone running a published package has not installed it.
+        // Pinned to this version: `latest` may be another release line.
         assert_eq!(
             codemod_cli_command_for_package_manager("npm"),
-            "npx codemod@latest"
+            format!("npx codemod@{}", crate::CLI_VERSION)
+        );
+        assert_eq!(
+            codemod_cli_command_for_package_manager("pnpm"),
+            format!("pnpm dlx codemod@{}", crate::CLI_VERSION)
         );
     }
 

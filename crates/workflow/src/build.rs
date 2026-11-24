@@ -500,7 +500,10 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
             }
             AstKind::VariableDeclarator(declarator) => {
                 if matches!(
-                    declarator.init,
+                    declarator
+                        .init
+                        .as_ref()
+                        .map(Expression::get_inner_expression),
                     Some(
                         Expression::ArrowFunctionExpression(_)
                             | Expression::FunctionExpression(_)
@@ -570,14 +573,20 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                         } else {
                             call.arguments.last()
                         };
-                        match callback {
-                            Some(Argument::ArrowFunctionExpression(f)) => {
+                        // `satisfies`, `as`, `!` and parentheses are only types.
+                        let inner = callback
+                            .and_then(Argument::as_expression)
+                            .map(Expression::get_inner_expression);
+                        match (callback, inner) {
+                            (_, Some(Expression::ArrowFunctionExpression(f))) => {
                                 sites.push((f.span, kind))
                             }
-                            Some(Argument::FunctionExpression(f)) => sites.push((f.span, kind)),
+                            (_, Some(Expression::FunctionExpression(f))) => {
+                                sites.push((f.span, kind))
+                            }
                             // `astGrep(...)`, a variable holding it, or an imported callback.
-                            Some(Argument::CallExpression(_)) if task == "forEachFile" => {}
-                            Some(Argument::Identifier(id))
+                            (_, Some(Expression::CallExpression(_))) if task == "forEachFile" => {}
+                            (_, Some(Expression::Identifier(id)))
                                 if task == "forEachFile"
                                     && !scoping
                                         .get_reference(id.reference_id())
@@ -587,13 +596,13 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                                 SymbolFlags::Function | SymbolFlags::Class,
                                             ) || analysis.function_valued.contains(&symbol)
                                         }) => {}
-                            Some(other) => {
+                            (Some(other), _) => {
                                 return Err(analysis.error(
                                     other.span().start,
                                     format!("{task}'s callback must be written inline as a function, so the build can extract it"),
                                 ));
                             }
-                            None => {
+                            (None, _) => {
                                 return Err(analysis.error(
                                     call.span.start,
                                     if task == "forEachFile" {
@@ -609,11 +618,14 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                     Some("shard") => sites.extend(shard_functions(call)),
                     Some("step") => {
                         for argument in call.arguments.iter().take(2) {
-                            match argument {
-                                Argument::ArrowFunctionExpression(f) => {
+                            match argument
+                                .as_expression()
+                                .map(Expression::get_inner_expression)
+                            {
+                                Some(Expression::ArrowFunctionExpression(f)) => {
                                     sites.push((f.span, Isolated::FunctionStep))
                                 }
-                                Argument::FunctionExpression(f) => {
+                                Some(Expression::FunctionExpression(f)) => {
                                     sites.push((f.span, Isolated::FunctionStep))
                                 }
                                 _ => {}
@@ -883,19 +895,18 @@ fn reducer_site(
     let Some(reducer) = call.arguments.get(2) else {
         return Ok(None);
     };
-    match reducer {
-        Argument::ArrowFunctionExpression(f) => Ok(Some((f.span, Isolated::Reducer))),
-        Argument::FunctionExpression(f) => Ok(Some((f.span, Isolated::Reducer))),
-        other
-            if imported
-                .callbacks
-                .iter()
-                .any(|callback| callback.argument == other.span()) =>
+    match reducer.as_expression().map(Expression::get_inner_expression) {
+        Some(Expression::ArrowFunctionExpression(f)) => Ok(Some((f.span, Isolated::Reducer))),
+        Some(Expression::FunctionExpression(f)) => Ok(Some((f.span, Isolated::Reducer))),
+        _ if imported
+            .callbacks
+            .iter()
+            .any(|callback| callback.argument == reducer.span()) =>
         {
             Ok(None)
         }
-        other => Err((
-            other.span().start,
+        _ => Err((
+            reducer.span().start,
             "forEachFile's reducer must be written inline, as (result, output, path) => ..., or imported from its file (import count from \"./scripts/count.ts\"), so the build can extract it".to_string(),
         )),
     }
@@ -1451,8 +1462,10 @@ fn callback_call(path: &Path, text: &str) -> Option<&'static str> {
         };
         let given_function = call.arguments.iter().any(|argument| {
             matches!(
-                argument,
-                Argument::ArrowFunctionExpression(_) | Argument::FunctionExpression(_)
+                argument
+                    .as_expression()
+                    .map(Expression::get_inner_expression),
+                Some(Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_))
             )
         });
         // A transform (`forEachFile(jssg(...))`) has no callback to extract.

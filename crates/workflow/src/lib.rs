@@ -41,7 +41,8 @@ pub use butterflow_core::package_workflows::{
     declared_workflows, locate_workflow, DeclaredWorkflow,
 };
 pub use butterflow_state::run_store::{
-    LocalStore, MemoryStore, RunRecord, RunSettings, RunStatus, RunStore, StepRecord, StepStatus,
+    FileCount, LocalStore, MemoryStore, RunRecord, RunSettings, RunStatus, RunStore, StepRecord,
+    StepStatus,
 };
 pub use callback_file::{run_callback_file, CallbackFileRequest, CallbackFileRun};
 pub use engine::{

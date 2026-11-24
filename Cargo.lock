@@ -1109,6 +1109,7 @@ dependencies = [
  "humantime",
  "hyper 0.14.32",
  "hyper-rustls 0.24.2",
+ "ignore",
  "indicatif",
  "inquire",
  "jsonc-parser",

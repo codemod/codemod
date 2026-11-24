@@ -20,7 +20,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use walkdir::WalkDir;
 
 #[cfg(test)]
 use crate::utils::package_validation::DEFAULT_WORKFLOW_FILE_NAME;
@@ -442,45 +441,38 @@ async fn create_package_bundle(
 
     // Add files to archive
     let mut file_count = 0;
-    for entry in WalkDir::new(package_path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path() != package_path) // Skip the root directory itself
-        .filter(|e| should_include_file(e.path(), package_path))
-    {
-        if entry.file_type().is_file() {
-            let relative_path = entry.path().strip_prefix(package_path)?;
-            let relative_path_str = package_relative(package_path, entry.path());
+    for path in package_files(package_path)? {
+        let relative_path = path.strip_prefix(package_path)?;
+        let relative_path_str = package_relative(package_path, &path);
 
-            debug!("Adding file to bundle: {}", relative_path.display());
+        debug!("Adding file to bundle: {}", relative_path.display());
 
-            // Check if this is a JS file that should be replaced with bundled version
-            if let Some(bundled_code) = bundled_files.remove(&relative_path_str) {
-                // Add bundled version instead of original
-                let mut header = tar::Header::new_gnu();
-                header.set_path(relative_path)?;
-                header.set_size(bundled_code.len() as u64);
-                header.set_mode(0o644);
-                header.set_cksum();
-                tar.append(&header, bundled_code.as_bytes())?;
-                info!(
-                    "Replaced {} with bundled version ({} bytes)",
-                    relative_path_str,
-                    bundled_code.len()
-                );
-            } else {
-                // Add original file
-                tar.append_path_with_name(entry.path(), relative_path)?;
-            }
-            file_count += 1;
+        // Check if this is a JS file that should be replaced with bundled version
+        if let Some(bundled_code) = bundled_files.remove(&relative_path_str) {
+            // Add bundled version instead of original
+            let mut header = tar::Header::new_gnu();
+            header.set_path(relative_path)?;
+            header.set_size(bundled_code.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append(&header, bundled_code.as_bytes())?;
+            info!(
+                "Replaced {} with bundled version ({} bytes)",
+                relative_path_str,
+                bundled_code.len()
+            );
+        } else {
+            // Add original file
+            tar.append_path_with_name(&path, relative_path)?;
         }
+        file_count += 1;
     }
 
     info!("Added {file_count} files to bundle");
     // A bundle that replaced no file would ship the unbundled original.
     if let Some(missed) = bundled_files.keys().next() {
         return Err(anyhow!(
-            "Cannot publish: '{missed}' was bundled but is not among the package's published files"
+            "Cannot publish: '{missed}' was bundled but is not among the package's published files (is it gitignored?)"
         ));
     }
 
@@ -509,6 +501,44 @@ async fn create_package_bundle(
     Ok(output_path)
 }
 
+/// Directories never published, at any depth.
+const EXCLUDED_DIRECTORIES: [&str; 2] = ["node_modules", ".git"];
+
+/// The files a publish packs: every file under the package, minus what the
+/// package's `.gitignore` files (nested ones too) ignore, `node_modules` and
+/// `.git` directories at any depth, and the development artifacts
+/// [`should_include_file`] leaves out. Sorted, so bundles are reproducible.
+fn package_files(package_path: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let walk = ignore::WalkBuilder::new(package_path)
+        .hidden(false)
+        // The package's own `.gitignore` files apply whether or not it is
+        // in a git repository; ones above it, and global excludes, do not.
+        .require_git(false)
+        .parents(false)
+        .git_global(false)
+        .git_exclude(false)
+        .ignore(false)
+        .filter_entry(|entry| {
+            !(entry.file_type().is_some_and(|t| t.is_dir())
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| EXCLUDED_DIRECTORIES.contains(&name)))
+        })
+        .build();
+    for entry in walk {
+        let entry = entry?;
+        if entry.file_type().is_some_and(|t| t.is_file())
+            && should_include_file(entry.path(), package_path)
+        {
+            files.push(entry.into_path());
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
 fn should_include_file(file_path: &Path, package_root: &Path) -> bool {
     let relative_path = match file_path.strip_prefix(package_root) {
         Ok(path) => path,
@@ -519,6 +549,12 @@ fn should_include_file(file_path: &Path, package_root: &Path) -> bool {
     };
 
     let path_str = relative_path.to_string_lossy();
+    if relative_path
+        .file_name()
+        .is_some_and(|name| name == ".gitignore")
+    {
+        return false;
+    }
 
     // Exclude common development/build artifacts
     const EXCLUDED_PATTERNS: &[&str] = &[
@@ -615,7 +651,8 @@ async fn upload_package(
             ));
         } else if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(anyhow!(
-                "Authentication failed. Please run 'npx codemod@latest login' again."
+                "Authentication failed. Please run '{}' again.",
+                crate::utils::cli_command::npx_codemod("login")
             ));
         }
 
@@ -628,14 +665,8 @@ async fn upload_package(
 
 fn calculate_package_size(package_path: &Path) -> Result<u64> {
     let mut total_size = 0;
-
-    for entry in WalkDir::new(package_path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| should_include_file(e.path(), package_path))
-    {
-        total_size += entry.metadata()?.len();
+    for path in package_files(package_path)? {
+        total_size += fs::metadata(path)?.len();
     }
 
     Ok(total_size)
@@ -695,8 +726,9 @@ fn get_stored_auth_token(storage: &TokenStorage, registry_url: &str) -> Result<S
         .get_auth_for_registry(registry_url)?
         .ok_or_else(|| {
             anyhow!(
-                "Not authenticated with registry: {}. Run 'npx codemod@latest login' first, or set CODEMOD_AUTH_TOKEN environment variable.",
-                registry_url
+                "Not authenticated with registry: {}. Run '{}' first, or set CODEMOD_AUTH_TOKEN environment variable.",
+                registry_url,
+                crate::utils::cli_command::npx_codemod("login")
             )
         })?;
     Ok(auth.tokens.access_token)
@@ -1421,6 +1453,54 @@ nodes:
 
         let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
         assert!(error.to_string().contains("missing compatibility marker"));
+    }
+
+    /// react-to-solid-codemod's gitignored `src/lint/node_modules` (49 MB)
+    /// made publish fail with "Package too large".
+    #[tokio::test]
+    async fn publish_leaves_out_gitignored_files_and_nested_node_modules_and_git() {
+        let package = tempdir().unwrap();
+        let root = package.path();
+        let write = |path: &str, text: &str| {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        write("codemod.yaml", "name: example\n");
+        write(".gitignore", "*.log\ncoverage/\n");
+        write("src/lint/.gitignore", "dist\n");
+        write("src/lint/index.ts", "export {};\n");
+        write("src/lint/dist/index.js", "built\n");
+        write("src/lint/node_modules/big/index.js", &"x".repeat(1024));
+        write("tests/fixture/node_modules/dep/index.js", "kept out\n");
+        write("vendor/.git/HEAD", "ref: refs/heads/main\n");
+        write("debug.log", "noise\n");
+        write("coverage/lcov.info", "noise\n");
+        write("README.md", "# example\n");
+
+        let size: u64 = ["README.md", "codemod.yaml", "src/lint/index.ts"]
+            .iter()
+            .map(|path| fs::metadata(root.join(path)).unwrap().len())
+            .sum();
+        assert_eq!(calculate_package_size(root).unwrap(), size);
+
+        let manifest = manifest_with("workflow.ts", "example");
+        let bundle = create_package_bundle(root, &manifest, &[]).await.unwrap();
+        let archive = flate2::read::GzDecoder::new(fs::File::open(&bundle).unwrap());
+        let mut names: Vec<String> = tar::Archive::new(archive)
+            .entries()
+            .unwrap()
+            .map(|entry| {
+                entry
+                    .unwrap()
+                    .path()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        assert_eq!(names, ["README.md", "codemod.yaml", "src/lint/index.ts"]);
     }
 
     #[tokio::test]
