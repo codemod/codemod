@@ -15,7 +15,7 @@ use crate::engine::create_registry_client;
 use crate::pro_dry_run::{notify_pro_dry_run_required, ProDryRunReason};
 use crate::utils::path_safety::normalize_target_path;
 use crate::utils::workflow_source::resolve_workflow_source_with_name;
-use crate::workflow_exec::{self, ExecRequest, ExecSettings, RunFlags};
+use crate::workflow_exec::{self, ExecRequest, ExecSettings, RunFlags, StartFlags};
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 
 #[derive(Args, Debug)]
@@ -40,13 +40,8 @@ pub struct Command {
     #[arg(long)]
     dry_run: bool,
 
-    /// Give every approval the workflow asks for (manual steps, pull requests)
-    #[arg(long)]
-    approve: bool,
-
-    /// Let branch, commit and pull request steps change the git repository
-    #[arg(long)]
-    managed_git: bool,
+    #[command(flatten)]
+    start: StartFlags,
 
     /// Disable colored output
     #[arg(long)]
@@ -143,8 +138,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         name: Some(workflow_label),
         dry_run,
         settings: ExecSettings {
-            approve_all: args.approve || pro_dry_run,
-            managed_git: args.managed_git,
+            approve_all: args.start.approve || pro_dry_run,
+            managed_git: args.start.managed_git,
             skip_shard_steps: pro_dry_run,
             nested_observer: Some(nested_observer),
             ..args

@@ -6,7 +6,7 @@ use super::*;
 const DEMO_LOCK: &str = include_str!("../fixtures/npm-workspaces/package-lock.json");
 
 fn demo() -> Graph {
-    lockfiles::package_lock(DEMO_LOCK).unwrap()
+    lockfiles::package_lock(DEMO_LOCK, &|_| None).unwrap()
 }
 
 #[test]
