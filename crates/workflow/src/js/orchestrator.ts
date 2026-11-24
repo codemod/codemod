@@ -47,6 +47,14 @@ export interface StepRecord {
   since?: number | null;
   /** How many times the step ran, when retries made that more than once. */
   attempts?: number | null;
+  /** For a partial step: how many of its files failed, of how many. */
+  files?: FileCount | null;
+}
+
+/** `FileCount` in `crates/state/src/run_store.rs`. */
+export interface FileCount {
+  failed: number;
+  total: number;
 }
 
 /** What a step is asked to do, as the host receives it: JSON with a `kind`. */
@@ -81,6 +89,8 @@ export interface Outcome {
   result?: Json;
   /** Set when some of the task's files failed: how many, as a message. */
   partial?: string;
+  /** With `partial`: how many files failed, of how many. */
+  files?: FileCount;
 }
 
 /** `host.event(event)`: `HostEvent` in `crates/workflow/src/run.rs`. */
@@ -1083,7 +1093,13 @@ export function createRuntime(host: Host) {
     const finishedAt = host.now();
     // Some files failed: the step finished, and the rest of the run goes on.
     if (outcome.partial !== undefined) {
-      record({ status: "partial", result, finishedAt, error: outcome.partial });
+      record({
+        status: "partial",
+        result,
+        finishedAt,
+        error: outcome.partial,
+        ...(outcome.files && { files: outcome.files }),
+      });
     } else {
       record({ status: "succeeded", result, finishedAt });
     }

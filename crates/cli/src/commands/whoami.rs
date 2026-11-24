@@ -81,7 +81,10 @@ pub async fn handler(args: &Command) -> Result<()> {
         }
         _ => {
             println!("✗ Not logged in to {registry_url}");
-            println!("\nRun 'npx codemod@latest login' to authenticate");
+            println!(
+                "\nRun '{}' to authenticate",
+                crate::utils::cli_command::npx_codemod("login")
+            );
             std::process::exit(1);
         }
     }

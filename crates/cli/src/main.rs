@@ -417,6 +417,12 @@ async fn handle_implicit_run_command(
 #[tokio::main]
 async fn main() {
     if let Err(error) = run_cli().await {
+        if let Some(failed) = error.downcast_ref::<workflow_exec::FinishedWithFailedFiles>() {
+            if !failed.quiet {
+                eprintln!("\n{}", console::style(failed).yellow().bold());
+            }
+            exit_with_code(workflow_exec::EXIT_FAILED_FILES);
+        }
         if error
             .downcast_ref::<workflow_exec::WorkflowFailureAlreadyReported>()
             .is_none()

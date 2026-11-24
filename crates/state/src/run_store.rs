@@ -226,6 +226,36 @@ pub struct StepRecord {
     /// How many times the step ran, when its `retries` made that more than once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempts: Option<u32>,
+    /// For a partial step: how many of its files failed, of how many.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<FileCount>,
+}
+
+/// How many of a step's files failed, of how many it ran on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileCount {
+    pub failed: usize,
+    pub total: usize,
+}
+
+impl StepRecord {
+    /// How many of the step's files failed: none unless it is partial.
+    /// Records from before the count was kept have it in `error` only
+    /// ("2 of 10 files failed").
+    pub fn failed_files(&self) -> usize {
+        if self.status != StepStatus::Partial {
+            return 0;
+        }
+        match self.files {
+            Some(files) => files.failed,
+            None => self
+                .error
+                .as_deref()
+                .and_then(|error| error.split(' ').next())
+                .and_then(|count| count.parse().ok())
+                .unwrap_or(1),
+        }
+    }
 }
 
 /// Storage for runs and their step history.
@@ -702,6 +732,7 @@ mod tests {
             given: false,
             since: None,
             attempts: None,
+            files: None,
         }
     }
 

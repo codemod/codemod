@@ -213,14 +213,15 @@ impl Graph {
         let ids: Vec<usize> = other
             .nodes
             .iter()
-            .map(|node| match &node.workspace {
-                Some(workspace) => self.workspace(
-                    node.ecosystem,
-                    &node.name,
-                    &node.version,
-                    &join(dir, workspace),
-                ),
-                None => self.node(node.ecosystem, &node.name, &node.version),
+            .map(|node| {
+                // A path dependency outside the analysed root (`../vendor`)
+                // is not one of the repository's own packages.
+                match node.workspace.as_deref().and_then(|w| join_inside(dir, w)) {
+                    Some(workspace) => {
+                        self.workspace(node.ecosystem, &node.name, &node.version, &workspace)
+                    }
+                    None => self.node(node.ecosystem, &node.name, &node.version),
+                }
             })
             .collect();
         for edge in other.edges {
@@ -235,6 +236,29 @@ impl Graph {
         self.lockfiles
             .extend(other.lockfiles.iter().map(|lockfile| join(dir, lockfile)));
     }
+}
+
+/// `dir/path`, normalised, with "." for the root; `None` when it leaves
+/// the root (`../vendor` from the root) or is absolute.
+pub(crate) fn join_inside(dir: &str, path: &str) -> Option<String> {
+    if path.starts_with('/') || path.contains(':') || path.starts_with('\\') {
+        return None;
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for part in dir.split('/').chain(path.split(['/', '\\'])) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(if parts.is_empty() {
+        ".".into()
+    } else {
+        parts.join("/")
+    })
 }
 
 /// `dir/path`, normalised, with "." for the root.

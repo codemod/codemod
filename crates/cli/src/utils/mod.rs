@@ -1,4 +1,5 @@
 pub(crate) mod ancestor_search;
+pub(crate) mod cli_command;
 pub(crate) mod env_paths;
 pub(crate) mod interactive;
 pub(crate) mod manifest;

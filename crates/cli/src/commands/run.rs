@@ -341,7 +341,7 @@ pub async fn handler(
     }
     .err();
 
-    let outcome = match run_result.and_then(|outcome| outcome.result().map(|_| outcome)) {
+    let outcome = match run_result.and_then(|outcome| outcome.ended().map(|_| outcome)) {
         Ok(outcome) => outcome,
         Err(e) => {
             let error_msg = match llm_usage_output_error.as_ref() {
@@ -438,7 +438,8 @@ pub async fn handler(
         crate::report_server::serve_report(report).await?;
     }
 
-    Ok(())
+    // Some files failed: exit code 2, after the summary.
+    outcome.result()
 }
 
 /// Returns an error for a failed legacy codemod command.
