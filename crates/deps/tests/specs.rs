@@ -113,16 +113,6 @@ fn edges_declaring_a_package_include_unresolved_peer_ranges() {
 }
 
 #[test]
-fn a_yarn_v1_lockfile_is_reported_as_not_read() {
-    let error = lockfiles::yarn(
-        "# yarn lockfile v1\n\na@^1:\n  version \"1.0.0\"\n",
-        &|_| None,
-    )
-    .unwrap_err();
-    assert_eq!(error, "Yarn v1 lockfiles are not read yet");
-}
-
-#[test]
 fn pnpm_snapshots_with_peer_suffixes_are_one_package_version_with_its_declared_range() {
     let lock = r#"
 lockfileVersion: '9.0'
@@ -171,7 +161,7 @@ fn package_lock_resolves_a_nested_copy_before_the_hoisted_one() {
         "node_modules/b": { "version": "2.1.0" }
       }
     }"#;
-    let walk = Walk::new(lockfiles::package_lock(lock).unwrap());
+    let walk = Walk::new(lockfiles::package_lock(lock, &|_| None).unwrap());
     let a = walk.nodes_named("a")[0];
     assert_eq!(
         described(&walk, walk.dependencies(a, &[])),
@@ -402,7 +392,7 @@ fn an_aliased_npm_install_is_the_package_it_aliases() {
         "node_modules/foo": { "name": "bar", "version": "1.2.0" }
       }
     }"#;
-    let walk = Walk::new(lockfiles::package_lock(lock).unwrap());
+    let walk = Walk::new(lockfiles::package_lock(lock, &|_| None).unwrap());
     assert_eq!(walk.nodes_named("bar").len(), 1);
     assert!(walk.nodes_named("foo").is_empty());
 }
@@ -490,7 +480,7 @@ fn package_lock_looks_in_every_ancestor_directory_before_the_root() {
         "node_modules/x": { "version": "1.0.0" }
       }
     }"#;
-    let graph = lockfiles::package_lock(lock).unwrap();
+    let graph = lockfiles::package_lock(lock, &|_| None).unwrap();
     assert_eq!(
         chains_to(graph, "x", &[]),
         ["app@0.0.0-use.local > x@2.0.0"]
@@ -558,6 +548,8 @@ packages:
     );
 }
 
+#[path = "specs/javascript.rs"]
+mod javascript;
 #[path = "specs/python.rs"]
 mod python;
 #[path = "specs/workspaces.rs"]

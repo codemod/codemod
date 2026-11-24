@@ -125,8 +125,9 @@ declare module "codemod:deps" {
 
   /**
    * Reads the target's lockfiles (yarn.lock, pnpm-lock.yaml, package-lock.json,
-   * Cargo.lock, uv.lock, poetry.lock, Pipfile.lock; default: those at the
-   * target's root, so nested ones need a `lockfiles` glob) into a graph and runs `callback` on it in
+   * npm-shrinkwrap.json, bun.lock, Cargo.lock, uv.lock, poetry.lock,
+   * Pipfile.lock; default: those at the target's root, so nested ones need a
+   * `lockfiles` glob, which fails the step when it matches none) into a graph and runs `callback` on it in
    * its own isolate, where it may await `registry` lookups. Nodes and edges in
    * the result are recorded as `name@version` text and `RecordedEdge`.
    * Write `callback` inline, as an arrow or function expression: the build
