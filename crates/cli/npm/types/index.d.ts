@@ -4,6 +4,7 @@
 /// <reference path="modules/llm.d.ts" />
 /// <reference path="modules/runtime.d.ts" />
 /// <reference path="modules/workflow.d.ts" />
+/// <reference path="modules/jssg-compat.d.ts" />
 /// <reference path="modules/deps.d.ts" />
 /// <reference path="modules/git.d.ts" />
 /// <reference path="modules/langs.d.ts" />
