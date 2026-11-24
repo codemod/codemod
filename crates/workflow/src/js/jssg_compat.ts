@@ -2,8 +2,11 @@
 // export `transform(root, options)`, and optionally `getSelector`) run from a
 // `forEachFile` callback, as workflow.yaml's `js-ast-grep` step ran it.
 //
-// Only the YAML translation uses it (workflow.yaml runs, and what
-// `codemod workflow upgrade` writes): it is not part of the workflow API.
+// The YAML translation uses it: workflow.yaml runs, and what
+// `codemod workflow upgrade` writes for a transform a plain callback cannot
+// call (one that uses `root.rename()` or `jssgTransform`); the `codemod`
+// package ships its types (types/modules/jssg-compat.d.ts). Upgraded
+// workflows call other transforms from plain callbacks.
 // What it reproduces: the root the transform gets (with the step's semantic
 // analysis), `options.params`, `options.matrixValues`, `options.language`,
 // `options.targetDir` and `options.matches` (from `getSelector`, whose files
@@ -41,11 +44,14 @@ interface CompatHost {
 interface CallbackFile {
   readonly path: string;
   readonly text: string;
+  /** The selector's language. */
+  readonly language?: string;
   write(text: string): void;
   rename(path: string): void;
 }
 
 export interface JssgOptions {
+  /** The language to parse with (default: the step selector's). */
   language?: string;
   params?: Record<string, unknown>;
   matrix?: Record<string, unknown> | null;
@@ -78,7 +84,7 @@ async function apply(
   if (typeof transform !== "function") {
     throw new Error(`jssg codemod modules must export a function. ${typeof transform} found.`);
   }
-  const language = options.language;
+  const language = options.language ?? file.language;
   const root: Root = language ? parse(file, { language }) : parse(file);
   const params = options.params ?? {};
   const transformOptions: Record<string, unknown> = {
@@ -195,6 +201,7 @@ function begin(file: CallbackFile, discard: boolean): CallbackFile {
   return {
     path: file.path,
     text,
+    language: file.language,
     write: (next) => file.write(next),
     rename: (to) => file.rename(to),
   };
