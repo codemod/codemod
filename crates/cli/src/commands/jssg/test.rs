@@ -19,8 +19,8 @@ use codemod_sandbox::{
     utils::project_discovery::find_tsconfig,
 };
 use testing_utils::{
-    map_execution_result, ExecutionRequest, ReporterType, TestOptions, TestRunner, TestSource,
-    TransformationResult,
+    map_execution_result, CaseEnd, CaseHook, ExecutionRequest, ReporterType, TestOptions,
+    TestRunner, TestSource, TransformationResult,
 };
 
 use crate::commands::TelemetrySenderExt;
@@ -39,23 +39,18 @@ struct PendingDataSnapshot {
     path: PathBuf,
 }
 
-/// The `data` of a test case's files, written to `data.json` once its last
-/// input file is done.
+/// The `data` of a test case's files, checked against its `data.json` when
+/// the case ends.
 struct SharedDataState {
     entries: DataEntries,
-    remaining_entrypoints: usize,
+    /// The case's `data.json`.
+    path: PathBuf,
+    /// A file stopped early (an error, a timeout): the data is incomplete.
     skip_snapshot: bool,
 }
 
-impl SharedDataState {
-    fn new(entrypoint_count: usize) -> Self {
-        Self {
-            entries: Vec::new(),
-            remaining_entrypoints: entrypoint_count.max(1),
-            skip_snapshot: false,
-        }
-    }
-}
+/// What each case's files returned as `data`, by the case's root.
+type SharedData = Arc<Mutex<HashMap<PathBuf, SharedDataState>>>;
 
 #[derive(Args, Debug, Clone)]
 pub struct Command {
@@ -263,15 +258,12 @@ async fn handler_impl(args: &Command) -> Result<()> {
     let base_config_clone = base_config.clone();
     let args_clone = args.clone();
     let current_dir_clone = current_dir.clone();
-    let shared_data = Arc::new(Mutex::new(HashMap::<PathBuf, SharedDataState>::new()));
-    let remaining_data = shared_data.clone();
-    // A data.json failure belongs to its whole case, but the runner reports it
-    // on the case's last file, whose result `--filter` can drop.
-    let data_failures = Arc::new(Mutex::new(Vec::<(PathBuf, String)>::new()));
-    let recorded_data_failures = data_failures.clone();
+    let shared_data: SharedData = Arc::default();
+    // data.json belongs to the whole case: it is checked when the case ends,
+    // as the case's own result.
+    let case_hook = data_case_hook(shared_data.clone(), args.update_snapshots);
     let semantic_provider: Option<Arc<dyn SemanticProvider>> =
         Some(Arc::new(LazySemanticProvider::file_scope()));
-    let update_snapshots = args.update_snapshots;
     let execution_fn = Box::new(
         move |request: ExecutionRequest, capabilities: Option<HashSet<LlrtSupportedModules>>| {
             let codemod_path = codemod_path_clone.clone();
@@ -286,7 +278,6 @@ async fn handler_impl(args: &Command) -> Result<()> {
             let current_dir = current_dir_clone.clone();
             let semantic_provider = semantic_provider.clone();
             let shared_data = shared_data.clone();
-            let data_failures = data_failures.clone();
             let runtime_event_output = runtime_event_output.clone();
 
             Box::pin(async move {
@@ -305,13 +296,10 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 } else {
                     test_case_dir.join("data.json")
                 };
-                // Counts this file towards the case's data.json, even when it
-                // stops early (an error, a timeout).
-                let collection = DataCollection::start(
-                    shared_data.clone(),
-                    data_path,
-                    request.entrypoint_count,
-                )?;
+                // This file's part of the case's data.json; when it stops
+                // early (an error, a timeout), the case's data is not checked.
+                let collection =
+                    DataCollection::start(shared_data.clone(), test_case_root, data_path)?;
                 let per_test_config =
                     match TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))
                     {
@@ -413,21 +401,12 @@ async fn handler_impl(args: &Command) -> Result<()> {
                         .map_err(|error| with_callback_hint(anyhow::Error::from(error)))
                 };
 
-                let pending_snapshot = collection.finish(
+                collection.finish(
                     data.map(|data| (file_name, data)),
                     execution_result.is_err(),
-                );
+                )?;
 
                 runtime_event_output.flush(&runtime_event_buffer);
-
-                if let Some(snapshot) = pending_snapshot? {
-                    if let Err(error) = handle_data_snapshot(&snapshot, update_snapshots) {
-                        if let Ok(mut failures) = data_failures.lock() {
-                            failures.push((snapshot.path.clone(), format!("{error:#}")));
-                        }
-                        return Err(error);
-                    }
-                }
 
                 execution_result
             })
@@ -445,64 +424,47 @@ async fn handler_impl(args: &Command) -> Result<()> {
 
     let extensions = get_extensions_for_language(default_language_enum);
 
-    let filtered = options.filter.is_some();
-    let fail_fast = options.fail_fast;
     let mut runner = TestRunner::new(options, test_source);
     let summary = runner
-        .run_tests(&extensions, execution_fn, Some(capabilities))
+        .run_tests_with_case_hook(
+            &extensions,
+            execution_fn,
+            Some(case_hook),
+            Some(capabilities),
+        )
         .await?;
 
-    // Cases whose data the runner never finished: a file an earlier file
-    // deleted is skipped, so its case is checked now, with the files that ran.
-    // After a --fail-fast stop a case may be cut short, so it is not checked.
-    let mut failures = if fail_fast && !summary.is_success() {
-        Vec::new()
-    } else {
-        finish_remaining_data(&remaining_data, update_snapshots)?
-    };
-    if filtered {
-        let reported = recorded_data_failures
-            .lock()
-            .map_err(|_| anyhow::anyhow!("data failures lock poisoned"))?;
-        failures.extend(reported.iter().cloned());
-    }
-    for (path, error) in &failures {
-        eprintln!("{}: {error}", path.display());
-    }
-
-    if !summary.is_success() || !failures.is_empty() {
+    if !summary.is_success() {
         std::process::exit(1);
     }
 
     Ok(())
 }
 
-/// Check the data of every case that is still collecting once the run is
-/// over. A case with a file that stopped early is not checked.
-fn finish_remaining_data(
-    shared_data: &Mutex<HashMap<PathBuf, SharedDataState>>,
-    update_snapshots: bool,
-) -> Result<Vec<(PathBuf, String)>> {
-    let remaining: Vec<(PathBuf, SharedDataState)> = shared_data
-        .lock()
-        .map_err(|_| anyhow::anyhow!("shared data lock poisoned"))?
-        .drain()
-        .collect();
-    let mut failures = Vec::new();
-    for (path, state) in remaining {
-        if state.skip_snapshot {
-            continue;
+/// Checks a case's `data.json` once the case ends, against the data its
+/// files returned; reported as `<case>: data.json`. Every file of a case runs
+/// before it ends, so the data is complete whichever files `--filter`
+/// reports, and a file an earlier one deleted is simply not in it. A case
+/// with a file that stopped early (an error, a timeout, `--fail-fast`) is
+/// not checked, and one without data or a data.json reports nothing.
+fn data_case_hook(shared_data: SharedData, update_snapshots: bool) -> CaseHook<'static> {
+    Box::new(move |case: CaseEnd| {
+        let state = shared_data.lock().ok()?.remove(&case.root)?;
+        if case.stopped_early || state.skip_snapshot {
+            return None;
+        }
+        if state.entries.is_empty() && !state.path.exists() {
+            return None;
         }
         let snapshot = PendingDataSnapshot {
             entries: state.entries,
-            path,
+            path: state.path,
         };
-        if let Err(error) = handle_data_snapshot(&snapshot, update_snapshots) {
-            failures.push((snapshot.path, format!("{error:#}")));
-        }
-    }
-    failures.sort();
-    Ok(failures)
+        Some((
+            format!("{}: data.json", case.name),
+            handle_data_snapshot(&snapshot, update_snapshots),
+        ))
+    })
 }
 
 /// One input of a `--callback` test case.
@@ -583,29 +545,30 @@ fn data_file_name(input_path: &Path, target_directory: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// One file's part in its case's data snapshot. Dropped before
-/// [`DataCollection::finish`] (the file stopped early), it still counts the
-/// file, and the case's data is not checked.
+/// One file's part in its case's data. Dropped before
+/// [`DataCollection::finish`] (the file stopped early), it marks the case's
+/// data incomplete, so it is not checked.
 struct DataCollection {
-    shared: Arc<Mutex<HashMap<PathBuf, SharedDataState>>>,
-    path: PathBuf,
+    shared: SharedData,
+    /// The case's root, which keys its data.
+    case: PathBuf,
     finished: bool,
 }
 
 impl DataCollection {
-    fn start(
-        shared: Arc<Mutex<HashMap<PathBuf, SharedDataState>>>,
-        path: PathBuf,
-        entrypoint_count: usize,
-    ) -> Result<Self> {
+    fn start(shared: SharedData, case: PathBuf, data_path: PathBuf) -> Result<Self> {
         shared
             .lock()
             .map_err(|_| anyhow::anyhow!("shared data lock poisoned"))?
-            .entry(path.clone())
-            .or_insert_with(|| SharedDataState::new(entrypoint_count));
+            .entry(case.clone())
+            .or_insert_with(|| SharedDataState {
+                entries: Vec::new(),
+                path: data_path,
+                skip_snapshot: false,
+            });
         Ok(Self {
             shared,
-            path,
+            case,
             finished: false,
         })
     }
@@ -613,55 +576,31 @@ impl DataCollection {
     fn finish(
         mut self,
         entry: Option<(String, serde_json::Value)>,
-        should_skip_snapshot: bool,
-    ) -> Result<Option<PendingDataSnapshot>> {
+        stopped_early: bool,
+    ) -> Result<()> {
         self.finished = true;
-        finish_data_collection(&self.shared, &self.path, entry, should_skip_snapshot)
+        self.add(entry, stopped_early)
+    }
+
+    fn add(&self, entry: Option<(String, serde_json::Value)>, stopped_early: bool) -> Result<()> {
+        let mut shared = self
+            .shared
+            .lock()
+            .map_err(|_| anyhow::anyhow!("shared data lock poisoned"))?;
+        if let Some(state) = shared.get_mut(&self.case) {
+            state.entries.extend(entry);
+            state.skip_snapshot |= stopped_early;
+        }
+        Ok(())
     }
 }
 
 impl Drop for DataCollection {
     fn drop(&mut self) {
         if !self.finished {
-            let _ = finish_data_collection(&self.shared, &self.path, None, true);
+            let _ = self.add(None, true);
         }
     }
-}
-
-fn finish_data_collection(
-    shared_data: &Mutex<HashMap<PathBuf, SharedDataState>>,
-    data_path: &Path,
-    entry: Option<(String, serde_json::Value)>,
-    should_skip_snapshot: bool,
-) -> Result<Option<PendingDataSnapshot>> {
-    let mut shared_data = shared_data
-        .lock()
-        .map_err(|_| anyhow::anyhow!("shared data lock poisoned"))?;
-
-    let Some(state) = shared_data.get_mut(data_path) else {
-        return Ok(None);
-    };
-
-    state.entries.extend(entry);
-    state.skip_snapshot |= should_skip_snapshot;
-    state.remaining_entrypoints = state.remaining_entrypoints.saturating_sub(1);
-
-    if state.remaining_entrypoints > 0 {
-        return Ok(None);
-    }
-
-    let state = shared_data
-        .remove(data_path)
-        .expect("data state should exist when finalizing");
-
-    if state.skip_snapshot {
-        return Ok(None);
-    }
-
-    Ok(Some(PendingDataSnapshot {
-        entries: state.entries,
-        path: data_path.to_path_buf(),
-    }))
 }
 
 fn handle_data_snapshot(snapshot: &PendingDataSnapshot, update_snapshots: bool) -> Result<()> {
@@ -785,16 +724,15 @@ fn generate_data_diff(expected: &str, actual: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_and_sanitize_error, data_file_name, data_to_canonical_json,
-        finish_data_collection, finish_remaining_data, generate_data_diff, handle_data_snapshot,
-        normalize_line_endings, DataCollection, PendingDataSnapshot, SharedDataState,
+        classify_and_sanitize_error, data_case_hook, data_file_name, data_to_canonical_json,
+        generate_data_diff, handle_data_snapshot, normalize_line_endings, DataCollection,
+        PendingDataSnapshot, SharedData,
     };
     use serde_json::json;
-    use std::collections::HashMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use std::sync::Mutex;
     use tempfile::tempdir;
+    use testing_utils::CaseEnd;
 
     #[test]
     fn normalize_line_endings_converts_crlf_to_lf() {
@@ -849,69 +787,87 @@ mod tests {
         assert_eq!(message.len(), 203);
     }
 
-    #[test]
-    fn a_directory_case_snapshots_once_with_every_files_data() {
-        let root = PathBuf::from("/tmp/fixture");
-        let shared = Mutex::new(HashMap::from([(root.clone(), SharedDataState::new(2))]));
-
-        let first = finish_data_collection(&shared, &root, Some(("a.ts".into(), json!(1))), false);
-        assert!(first.unwrap().is_none());
-        let last = finish_data_collection(&shared, &root, Some(("b.ts".into(), json!(2))), false)
-            .unwrap()
-            .expect("the last file finishes the snapshot");
-        assert_eq!(
-            last.entries,
-            vec![
-                ("a.ts".to_string(), json!(1)),
-                ("b.ts".to_string(), json!(2))
-            ]
-        );
+    fn case_end(root: &Path, stopped_early: bool) -> CaseEnd {
+        CaseEnd {
+            name: "case".into(),
+            root: root.to_path_buf(),
+            stopped_early,
+        }
     }
 
     #[test]
-    fn a_file_that_stops_early_still_counts_towards_its_case() {
-        let root = PathBuf::from("/tmp/fixture/data.json");
-        let shared = Arc::new(Mutex::new(HashMap::new()));
-        // The runner runs a case's files one after another.
-        drop(DataCollection::start(shared.clone(), root.clone(), 2).unwrap());
-        let finished = DataCollection::start(shared.clone(), root.clone(), 2).unwrap();
-        let snapshot = finished
-            .finish(Some(("a.ts".into(), json!(1))), false)
-            .unwrap();
-        // The case is done, and its data is not checked.
-        assert!(snapshot.is_none());
-        assert!(shared.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn a_case_whose_last_file_never_ran_is_checked_after_the_run() {
+    fn a_case_snapshots_its_files_data_once_it_ends() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("data.json");
-        let shared = Arc::new(Mutex::new(HashMap::new()));
-        // Two files; the second was deleted by the first, so it never runs.
-        DataCollection::start(shared.clone(), path.clone(), 2)
-            .unwrap()
-            .finish(Some(("a.ts".into(), json!({ "from": "a" }))), false)
-            .unwrap();
+        let shared: SharedData = Arc::default();
+        let hook = data_case_hook(shared.clone(), false);
+        for (file, value) in [("b.ts", 2), ("a.ts", 1)] {
+            DataCollection::start(shared.clone(), dir.path().into(), path.clone())
+                .unwrap()
+                .finish(Some((file.into(), json!(value))), false)
+                .unwrap();
+        }
         assert!(!path.exists());
 
-        let failures = finish_remaining_data(&shared, false).unwrap();
-        assert!(failures.is_empty(), "{failures:?}");
+        let (name, result) = hook(case_end(dir.path(), false)).expect("a data check");
+        assert_eq!(name, "case: data.json");
+        result.unwrap();
         let written: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             written,
-            json!([{ "file": "a.ts", "data": { "from": "a" } }])
+            json!([{ "file": "a.ts", "data": 1 }, { "file": "b.ts", "data": 2 }])
         );
+        assert!(shared.lock().unwrap().is_empty());
 
-        // A different snapshot is reported.
-        DataCollection::start(shared.clone(), path.clone(), 2)
+        // Different data is a failure of the case.
+        DataCollection::start(shared.clone(), dir.path().into(), path.clone())
             .unwrap()
-            .finish(Some(("a.ts".into(), json!({ "from": "b" }))), false)
+            .finish(Some(("a.ts".into(), json!(3))), false)
             .unwrap();
-        let failures = finish_remaining_data(&shared, false).unwrap();
-        assert_eq!(failures.len(), 1);
-        assert!(failures[0].1.contains("Data mismatch"), "{failures:?}");
+        let (_, result) = hook(case_end(dir.path(), false)).expect("a data check");
+        assert!(format!("{:#}", result.unwrap_err()).contains("Data mismatch"));
+    }
+
+    #[test]
+    fn a_case_cut_short_is_not_checked() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("data.json");
+        let shared: SharedData = Arc::default();
+        let hook = data_case_hook(shared.clone(), false);
+
+        // A file that stopped early (dropped unfinished).
+        drop(DataCollection::start(shared.clone(), dir.path().into(), path.clone()).unwrap());
+        DataCollection::start(shared.clone(), dir.path().into(), path.clone())
+            .unwrap()
+            .finish(Some(("a.ts".into(), json!(1))), false)
+            .unwrap();
+        assert!(hook(case_end(dir.path(), false)).is_none());
+
+        // A case --fail-fast stopped.
+        DataCollection::start(shared.clone(), dir.path().into(), path.clone())
+            .unwrap()
+            .finish(Some(("a.ts".into(), json!(1))), false)
+            .unwrap();
+        assert!(hook(case_end(dir.path(), true)).is_none());
+        assert!(!path.exists());
+        assert!(shared.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_case_without_data_reports_nothing() {
+        let dir = tempdir().unwrap();
+        let shared: SharedData = Arc::default();
+        let hook = data_case_hook(shared.clone(), false);
+        DataCollection::start(
+            shared.clone(),
+            dir.path().into(),
+            dir.path().join("data.json"),
+        )
+        .unwrap()
+        .finish(None, false)
+        .unwrap();
+        assert!(hook(case_end(dir.path(), false)).is_none());
     }
 
     #[test]
