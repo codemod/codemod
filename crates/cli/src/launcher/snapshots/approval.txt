@@ -1,0 +1,14 @@
+codemod · moment-to-dayjs · run e7470df3 · agent claude-code · model systemone/jev-latest needs you
+┌ Steps ─────────────────────────────┐┌ Logs │ Diff · whole run ───────────────────────────────────┐
+│▣ Whole run 2 steps                 ││moment@2.30.1                                               │
+│✓ Who uses moment? 0.2s             ││orders.ts: 3 calls                                          │
+│⠋ Migrate pac┌ Approval needed ─────────────────────────────────────────────────────┐             │
+│             │Rewrite moment → dayjs in packages/api (4 files)?                     │             │
+│             │                                                                      │             │
+│             │y approve   n reject   l later (pause; resume with --approve)         │             │
+│             └──────────────────────────────────────────────────────────────────────┘             │
+│                                    ││                                                            │
+│                                    ││                                                            │
+│                                    ││                                                            │
+└────────────────────────────────────┘└────────────────────────────────────────────────────────────┘
+y approve · n reject · l later

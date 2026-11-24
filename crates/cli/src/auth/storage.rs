@@ -11,10 +11,18 @@ use crate::auth::types::{AuthTokens, UserInfo};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    // Defaulted: the file may hold only run preferences (`user_settings`)
+    // when nobody has logged in yet.
+    #[serde(default)]
     pub default_registry: String,
+    #[serde(default)]
     pub registries: HashMap<String, RegistryAuthConfig>,
     #[serde(default)]
     pub anonymous_feedback: AnonymousFeedbackConfig,
+    /// Keys other parts of the CLI keep in the same file (run preferences,
+    /// see `user_settings`), kept as they are when this is saved.
+    #[serde(flatten)]
+    pub other: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for Config {
@@ -47,6 +55,7 @@ impl Config {
             default_registry: registry_url.to_string(),
             registries,
             anonymous_feedback: AnonymousFeedbackConfig::default(),
+            other: serde_json::Map::new(),
         }
     }
 }
@@ -101,21 +110,29 @@ impl TokenStorage {
     pub fn load_config_with_env(&self, env: Option<&HashMap<String, String>>) -> Result<Config> {
         let config_path = self.config_dir.join("config.json");
 
-        if !config_path.exists() {
-            let default_registry = env
-                .and_then(|vars| vars.get("CODEMOD_REGISTRY_URL"))
+        let default_registry = || {
+            env.and_then(|vars| vars.get("CODEMOD_REGISTRY_URL"))
                 .map(|value| value.trim())
                 .filter(|value| !value.is_empty())
                 .map(|value| value.to_string())
-                .unwrap_or_else(|| RegistryConfig::default().default_registry);
-            return Ok(Config::with_default_registry(default_registry));
+                .unwrap_or_else(|| RegistryConfig::default().default_registry)
+        };
+        if !config_path.exists() {
+            return Ok(Config::with_default_registry(default_registry()));
         }
 
         let content = fs::read_to_string(&config_path)
             .with_context(|| format!("Failed to read config file: {config_path:?}"))?;
 
-        let config: Config =
+        let mut config: Config =
             serde_json::from_str(&content).context("Failed to parse config file")?;
+        if config.default_registry.trim().is_empty() {
+            // Only preferences were saved: the registry settings are the
+            // defaults, as if there were no file.
+            let defaults = Config::with_default_registry(default_registry());
+            config.default_registry = defaults.default_registry;
+            config.registries.extend(defaults.registries);
+        }
 
         Ok(config)
     }
@@ -371,6 +388,29 @@ mod tests {
 
         assert!(!config.anonymous_feedback.enabled);
         assert_eq!(config.anonymous_feedback.consented_at, None);
+    }
+
+    #[test]
+    fn a_file_with_only_run_preferences_reads_as_defaults_and_keeps_them() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        fs::write(
+            temp_dir.path().join("config.json"),
+            r#"{ "agent": "codex", "decisionModel": { "provider": "systemone", "model": "jev-latest" } }"#,
+        )
+        .expect("expected config write");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+
+        let config = storage.load_config().expect("config");
+        assert_eq!(config.default_registry, Config::default().default_registry);
+        assert!(config.registries.contains_key(&config.default_registry));
+
+        storage.save_config(&config).expect("save");
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(temp_dir.path().join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved["agent"], "codex");
+        assert_eq!(saved["decisionModel"]["model"], "jev-latest");
     }
 
     #[test]

@@ -29,6 +29,7 @@ mod hosted;
 mod imported;
 pub mod interaction;
 mod js;
+pub mod params;
 mod run;
 mod tasks;
 

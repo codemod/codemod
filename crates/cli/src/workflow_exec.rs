@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::user_settings::DecisionModel;
 use anyhow::{anyhow, Result};
 use butterflow_core::config::InstallSkillExecutor;
 use butterflow_core::registry::RegistryClient;
@@ -44,9 +45,15 @@ pub struct RunFlags {
     #[arg(long)]
     pub no_interactive: bool,
 
-    /// Coding agent to use for AI steps (e.g. claude, codex, aider)
+    /// Coding agent to use for AI steps (e.g. claude, codex, aider); defaults to the one saved
+    /// in the launcher
     #[arg(long)]
     pub agent: Option<String>,
+
+    /// Decision model for decision and assessment calls, as <provider>/<model> (default:
+    /// the one saved in the launcher, else systemone/jev-latest)
+    #[arg(long, value_name = "PROVIDER/MODEL", value_parser = parse_decision_model)]
+    pub model: Option<DecisionModel>,
 
     /// Execute install-skill steps when running in non-interactive mode
     #[arg(long)]
@@ -55,6 +62,10 @@ pub struct RunFlags {
     /// Output format: "text" (default) or "jsonl" for structured logging
     #[arg(long, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
+}
+
+fn parse_decision_model(text: &str) -> Result<DecisionModel> {
+    DecisionModel::parse(text)
 }
 
 impl RunFlags {
@@ -106,6 +117,7 @@ impl RunFlags {
             format: self.format,
             capabilities,
             agent: self.agent.clone(),
+            decision_model: self.model.clone(),
             registry: Some(registry),
             // Unattended runs install skills only when asked to.
             install_skill: (!self.no_interactive || self.install_skill).then(|| {
@@ -115,6 +127,8 @@ impl RunFlags {
             managed_git: false,
             skip_shard_steps: false,
             nested_observer: None,
+            launcher: crate::launcher::enabled(self),
+            allow_dirty: false,
         }
     }
 }
@@ -125,6 +139,9 @@ pub struct ExecSettings {
     pub format: OutputFormat,
     pub capabilities: HashSet<LlrtSupportedModules>,
     pub agent: Option<String>,
+    /// The decision model `--model` asked for; filled in from the saved
+    /// settings when the run starts.
+    pub decision_model: Option<DecisionModel>,
     pub registry: Option<RegistryClient>,
     pub install_skill: Option<Arc<dyn InstallSkillExecutor>>,
     /// Treat every approval as given.
@@ -134,6 +151,23 @@ pub struct ExecSettings {
     pub skip_shard_steps: bool,
     pub nested_observer:
         Option<Arc<dyn butterflow_core::nested_codemod_run::NestedCodemodRunObserver>>,
+    /// Show the run in the interactive launcher instead of printing it.
+    pub launcher: bool,
+    /// Applying a dry run for real from the launcher skips the check for
+    /// uncommitted changes.
+    pub allow_dirty: bool,
+}
+
+impl ExecSettings {
+    /// Fill in what the person saved (coding agent, decision model) where
+    /// the flags say nothing. `recorded_agent` is the one a resumed run was
+    /// started with, which comes before the saved one.
+    fn with_saved(mut self, recorded_agent: Option<String>) -> Self {
+        let saved = crate::user_settings::load();
+        self.agent = self.agent.or(recorded_agent).or_else(|| saved.agent(None));
+        self.decision_model = Some(saved.decision_model(self.decision_model.as_ref()));
+        self
+    }
 }
 
 pub struct ExecRequest {
@@ -149,6 +183,9 @@ pub struct ExecOutcome {
     pub report: RunReport,
     pub summary: Arc<Summary>,
     pub duration: Duration,
+    /// Whether the run was a dry run: a launcher's dry run may have been
+    /// applied for real since the command started.
+    pub dry_run: bool,
 }
 
 impl ExecOutcome {
@@ -202,7 +239,11 @@ pub fn status_label(store: &dyn RunStore, run: &RunRecord) -> String {
     }
 }
 
-pub async fn start(request: ExecRequest) -> Result<ExecOutcome> {
+pub async fn start(mut request: ExecRequest) -> Result<ExecOutcome> {
+    request.settings = request.settings.with_saved(None);
+    if request.settings.launcher {
+        return crate::launcher::run_start(request).await;
+    }
     let workflow = load_workflow(&request.workflow).map_err(|e| anyhow!("{e}"))?;
     let format = request.settings.format;
     let dry_run = request.dry_run;
@@ -224,6 +265,7 @@ pub async fn start(request: ExecRequest) -> Result<ExecOutcome> {
         report,
         summary,
         duration: started.elapsed(),
+        dry_run,
     };
     // A dry run is not saved, so there is nothing to resume.
     print_ending(&outcome, format, !dry_run);
@@ -245,7 +287,17 @@ pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutc
             .filter_map(|name| name.parse::<LlrtSupportedModules>().ok()),
     );
     settings.managed_git |= record.settings.managed_git;
-    settings.agent = settings.agent.or(record.settings.agent);
+    let settings = settings.with_saved(record.settings.agent.clone());
+    if settings.launcher {
+        let title = record.name.clone().unwrap_or_else(|| {
+            record
+                .workflow_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| run_id.to_string())
+        });
+        return crate::launcher::run_resume(run_id, title, settings).await;
+    }
 
     let format = settings.format;
     let (engine, renderer, summary) = engine(&settings)?;
@@ -257,6 +309,7 @@ pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutc
         report,
         summary,
         duration: started.elapsed(),
+        dry_run: false,
     };
     print_ending(&outcome, format, true);
     Ok(outcome)
@@ -270,6 +323,17 @@ fn engine(settings: &ExecSettings) -> Result<(Engine, Arc<Renderer>, Arc<Summary
         renderer: Arc::clone(&renderer),
         prompt_lock: Mutex::new(()),
     });
+    let (engine, summary) = engine_with(settings, renderer.clone(), interaction);
+    Ok((engine, renderer, summary))
+}
+
+/// An engine for these settings that reports to `events` and asks
+/// `interaction`.
+pub(crate) fn engine_with(
+    settings: &ExecSettings,
+    events: Arc<dyn EventSink>,
+    interaction: Arc<dyn Interaction>,
+) -> (Engine, Arc<Summary>) {
     let summary = Arc::new(Summary::default());
     let services = Services {
         capabilities: settings.capabilities.clone(),
@@ -282,8 +346,7 @@ fn engine(settings: &ExecSettings) -> Result<(Engine, Arc<Renderer>, Arc<Summary
         package_registry: Some(Arc::new(codemod_deps::HttpRegistry::new())),
         summary: Arc::clone(&summary),
     };
-    let engine = Engine::new(store(), renderer.clone(), interaction, services);
-    Ok((engine, renderer, summary))
+    (Engine::new(store(), events, interaction, services), summary)
 }
 
 /// Run the engine on its own thread (its tasks start their own async
@@ -311,7 +374,7 @@ where
 /// Resolves when the process is asked to stop: Ctrl-C, or being terminated
 /// or hung up on (a supervisor, a closed terminal). The run then ends as
 /// canceled and can be resumed, instead of being left marked as running.
-async fn stop_requested() {
+pub(crate) async fn stop_requested() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
@@ -334,7 +397,7 @@ async fn stop_requested() {
     }
 }
 
-fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumable: bool) {
+pub(crate) fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumable: bool) {
     if format == OutputFormat::Jsonl {
         return;
     }

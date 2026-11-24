@@ -115,14 +115,46 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         }
     }
     let pro_dry_run = pro_dependency.is_some();
-    let dry_run = args.dry_run || pro_dry_run;
+    let mut dry_run = args.dry_run || pro_dry_run;
+    let mut flags = args.flags.clone();
+    let mut params = params;
+    let mut target_path = target_path;
 
-    let capabilities = args
-        .flags
-        .capabilities(None, Some(workflow_dir.clone()), dry_run);
+    if crate::launcher::enabled(&flags) {
+        use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+        let requested = resolve_capabilities(
+            ResolveCapabilitiesArgs {
+                allow_fs: false,
+                allow_fetch: false,
+                allow_child_process: false,
+            },
+            None,
+            Some(workflow_dir.clone()),
+        );
+        let Some(choices) = crate::launcher::setup(crate::launcher::Plan {
+            title: workflow_label.clone(),
+            workflow: &workflow_path,
+            target: target_path.clone(),
+            params,
+            dry_run,
+            dry_run_locked: pro_dry_run,
+            requested,
+            flags: &flags,
+        })
+        .await?
+        else {
+            return Ok(());
+        };
+        choices.apply_to(&mut flags);
+        target_path = normalize_target_path(choices.target)?;
+        params = choices.params;
+        dry_run = choices.dry_run || pro_dry_run;
+    }
+
+    let capabilities = flags.capabilities(None, Some(workflow_dir.clone()), dry_run);
 
     if !dry_run {
-        crate::dirty_git_check::dirty_check(args.flags.no_interactive)(
+        crate::dirty_git_check::dirty_check(flags.no_interactive)(
             &target_path,
             args.allow_dirty,
             None,
@@ -147,16 +179,17 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             managed_git: args.managed_git,
             skip_shard_steps: pro_dry_run,
             nested_observer: Some(nested_observer),
-            ..args
-                .flags
-                .settings(capabilities, registry.clone(), &telemetry)
+            // The check ran above; applying a dry run makes it again.
+            allow_dirty: args.allow_dirty,
+            ..flags.settings(capabilities, registry.clone(), &telemetry)
         },
     })
     .await?;
+    let dry_run = outcome.dry_run;
 
     if crate::utils::report_prompt::should_show_report(
         args.report,
-        args.flags.no_interactive,
+        flags.no_interactive,
         outcome.files_modified(),
     ) {
         let report = ExecutionReport::build(

@@ -1,0 +1,24 @@
+┌ codemod · moment-to-dayjs ───────────────────────────────────────────────────────────────────────┐
+│Workflow  workflows/moment-to-dayjs.ts                                                            │
+│                                                                                                  │
+│  Target          /work/demo                                                                      │
+│  Dry run         [ ]  changes are written                                                        │
+│  Params                                                                                          │
+│    package       api  string · Only migrate this package.                                        │
+│    agent         —  boolean | string                                                             │
+│    extra         3                                                                               │
+│  Capabilities                                                                                    │
+│    fs            [ ]                                                                             │
+│    fetch         [x]                                                                             │
+│    child_process [ ]  requested by the package; you are asked when it runs                       │
+│  Coding agent    ‹ Codex ›  2 installed                                                          │
+│  Decision model  ‹ systemone/jev-latest ›  2 models                                              │
+│                                                                                                  │
+│   Start run                                                                                      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+↑↓ move · ←→/space change · enter edit/start · s start · q quit
