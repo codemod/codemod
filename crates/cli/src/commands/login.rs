@@ -139,7 +139,11 @@ pub async fn handler(args: &Command) -> Result<()> {
                 );
             }
 
-            println!("Use 'npx codemod@latest logout' to log out or 'npx codemod@latest login --registry <url>' to log in to a different registry.");
+            println!(
+                "Use '{}' to log out or '{}' to log in to a different registry.",
+                crate::utils::cli_command::npx_codemod("logout"),
+                crate::utils::cli_command::npx_codemod("login --registry <url>")
+            );
             return Ok(());
         } else {
             println!("Token is invalid, logging out");

@@ -160,7 +160,7 @@ An `astGrep` step also rejects a `basePath` that resolves outside the target.
 - The callback may be async: `async (file) => { ... }`.
 - Return a value to collect it; returned values become `result.outputs`, in path order. Return nothing to collect nothing.
 - A callback that throws fails only that file; the error appears in `result.failures`, and the file and its error are logged under the step.
-- When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again.
+- When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again. A run with a partial step exits with code 2 when it finishes (see [exit codes](/community/cli#codemod-workflow)); a `codemod(...)` step is partial when files failed in the codemod it ran.
 - When the callback fails on every file it ran on, the step fails, with the first file's error.
 - To count what a callback found, return it: outputs are values, so add them up after the step, or give a [reducer](#reducing-outputs) that adds them up as files finish.
 
@@ -399,11 +399,11 @@ Steps without git can still run in parallel, before or after. Separate checkouts
 
 ### Dependencies
 
-`dependencyGraph`, `registry` and `semver` come from `codemod/deps`. `dependencyGraph` reads the target's `yarn.lock` (Yarn 2+), `pnpm-lock.yaml` (lockfile 6.0 and later), `package-lock.json` (v2 and v3), `Cargo.lock`, `uv.lock`, `poetry.lock` and `Pipfile.lock`, with each workspace's `package.json`, `Cargo.toml`, `pyproject.toml` or `Pipfile` for declared ranges and dependency kinds. Yarn 1 lockfiles, `npm-shrinkwrap.json`, and bun and Go lockfiles are not read.
+`dependencyGraph`, `registry` and `semver` come from `codemod/deps`. `dependencyGraph` reads the target's `yarn.lock` (Yarn 1 and Yarn 2+), `pnpm-lock.yaml` (lockfile 6.0 and later), `package-lock.json` and `npm-shrinkwrap.json` (v1, v2 and v3), `bun.lock`, `Cargo.lock`, `uv.lock`, `poetry.lock` and `Pipfile.lock`, with each workspace's `package.json`, `Cargo.toml`, `pyproject.toml` or `Pipfile` for declared ranges and dependency kinds. A Yarn 1 project's workspaces are the directories its root `package.json`'s `workspaces` globs match. Bun's binary `bun.lockb` and Go lockfiles are not read.
 
 Python packages have the ecosystem `pypi`, and their names are normalized as PyPI does, so `Typing_Extensions` is `typing-extensions`. `Pipfile.lock` keeps no dependencies between packages, so only the packages the `Pipfile` names are reached from the project.
 
-Without `lockfiles`, only the lockfiles at the target's root are read, since nested ones are usually fixtures or examples, and one that cannot be read is left out and listed in `g.skipped` as `{ lockfile, error }`. `lockfiles` picks which lockfiles are read instead, as a glob or a list of globs relative to the target: `**/yarn.lock` reads every `yarn.lock`, the root's included. A lockfile that `lockfiles` names and that cannot be read fails the step.
+Without `lockfiles`, only the lockfiles at the target's root are read, since nested ones are usually fixtures or examples, and one that cannot be read is left out and listed in `g.skipped` as `{ lockfile, error }`. A target with no lockfile at its root, or none that can be read, gets an empty graph: `g.lockfiles` is empty, and the callback still runs. `lockfiles` picks which lockfiles are read instead, as a glob or a list of globs relative to the target: `**/yarn.lock` reads every `yarn.lock`, the root's included. When you name lockfiles you expect them, so globs that match no lockfile fail the step, and so does a lockfile they match that cannot be read.
 
 `dependencyGraph`, `registry` and `semver` run with the codemod CLI. The Node.js host that `codemod/testing` uses by default doesn't have them yet: test a workflow that uses them with `{ host: "quickjs" }`.
 
@@ -508,7 +508,7 @@ A command that exits with an error fails the step, and the error ends with what 
 
 Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
 
-A dry run keeps what each step would change in memory, and later steps read that instead of the disk: `forEachFile` callbacks, `astGrep` rules, `jssgTransform` in function steps and nested `codemod()` runs see the text earlier steps left, renamed files at their new paths, and not the files they deleted. Shell commands don't run in a dry run, so they see none of it. When the run ends, the CLI prints a unified diff of everything the run would change (with `--format jsonl`, one `run_diff` event per file, with `path`, `diff`, `additions` and `deletions`). A renamed file shows as its old path removed and its new path added.
+A dry run keeps what each step would change in memory, and later steps read that instead of the disk: `forEachFile` callbacks, `astGrep` rules, `jssgTransform` in function steps, the files `shard` picks and its `filter`, and nested `codemod()` runs see the text earlier steps left, renamed files at their new paths, and not the files they deleted. Shell commands don't run in a dry run, so they see none of it. When the run ends, the CLI prints a unified diff of everything the run would change (with `--format jsonl`, one `run_diff` event per file, with `path`, `diff`, `additions` and `deletions`). A renamed file shows as its old path removed and its new path added.
 
 If a `codemod()` step resolves a preview-only registry package during an apply run, the step fails before starting that package. Rerun the workflow with `--dry-run` to preview it. This also applies to packages called by nested workflows.
 

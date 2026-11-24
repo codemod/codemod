@@ -112,8 +112,8 @@ fn a_directory_case_with_nested_files_snapshots_data_at_its_root() {
     assert_eq!(fs::read_to_string(case.join("data.json")).unwrap(), STALE);
 }
 
-/// The data mismatch is reported on the case's last file; a filter that
-/// leaves that file out must not hide it.
+/// The data mismatch is the case's own result; a filter that leaves the
+/// case's files out must not hide it.
 #[test]
 fn a_filter_does_not_hide_a_data_mismatch() {
     let dir = tempfile::tempdir().unwrap();
@@ -176,4 +176,116 @@ export default function transform(root: any, options: any) {
         output(&second)
     );
     assert_eq!(fs::read_to_string(case.join("data.json")).unwrap(), stale);
+}
+
+/// The transform that deletes the case's last file (src/lib/b.ts) when it
+/// runs on c.ts, its first.
+const DELETES_LAST_FILE: &str = r#"
+import fs from "fs";
+export default function transform(root: any, options: any) {
+  const text = root.root().text();
+  const marker = text.match(/marker: (\w+)/)?.[1];
+  if (marker === "c") fs.rmSync(`${options.targetDir}/src/lib/b.ts`, { force: true });
+  return { edit: text.replace("OLD", "NEW"), data: { marker } };
+}
+"#;
+
+/// The failed tests in a `--reporter json` run, as `(name, output)`.
+fn json_failures(run: &std::process::Output) -> Vec<(String, String)> {
+    String::from_utf8_lossy(&run.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|event| event["type"] == "test" && event["event"] == "failed")
+        .map(|event| {
+            (
+                event["name"].as_str().unwrap_or_default().to_string(),
+                event["stdout"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// A data mismatch is its case's own result: reported once, also when the
+/// filter matches the case's last file.
+#[test]
+fn a_data_mismatch_is_reported_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    nested_case(root);
+    write(&root.join("tests/case/data.json"), STALE);
+
+    for filter in ["b.ts", "c.ts"] {
+        let run = jssg_test(root, &["--filter", filter]);
+        assert!(!run.status.success(), "{}", output(&run));
+        assert_eq!(
+            output(&run).matches("Data mismatch").count(),
+            1,
+            "--filter {filter}: {}",
+            output(&run)
+        );
+    }
+}
+
+/// The JSON report has the data mismatch of a case whose files the filter
+/// left out, and of a case whose last file was deleted.
+#[test]
+fn the_json_report_has_every_data_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    nested_case(root);
+    write(&root.join("tests/case/data.json"), STALE);
+
+    let run = jssg_test(root, &["--filter", "c.ts", "--reporter", "json"]);
+    assert!(!run.status.success(), "{}", output(&run));
+    let failures = json_failures(&run);
+    assert_eq!(failures.len(), 1, "{}", output(&run));
+    assert!(failures[0].0.contains("data.json"), "{failures:?}");
+    assert!(failures[0].1.contains("Data mismatch"), "{failures:?}");
+
+    write(&root.join("scripts/codemod.ts"), DELETES_LAST_FILE);
+    fs::remove_file(root.join("tests/case/expected/src/lib/b.ts")).unwrap();
+    write(
+        &root.join("tests/case/data.json"),
+        r#"[{ "file": "c.ts", "data": { "marker": "other" } }]"#,
+    );
+    let run = jssg_test(root, &["--allow-fs", "--reporter", "json"]);
+    assert!(!run.status.success(), "{}", output(&run));
+    let failures = json_failures(&run);
+    assert_eq!(failures.len(), 1, "{}", output(&run));
+    assert!(failures[0].1.contains("Data mismatch"), "{failures:?}");
+}
+
+/// With --fail-fast, a case whose last file was deleted is checked when the
+/// case ends, so the run stops there.
+#[test]
+fn fail_fast_stops_at_a_data_mismatch_when_the_case_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    nested_case(root);
+    write(&root.join("scripts/codemod.ts"), DELETES_LAST_FILE);
+    fs::remove_file(root.join("tests/case/expected/src/lib/b.ts")).unwrap();
+    write(
+        &root.join("tests/case/data.json"),
+        r#"[{ "file": "c.ts", "data": { "marker": "other" } }]"#,
+    );
+    // A later case that must not run.
+    write(
+        &root.join("tests/zlater/input/z.ts"),
+        "const z = 'OLD'; // marker: z\n",
+    );
+    write(
+        &root.join("tests/zlater/expected/z.ts"),
+        "const z = 'NEW'; // marker: z\n",
+    );
+
+    let run = jssg_test(root, &["--allow-fs", "--fail-fast", "--sequential"]);
+    assert!(!run.status.success(), "{}", output(&run));
+    assert_eq!(
+        output(&run).matches("Data mismatch").count(),
+        1,
+        "{}",
+        output(&run)
+    );
+    assert!(!output(&run).contains("zlater"), "{}", output(&run));
+    assert!(!root.join("tests/zlater/data.json").exists());
 }

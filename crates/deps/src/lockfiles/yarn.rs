@@ -1,6 +1,7 @@
 //! Yarn Berry (v2+) `yarn.lock`, which is YAML. Each entry lists the
 //! descriptors it satisfies, its resolution, its dependencies and its peer
 //! ranges; the repository's workspaces are entries resolved `@workspace:`.
+//! A Yarn 1 lockfile goes to [`super::yarn_classic`].
 
 use std::collections::HashMap;
 
@@ -10,9 +11,11 @@ use super::{package_json, versions_by_name, yaml_pairs, yaml_string, ReadFile};
 use crate::model::{Ecosystem, Graph, Kind};
 use crate::semver::satisfies;
 
+/// A Yarn 1 lockfile read here has the root as its only workspace; give
+/// [`super::yarn_classic`] the others.
 pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
-    if text.contains("# yarn lockfile v1") {
-        return Err("Yarn v1 lockfiles are not read yet".into());
+    if super::yarn_classic::is_classic(text) {
+        return super::yarn_classic(text, read, &[]);
     }
     let doc: Value = serde_yaml::from_str(text).map_err(|e| e.to_string())?;
     let entries = doc.as_mapping().ok_or("not a YAML mapping")?;

@@ -2,10 +2,10 @@ mod common;
 
 use std::sync::Arc;
 
-use codemod_workflow::events::Event;
+use codemod_workflow::events::{Event, PartialStep};
 use codemod_workflow::interaction::NonInteractive;
 use codemod_workflow::{
-    cancel_run, Canceled, Ending, MemoryStore, RunStatus, Services, StepStatus,
+    cancel_run, Canceled, Ending, FileCount, MemoryStore, RunStatus, Services, StepStatus,
 };
 use common::{output, Harness};
 use serde_json::{json, Value};
@@ -668,6 +668,76 @@ export default async function main() {
     assert_eq!(git(&h, &["show", "codemod-a:one.txt"]), "one");
 }
 
+/// TypeScript wrappers around a callback (`satisfies`, `as`, `!`, `<T>`,
+/// parentheses) are only types: the build extracts the function inside.
+#[test]
+fn callbacks_wrapped_in_type_assertions_are_extracted() {
+    let h = Harness::new();
+    h.write(
+        "package-lock.json",
+        r#"{ "name": "app", "lockfileVersion": 3, "packages": { "": { "name": "app", "version": "1.0.0" } } }"#,
+    );
+    h.write("a.ts", "a\n");
+    h.write("b.ts", "b\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+type Graph = { workspaces(): unknown[] };
+export default async function main() {
+  const roots = await step("Graph", dependencyGraph(((g: Graph) => g.workspaces().length) satisfies (g: Graph) => number));
+  const lengths = await step("Lengths", forEachFile(
+    "*.ts",
+    ((file: { text: string }) => file.text.length) as (file: { text: string }) => number,
+    ((total: number, length: number) => total + length)!,
+    0,
+  ));
+  const cast = await step("Cast", forEachFile("*.ts", <(file: { path: string }) => string>((file) => file.path)));
+  const inline = await step("Inline", ((() => 7) as () => number));
+  return [roots, lengths.reduced, cast.outputs, inline];
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([1, 4, ["a.ts", "b.ts"], 7]));
+}
+
+/// Files that failed in a nested codemod are failed files of the run that
+/// called it.
+#[test]
+fn a_nested_codemod_step_is_partial_when_some_of_its_files_failed() {
+    let h = Harness::new();
+    h.write("a.ts", "a\n");
+    h.write("b.ts", "b\n");
+    h.bundle_file(
+        "child/workflow.ts",
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step("Child", forEachFile("*.ts", (file) => {
+    if (file.path === "a.ts") throw new Error("cannot handle a");
+    file.write("bx\n");
+  }));
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, codemod } from "codemod/workflow";
+export default async function main() {
+  await step("Nested", codemod("./child"));
+}
+"#,
+        Value::Null,
+    );
+    output(&report).unwrap();
+    assert_eq!(h.read("b.ts"), "bx\n");
+    let nested = &report.steps[0];
+    assert_eq!(nested.status, StepStatus::Partial);
+    assert_eq!(nested.error.as_deref(), Some("1 of 2 files failed"));
+    assert_eq!(report.failed_files(), 1);
+}
+
 #[test]
 fn a_nested_codemod_run_alongside_other_steps_refuses_managed_git() {
     let h = managed_git();
@@ -1003,6 +1073,75 @@ fn a_for_each_file_step_is_partial_when_some_files_fail() {
     );
     assert_eq!(output(&second).unwrap(), json!(["a.ts"]));
     assert_eq!(h.read("b.ts"), "bx\n");
+}
+
+/// A run that finishes with failed files says how many, in its report and
+/// in `run_finished`, also when a resume reused the partial step.
+#[test]
+fn a_run_with_failed_files_counts_them_when_it_finishes() {
+    let h = Harness::new();
+    h.write("a.ts", "a\n");
+    h.write("b.ts", "b\n");
+    h.write("c.ts", "c\n");
+    let script = r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step("Some", forEachFile("*.ts", (file) => {
+    if (file.path !== "b.ts") throw new Error("cannot handle it");
+    file.write("bx\n");
+  }));
+  await step("Next", () => { throw new Error("not yet"); });
+}
+"#;
+    let first = h.start(script, Value::Null);
+    assert_eq!(
+        first.steps[0].files,
+        Some(FileCount {
+            failed: 2,
+            total: 3
+        })
+    );
+    assert_eq!(first.failed_files(), 2);
+    let events = h.events.take();
+    let Some(Event::RunFinished {
+        status,
+        failed_files,
+        partial_steps,
+        ..
+    }) = events.last()
+    else {
+        panic!("{events:#?}");
+    };
+    assert_eq!(*status, RunStatus::Failed);
+    assert_eq!(*failed_files, 2);
+    assert_eq!(
+        partial_steps,
+        &vec![PartialStep {
+            position: 0,
+            label: "Some".into(),
+            failed_files: 2,
+            files: 3,
+        }]
+    );
+
+    let second = h.resume(
+        &first,
+        Some(&script.replace("throw new Error(\"not yet\");", "")),
+    );
+    assert!(output(&second).is_ok(), "{:?}", second.ending);
+    assert_eq!(second.failed_files(), 2);
+    let events = h.events.take();
+    assert!(
+        matches!(
+            events.last(),
+            Some(Event::RunFinished {
+                status: RunStatus::Succeeded,
+                failed_files: 2,
+                ..
+            })
+        ),
+        "{events:#?}"
+    );
 }
 
 #[test]
@@ -1519,18 +1658,87 @@ export default async function main() { await registry.npm("dnd"); }
 }
 
 #[test]
-fn a_dependency_graph_step_fails_when_the_target_has_no_lockfile() {
+fn a_dependency_graph_of_a_target_without_lockfiles_is_empty() {
     let h = Harness::new();
+    h.write("package.json", r#"{ "name": "app" }"#);
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
 import { dependencyGraph } from "codemod/deps";
-export default async function main() { await step("Deps", dependencyGraph({}, (g) => g.workspaces())); }
+export default async function main() {
+  return await step("Deps", dependencyGraph((g) => ({ read: g.lockfiles, skipped: g.skipped, nodes: g.nodes().length })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "read": [], "skipped": [], "nodes": 0 })
+    );
+}
+
+#[test]
+fn a_dependency_graph_step_fails_when_its_lockfiles_glob_matches_none() {
+    let h = Harness::new();
+    yarn_target(&h);
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() { await step("Deps", dependencyGraph({ lockfiles: "**/pnpm-lock.yaml" }, (g) => g.workspaces())); }
 "#,
         Value::Null,
     );
     let error = output(&report).unwrap_err();
     assert!(error.contains("step 'Deps' failed: no lockfile"), "{error}");
+}
+
+#[test]
+fn a_dependency_graph_whose_only_lockfile_cannot_be_read_lists_it_as_skipped() {
+    let h = Harness::new();
+    h.write("package.json", r#"{ "name": "app" }"#);
+    h.write("pnpm-lock.yaml", "lockfileVersion: [\n");
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph((g) => ({ read: g.lockfiles, skipped: g.skipped.map((s) => s.lockfile) })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "read": [], "skipped": ["pnpm-lock.yaml"] })
+    );
+}
+
+#[test]
+fn a_dependency_graph_reads_a_yarn_1_lockfile() {
+    let h = Harness::new();
+    h.write(
+        "package.json",
+        r#"{ "name": "app", "dependencies": { "left-pad": "^1.3.0" } }"#,
+    );
+    h.write(
+        "yarn.lock",
+        "# THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY.\n# yarn lockfile v1\n\n\nleft-pad@^1.3.0:\n  version \"1.3.0\"\n  resolved \"https://registry.yarnpkg.com/left-pad/-/left-pad-1.3.0.tgz\"\n",
+    );
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph((g) => ({ read: g.lockfiles, leftPad: g.dependents("left-pad").map((e) => [e.from.name, e.range, e.to.version]) })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "read": ["yarn.lock"], "leftPad": [["app", "^1.3.0", "1.3.0"]] })
+    );
 }
 
 #[test]
@@ -2687,6 +2895,53 @@ fn a_dry_run_lets_later_steps_see_what_earlier_ones_would_change() {
         ]
     );
     assert!(diffs[0].1.contains("+var a = 3;"), "{diffs:?}");
+}
+
+/// `shard` reads files through a dry run's overlay too: it shards the files
+/// earlier steps would have renamed at their new paths, not the deleted
+/// ones, and its filter sees their new text.
+#[test]
+fn a_dry_run_shards_what_earlier_steps_would_have_left() {
+    let source = r#"
+import { step, forEachFile, shard } from "codemod/workflow";
+export default async function main() {
+  await step("Move", forEachFile("src/**/*.ts", (file) => {
+    if (file.path === "src/one/gone.ts") return file.delete();
+    if (file.path === "src/one/b.ts") file.write("export const keep = 1;\n");
+    if (file.path === "src/old/a.ts") file.rename("src/new/a.ts");
+  }));
+  const all = await step("All", shard({ method: { type: "directory", maxFilesPerShard: 10 }, target: "src", files: "**/*.ts" }));
+  const kept = await step("Kept", shard({ method: { type: "directory", maxFilesPerShard: 10 }, target: "src", files: "**/*.ts", filter: (file) => file.text.includes("keep") }));
+  return { all, kept };
+}
+"#;
+    let target = |h: &Harness| {
+        h.write("src/one/b.ts", "export const b = 1;\n");
+        h.write("src/one/gone.ts", "export const g = 1;\n");
+        h.write("src/old/a.ts", "export const keep = 1;\n");
+        h.write("src/two/c.ts", "export const c = 1;\n");
+    };
+    let real = Harness::new();
+    target(&real);
+    let real = output(&real.start(source, Value::Null)).unwrap();
+    let dry = Harness::new();
+    target(&dry);
+    let dry = output(&dry.dry_run(source)).unwrap();
+    let files = |result: &Value| {
+        let mut files: Vec<String> = shard_files(result)
+            .into_iter()
+            .flat_map(|(_, files)| files)
+            .collect();
+        files.sort();
+        files
+    };
+    assert_eq!(
+        files(&real["all"]),
+        ["src/new/a.ts", "src/one/b.ts", "src/two/c.ts"]
+    );
+    assert_eq!(files(&real["kept"]), ["src/new/a.ts", "src/one/b.ts"]);
+    assert_eq!(shard_files(&dry["all"]), shard_files(&real["all"]));
+    assert_eq!(shard_files(&dry["kept"]), shard_files(&real["kept"]));
 }
 
 /// A real run reports no run diff: its steps' diffs are in the summary.

@@ -120,6 +120,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         block_on(observer.record(NestedCodemodRunEvent::Started(nested.clone())));
     }
     let started = std::time::Instant::now();
+    let child_run_id = child.run_id.clone();
     let ending = execute(&workflow.built, child).map_err(|e| TaskError::Failed(e.to_string()))?;
     if let (Some(observer), Some(nested)) = (&observer, nested_run) {
         let outcome = match &ending {
@@ -142,7 +143,21 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         }));
     }
     match ending {
-        Ending::Succeeded(output) => Ok(TaskOutcome::new(json!({ "output": output }))),
+        Ending::Succeeded(output) => {
+            // Files that failed in the codemod's partial steps fail this step.
+            let (failed, total) = run
+                .store
+                .load_steps(&child_run_id)
+                .unwrap_or_default()
+                .iter()
+                .filter(|step| step.status == StepStatus::Partial)
+                .fold((0, 0), |(failed, total), step| {
+                    let files = step.files.map_or(0, |files| files.total);
+                    let failed_here = step.failed_files();
+                    (failed + failed_here, total + files.max(failed_here))
+                });
+            Ok(TaskOutcome::new(json!({ "output": output })).with_failures(failed, total))
+        }
         Ending::Failed(error) => Err(TaskError::Failed(format!(
             "codemod '{}' failed: {error}",
             request.source
