@@ -237,6 +237,9 @@ fn steps_commit<'a>(
 }
 
 /// Where a list of steps is being generated.
+/// What the translation imports from `codemod/git`.
+const GIT_STEPS: &[&str] = &["branch", "commit", "pullRequest"];
+
 struct Scope<'a> {
     env: &'a HashMap<String, String>,
     /// A matrix node fed from state: steps default to the shard's files.
@@ -1097,7 +1100,11 @@ impl Generator {
         for warning in &self.warnings {
             let _ = writeln!(source, "// codemod upgrade: {}", comment_text(warning));
         }
-        let mut imports: Vec<&str> = self.imports.iter().copied().collect();
+        let (git, mut imports): (Vec<&str>, Vec<&str>) = self
+            .imports
+            .iter()
+            .copied()
+            .partition(|name| GIT_STEPS.contains(name));
         if self.body.contains("evaluate(") {
             imports.push("__evaluate as evaluate");
         }
@@ -1107,6 +1114,13 @@ impl Generator {
             "import {{ {} }} from \"codemod/workflow\";",
             imports.join(", ")
         );
+        if !git.is_empty() {
+            let _ = writeln!(
+                source,
+                "import {{ {} }} from \"codemod/git\";",
+                git.join(", ")
+            );
+        }
         if self.uses_context {
             source.push_str("import type { WorkflowContext } from \"codemod/workflow\";\n");
         }

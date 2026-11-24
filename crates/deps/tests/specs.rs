@@ -533,3 +533,5 @@ packages:
 
 #[path = "specs/python.rs"]
 mod python;
+#[path = "specs/workspaces.rs"]
+mod workspaces;

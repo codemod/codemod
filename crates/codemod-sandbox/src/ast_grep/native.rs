@@ -19,6 +19,38 @@ pub struct CombinedScanWithRuleConfigs<'a> {
     pub rule_refs: Vec<&'a RuleConfig<SupportLang>>,
 }
 
+/// The rules of one language, in a scan of their own.
+pub struct LanguageScan<'a> {
+    pub language: SupportLang,
+    pub combined_scan: CombinedScan<'a, SupportLang>,
+}
+
+impl<'a> CombinedScanWithRuleConfigs<'a> {
+    /// The rules split by language, in the order the languages first come.
+    /// A scan matches nodes by kind, which only means something in the
+    /// grammar its rules were written for, so a file is scanned with the
+    /// rules of each language it is parsed as.
+    pub fn by_language(&self) -> Vec<LanguageScan<'a>> {
+        let mut groups: Vec<(SupportLang, Vec<&'a RuleConfig<SupportLang>>)> = Vec::new();
+        for rule in &self.rule_refs {
+            match groups
+                .iter_mut()
+                .find(|(language, _)| *language == rule.language)
+            {
+                Some((_, rules)) => rules.push(rule),
+                None => groups.push((rule.language, vec![rule])),
+            }
+        }
+        groups
+            .into_iter()
+            .map(|(language, rules)| LanguageScan {
+                language,
+                combined_scan: CombinedScan::new(rules),
+            })
+            .collect()
+    }
+}
+
 pub fn with_combined_scan<T>(
     config_file_path: &str,
     f: impl for<'a> FnOnce(&CombinedScanWithRuleConfigs<'a>) -> Result<T, Box<dyn Error>>,
@@ -111,7 +143,19 @@ pub fn scan_pass(
     content: &str,
     combined_scan: &CombinedScan<SupportLang>,
 ) -> Result<ScanPass, AstGrepError> {
-    let scanned = scan_text(file_path, content, combined_scan, true)?;
+    scan_pass_as(language_of(file_path)?, file_path, content, combined_scan)
+}
+
+/// [`scan_pass`] with the text parsed as `language`, whatever the file's
+/// extension: a `typescript` rule runs on the `.js` files it selects as
+/// TypeScript.
+pub fn scan_pass_as(
+    language: SupportLang,
+    file_path: &Path,
+    content: &str,
+    combined_scan: &CombinedScan<SupportLang>,
+) -> Result<ScanPass, AstGrepError> {
+    let scanned = scan_text_as(language, file_path, content, combined_scan, true)?;
     Ok(ScanPass {
         matches: scanned.matches.len(),
         fixes: scanned.fixes_applied,
@@ -120,22 +164,40 @@ pub fn scan_pass(
     })
 }
 
-fn scan_text(
-    file_path: &Path,
-    content: &str,
-    combined_scan: &CombinedScan<SupportLang>,
-    apply_fixes: bool,
-) -> Result<crate::ast_grep::scanner::ScanResult, AstGrepError> {
+/// The language a file's extension says it is in.
+fn language_of(file_path: &Path) -> Result<SupportLang, AstGrepError> {
     let language_str = detect_language_from_extension(
         file_path
             .extension()
             .and_then(|ext| ext.to_str())
             .unwrap_or_default(),
     )?;
+    SupportLang::from_str(language_str)
+        .map_err(|_| AstGrepError::Language(format!("Language not supported: {language_str}")))
+}
 
-    let language = SupportLang::from_str(language_str)
-        .map_err(|_| AstGrepError::Language(format!("Language not supported: {language_str}")))?;
+fn scan_text(
+    file_path: &Path,
+    content: &str,
+    combined_scan: &CombinedScan<SupportLang>,
+    apply_fixes: bool,
+) -> Result<crate::ast_grep::scanner::ScanResult, AstGrepError> {
+    scan_text_as(
+        language_of(file_path)?,
+        file_path,
+        content,
+        combined_scan,
+        apply_fixes,
+    )
+}
 
+fn scan_text_as(
+    language: SupportLang,
+    file_path: &Path,
+    content: &str,
+    combined_scan: &CombinedScan<SupportLang>,
+    apply_fixes: bool,
+) -> Result<crate::ast_grep::scanner::ScanResult, AstGrepError> {
     // Parsing and matching can panic on input the grammar does not expect:
     // that is this file's failure, not the step's.
     quiet_scan_panics();

@@ -6,9 +6,9 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use butterflow_core::execution::CodemodExecutionConfig;
+use butterflow_core::execution::{language_globs, CodemodExecutionConfig};
 use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
-use codemod_sandbox::{scan_pass, scan_text_with_combined_scan, with_combined_scan_of};
+use codemod_sandbox::{scan_pass_as, with_combined_scan_of, LanguageScan};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -48,17 +48,25 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             .iter()
             .map(|rule| rule.language.to_string())
             .collect::<Vec<_>>();
-        // Files the include globs pick that no rule is for (another
-        // language, or none) are skipped, as the default selection (the
-        // rules' languages) would not have them.
-        let extensions = scan
-            .rule_refs
-            .iter()
-            .flat_map(|rule| get_extensions_for_language(rule.language))
-            .map(str::to_ascii_lowercase)
+        // Each language's rules run on the files with its extensions, parsed
+        // as that language: a `typescript` rule selects `.js` files and runs
+        // on them as TypeScript, as `forEachFile({ language: "typescript" })`
+        // callbacks parse them. Files the include globs pick that no rule is
+        // for (another language, or none) are skipped, as the default
+        // selection (the rules' languages) would not have them.
+        let scans = scan
+            .by_language()
+            .into_iter()
+            .map(|scan| {
+                let extensions = get_extensions_for_language(scan.language)
+                    .into_iter()
+                    .map(str::to_ascii_lowercase)
+                    .collect();
+                (scan, extensions)
+            })
             .collect::<Vec<_>>();
         let filter = Filter {
-            extensions: &extensions,
+            scans: &scans,
             containing: request.containing.as_deref(),
         };
         let config = CodemodExecutionConfig {
@@ -76,7 +84,29 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         };
         // One walk (`execute` walks twice: once to count, once to visit),
         // then the files go to the threads in walk order.
-        let files = config.try_collect_files()?;
+        let mut files = config.try_collect_files()?;
+        // In a dry run, the files earlier steps would have removed are gone,
+        // and the ones they would have renamed into place are there.
+        if let Some(overlay) = &run.overlay {
+            files.retain(|file| match file.strip_prefix(&run.target) {
+                Ok(path) => !overlay.is_gone(&path.to_string_lossy().replace('\\', "/")),
+                Err(_) => true,
+            });
+            let include = match &request.include {
+                Some(globs) => globs.clone().into_vec(),
+                None => {
+                    let mut globs = Vec::new();
+                    for language in config.languages.iter().flatten() {
+                        globs.extend(language_globs(language)?);
+                    }
+                    globs
+                }
+            };
+            let exclude = request.exclude.clone().map(Globs::into_vec).unwrap_or_default();
+            for path in overlay.created(&include, &exclude)? {
+                files.push(changes::under(&run.target, &path));
+            }
+        }
         let threads = std::thread::available_parallelism()
             .map_or(1, |n| n.get())
             .min(12)
@@ -86,12 +116,35 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         let total = files.len();
         let every = (total / 100).max(1);
         let passes = request.repeat.unwrap_or(1).max(1);
+        // One pass of every language's rules that covers the file, one
+        // language after another on the text the last one fixed.
+        let pass = |scans: &[&LanguageScan<'_>], path: &Path, text: &str| {
+            let mut fixed: Option<String> = None;
+            let (mut matches, mut fixes) = (0, 0);
+            for scan in scans {
+                let input = fixed.as_deref().unwrap_or(text);
+                let pass = scan_pass_as(scan.language, path, input, &scan.combined_scan)
+                    .map_err(|error| error.to_string())?;
+                matches += pass.matches;
+                fixes += pass.fixes;
+                if let Some(next) = pass.content {
+                    fixed = Some(next);
+                }
+            }
+            // One language's rules can undo another's: the text is back
+            // where it started though rules changed it.
+            if fixed.as_deref() == Some(text) && scans.len() > 1 {
+                return Err("rules of different languages undo each other's fixes on this file, so it was left as it was".to_string());
+            }
+            Ok::<_, String>((matches, fixes, fixed.filter(|fixed| fixed != text)))
+        };
         // (matches, the new text when the fixes changed the file).
-        let scan_text = |path: &Path, text: &str| -> Result<(usize, Option<String>), String> {
+        let scan_text = |scans: &[&LanguageScan<'_>],
+                         path: &Path,
+                         text: &str|
+         -> Result<(usize, Option<String>), String> {
             if passes == 1 {
-                return scan_text_with_combined_scan(path, text, &scan.combined_scan, true)
-                    .map(|(found, modified, content)| (found.len(), content.filter(|_| modified)))
-                    .map_err(|error| error.to_string());
+                return pass(scans, path, text).map(|(matches, _, content)| (matches, content));
             }
             // Repeat: run the rules on the text the last pass fixed, in
             // memory, so a dry run ends with the same text. Of overlapping
@@ -102,26 +155,23 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             let mut matches = 0;
             for _ in 0..passes {
                 let input = fixed.as_deref().unwrap_or(text);
-                let pass = scan_pass(path, input, &scan.combined_scan)
-                    .map_err(|error| error.to_string())?;
-                match pass.content {
-                    None => return Ok((matches + pass.matches, fixed)),
-                    Some(next) => {
-                        matches += pass.fixes;
+                match pass(scans, path, input)? {
+                    (found, _, None) => return Ok((matches + found, fixed)),
+                    (_, fixes, Some(next)) => {
+                        matches += fixes;
                         fixed = Some(next);
                     }
                 }
             }
             // Every pass changed the text: one more says whether it is done.
             let input = fixed.as_deref().unwrap_or(text);
-            let last = scan_pass(path, input, &scan.combined_scan)
-                .map_err(|error| error.to_string())?;
-            if last.content.is_some() {
+            let (found, _, last) = pass(scans, path, input)?;
+            if last.is_some() {
                 return Err(format!(
                     "the rules still change this file after {passes} passes, so it was left as it was; a fix may match its own output (give repeat a higher number, or change the rule)"
                 ));
             }
-            Ok((matches + last.matches, fixed))
+            Ok((matches + found, fixed))
         };
         let workers: Vec<Scanned> = std::thread::scope(|scope| {
             let handles: Vec<_> = (0..threads)
@@ -194,9 +244,11 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     .with_failures(failed, total))
 }
 
-/// Scan a file's text: its match count, and its new text when the fixes
-/// changed it.
-type ScanText<'a> = dyn Fn(&Path, &str) -> Result<(usize, Option<String>), String> + Sync + 'a;
+/// Scan a file's text with the rules of the languages that cover it: its
+/// match count, and its new text when the fixes changed it.
+type ScanText<'a> = dyn Fn(&[&LanguageScan<'_>], &Path, &str) -> Result<(usize, Option<String>), String>
+    + Sync
+    + 'a;
 
 /// What one thread's files came to.
 #[derive(Default)]
@@ -207,22 +259,29 @@ struct Scanned {
     unmodified: usize,
 }
 
-/// Which of the walked files are scanned.
-struct Filter<'a> {
-    /// The rules' languages' extensions (`.ts`, ...), lowercase.
-    extensions: &'a [String],
+/// Which of the walked files are scanned, and with which rules.
+struct Filter<'a, 'r> {
+    /// Each language's rules, with its extensions (`.ts`, ...), lowercase.
+    scans: &'a [(LanguageScan<'r>, Vec<String>)],
     containing: Option<&'a str>,
 }
 
-impl Filter<'_> {
-    fn covers(&self, path: &Path) -> bool {
+impl<'r> Filter<'_, 'r> {
+    /// The rules of the languages whose extensions the file has.
+    fn covering(&self, path: &Path) -> Vec<&LanguageScan<'r>> {
         let name = path
             .file_name()
             .map(|name| name.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
-        self.extensions
+        self.scans
             .iter()
-            .any(|extension| name.ends_with(extension.as_str()))
+            .filter(|(_, extensions)| {
+                extensions
+                    .iter()
+                    .any(|extension| name.ends_with(extension.as_str()))
+            })
+            .map(|(scan, _)| scan)
+            .collect()
     }
 }
 
@@ -230,11 +289,12 @@ impl Filter<'_> {
 fn scan_one(
     task: &TaskContext<'_>,
     scan_text: &ScanText<'_>,
-    filter: &Filter<'_>,
+    filter: &Filter<'_, '_>,
     path: &Path,
     out: &mut Scanned,
 ) {
-    if !filter.covers(path) {
+    let scans = filter.covering(path);
+    if scans.is_empty() {
         return;
     }
     let run = task.run;
@@ -254,7 +314,12 @@ fn scan_one(
         return;
     };
     // One read: the scan's input is also the original the commit checks.
-    let original = match std::fs::read_to_string(path) {
+    // In a dry run, the text earlier steps would have left.
+    let read = match &run.overlay {
+        Some(overlay) => overlay.read(&display, path),
+        None => std::fs::read_to_string(path),
+    };
+    let original = match read {
         Ok(text) => text,
         // Gone since the walk: not a file now.
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
@@ -270,7 +335,7 @@ fn scan_one(
     {
         return;
     }
-    match scan_text(path, &original) {
+    match scan_text(&scans, path, &original) {
         Ok((found, content)) => {
             out.matches += found;
             match content {

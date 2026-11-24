@@ -60,6 +60,10 @@ declare module "codemod:ast-grep" {
      * When a symbol comes from an import that can't be resolved (e.g., external module),
      * the definition will point to the import statement with `kind: 'import'`.
      *
+     * In workspace scope, imported names and names inside a named re-export
+     * (`export { a as b } from "./a"`) follow the re-export chain, through
+     * any `export *`, to the original declaration (`kind: 'external'`).
+     *
      * @param options - Optional settings for definition lookup
      * @param options.resolveExternal - If false, stop at import statements without
      *   attempting to resolve the source module. Default: true
@@ -590,9 +594,10 @@ declare module "codemod:ast-grep" {
   export type Transform<T extends TypesMap> = Codemod<T>;
 
   /**
-   * Any JSON a transform reports about its file. A `jssg` step's `data`
-   * lists it per file, or folds it with the step's reducer. Explicit `null`
-   * is reported; missing or `undefined` data is omitted.
+   * Any JSON a transform reports about its file. Run from a workflow, a
+   * `forEachFile` callback returns it, and the step lists it in `outputs`
+   * (or folds it with the step's reducer). Explicit `null` is reported;
+   * missing or `undefined` data is omitted.
    *
    * @example
    * ```ts

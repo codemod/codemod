@@ -29,7 +29,7 @@ use rquickjs::{CatchResultExt, Context, Ctx, Function, Module, Object, Promise, 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::build::{Built, DEPS_MODULE, FLOW_MODULE};
+use crate::build::{Built, DEPS_MODULE, FLOW_MODULE, GIT_MODULE};
 use crate::events::{Event, EventSink};
 use crate::interaction::Interaction;
 use crate::tasks::{self, TaskContext};
@@ -159,6 +159,10 @@ pub(crate) struct RunContext {
     /// Serializes file commits from steps running at the same time, in this
     /// run and in the codemods nested in it.
     pub commit_lock: Arc<Mutex<()>>,
+    /// In a dry run, what its steps would have changed so far, which later
+    /// steps read instead of the disk; `None` otherwise. Shared with nested
+    /// codemods.
+    pub overlay: Option<Arc<crate::tasks::overlay::Overlay>>,
     /// For a nested codemod: the step running it, or one of its own parents,
     /// ran alongside other steps. Its managed git steps are refused then, as
     /// they share the checkout with those steps.
@@ -254,6 +258,7 @@ impl RunContext {
             services: Arc::clone(&self.services),
             cancel,
             commit_lock: Arc::clone(&self.commit_lock),
+            overlay: self.overlay.clone(),
             alongside: self.alongside || alongside,
             chain,
             test: None,
@@ -498,7 +503,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
     runtime.set_loader(
         (
             // The body's codemod modules: `codemod/<name>`, or `codemod:<name>`.
-            CodemodModuleResolver::new(&["ast-grep", "workflow", "deps"]),
+            CodemodModuleResolver::new(&["ast-grep", "workflow", "deps", "git"]),
             BodyPathResolver,
             llrt_resolver,
             BuiltinResolver::default()
@@ -511,6 +516,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             BuiltinLoader::default()
                 .with_module(FLOW_MODULE, crate::js::workflow_module())
                 .with_module(DEPS_MODULE, crate::js::deps_module())
+                .with_module(GIT_MODULE, crate::js::git_module())
                 .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator())
                 .with_module(SEMVER_MODULE, crate::js::semver_module())
                 .with_module(PATH_SHIM_MODULE, include_str!("js/path.js")),

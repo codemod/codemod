@@ -61,6 +61,16 @@ pub enum Event {
         error: Option<String>,
         duration_ms: u64,
     },
+    /// What a dry run would have changed in one file, all its steps
+    /// together, as a unified diff: reported when the run ends, before
+    /// `RunFinished`, one event per file. A renamed file is its old path
+    /// removed and its new one added.
+    RunDiff {
+        path: String,
+        diff: String,
+        additions: usize,
+        deletions: usize,
+    },
     RunFinished {
         run_id: String,
         status: RunStatus,

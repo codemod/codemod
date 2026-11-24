@@ -1,10 +1,10 @@
 ---
 title: "Workflow Reference"
 sidebarTitle: "Reference"
-description: "The workflow.ts API: steps, per-file callbacks, tasks, state, and resuming runs."
+description: "The workflow.ts API: steps, per-file callbacks, tasks, and resuming runs."
 ---
 
-A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow` and `codemod/deps`, and what else a workflow can import.
+A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow`, `codemod/git` and `codemod/deps`, and what else a workflow can import.
 
 ## Complete example
 
@@ -115,7 +115,7 @@ const config = await step("Read config", async () => JSON.parse(await readFile("
 
 Runs `callback` once per selected file and returns a task for `step()`. Without a selector, it visits the files of the package's `targets.languages` in `codemod.yaml`.
 
-Per-file logic is a callback: written inline, or [imported from its own file](#imported-callbacks). In place of the callback, `forEachFile` also takes [ast-grep rules](#ast-grep-rules), `forEachFile(selector, astGrep(rules))`, which the engine applies with no JavaScript per file.
+Per-file logic is a callback: written inline, or [imported from its own file](#imported-callbacks). In place of the callback, `forEachFile` also takes [ast-grep rules](#ast-grep-rules), `forEachFile(selector, astGrep(rules))`, which the engine applies with no JavaScript per file. After the callback, it takes an optional [reducer](#reducing-outputs) and its initial value, `forEachFile(selector, callback, reducer, initial)`, which folds what the callback returns into one value.
 
 ### Selector
 
@@ -162,7 +162,7 @@ An `astGrep` step also rejects a `basePath` that resolves outside the target.
 - A callback that throws fails only that file; the error appears in `result.failures`, and the file and its error are logged under the step.
 - When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again.
 - When the callback fails on every file it ran on, the step fails, with the first file's error.
-- To count what a callback found, return it: outputs are values, so add them up after the step.
+- To count what a callback found, return it: outputs are values, so add them up after the step, or give a [reducer](#reducing-outputs) that adds them up as files finish.
 
 ```ts
 export default async function main() {
@@ -185,6 +185,46 @@ export default async function main() {
   failures: { path: string; error: string }[];
 }
 ```
+
+### Reducing outputs
+
+`forEachFile(selector, callback, reducer, initial)` folds what the callback returns into one value, as `Array#reduce` does: `reducer(result, output, path)` gets the result so far, one file's output and that file's path, and returns the new result. The step's result has that value as `reduced`, in place of `outputs`:
+
+```ts
+// Rewrites per package.
+const { reduced } = await step("Migrate calls", forEachFile(
+  "packages/*/src/**/*.ts",
+  (file) => {
+    const root = parse(file);
+    const edits = root.root().findAll({ rule: { pattern: "moment($A)" } }).map((node) => node.replace("dayjs()"));
+    if (!edits.length) return;
+    file.write(root.root().commitEdits(edits));
+    return edits.length;
+  },
+  (counts, rewrites, path) => {
+    const name = path.split("/")[1];
+    return { ...counts, [name]: (counts[name] ?? 0) + rewrites };
+  },
+  {} as Record<string, number>,
+));
+reduced; // { "app": 12, "ui": 3 }
+```
+
+```ts
+{
+  reduced: unknown; // what the reducer returned last, or `initial` when no file returned anything
+  changes: { written: string[]; renamed: { from: string; to: string }[]; deleted: string[] };
+  failures: { path: string; error: string }[];
+}
+```
+
+- Use it when there are many files: without a reducer, every output is kept until the step ends and is held in the workflow's memory as `outputs`. With one, each output is folded as its file finishes, so only the result is kept.
+- Outputs are folded in path order, whatever order files finish in, so the result is the same on every run and a reducer may depend on the order. Outputs of files that finish early wait for those before them, and workers stay at most about a thousand files ahead of the reducer (a few `concurrency`-sized batches per worker, when that is more), so what waits stays small.
+- Files that return nothing, and files whose callback throws, are not folded; the latter are in `failures`, as without a reducer.
+- `initial` must be JSON, and so must the reducer's result. The reducer may be async.
+- Write the reducer inline or [import it](#imported-callbacks) from its own file (type it with `FileReducer<Result, Output>`). With the CLI it runs in an isolate of its own (on the Node.js host, in the same process as the callbacks, so don't share module state between them), with the same rules for outside variables as callbacks; captured variables, the reducer and `initial` are part of the step, so changing them runs it again on resume.
+- A reducer that throws fails the step, and nothing the step's callbacks changed is written.
+- `astGrep(...)` returns nothing per file, so `forEachFile(selector, astGrep(rules), reducer, initial)` is a build and type error.
 
 ### Using outside variables
 
@@ -244,7 +284,7 @@ These are build errors, each with the fix:
 
 - a file path where the callback goes: `forEachFile takes a callback, not a file path: export the function as the default of "./scripts/rename-imports.ts", add import renameImports from "./scripts/rename-imports.ts" at the top of the workflow, and write forEachFile(selector, renameImports)`;
 - a named or namespace import, an import from an npm package, or one without the file's extension;
-- using the imported callback for anything else, in the body or in another callback (`'migrate' is the callback imported from "./scripts/migrate.ts": only give it to forEachFile(...), or as shard's method.function or filter`).
+- using the imported callback for anything else, in the body or in another callback (`'migrate' is the callback imported from "./scripts/migrate.ts": only give it to forEachFile(...) as its callback or reducer, or as shard's method.function or filter`).
 
 To test an imported callback, run the workflow on fixtures: see [Testing workflows](/community/workflows/testing).
 
@@ -271,9 +311,9 @@ await step("Rename", forEachFile(astGrep({
 
 **Rules** are data: an object of the shape of an ast-grep YAML rule (`id`, `language`, `rule`, `fix`, `constraints`, `utils`, `transform`, ...), an array of them, or an imported YAML rule file. Import a YAML file with `import rules from "./rules/config.yml"` (no import attribute needed): the import gives the file's rule as an object, or an array when the file has several documents (`---`), and publishing includes the file. Rules can also be written in the workflow, or built from params and earlier results; they must be JSON (a function, a `RegExp` or a cycle in a rule is an error naming it; a field left `undefined` is left out). The rules are part of the step, so a changed rule runs the step again on resume. A YAML import is data anywhere: in the body, in callbacks, and in Node.js through `codemod/host`. The `AstGrepRule` type describes a rule, and `.yaml` imports are typed as rules.
 
-**The selector** is a glob, a list of globs, or an object with `include`, `exclude` and `containing`. Without `include`, the files of the rules' languages are selected; selected files of other languages are skipped, as no rule is for them. The callback options (`language`, `semanticAnalysis`, `capabilities`, `concurrency`) do not apply: each rule names its language, and rules have no semantic analysis.
+**The selector** is a glob, a list of globs, or an object with `include`, `exclude` and `containing`. Without `include`, the files of the rules' languages are selected; selected files of other languages are skipped, as no rule is for them. Each rule runs on the files with its language's extensions, parsed as that language: a `"typescript"` rule also runs on `.js`, `.mjs` and `.cjs` files, as TypeScript, and a `"tsx"` rule on `.jsx` files too. The callback options (`language`, `semanticAnalysis`, `capabilities`, `concurrency`) do not apply: each rule names its language, and rules have no semantic analysis.
 
-**Repeat until nothing changes.** Of overlapping matches, such as both calls in `console.log(console.log(x))`, one pass fixes only the outer one. `astGrep(rules, { repeat: true })` runs the rules again on the text they fixed until it no longer changes, up to 10 passes over each file (`{ repeat: 25 }` sets the most). The passes run on the text in memory, in the one step, so a dry run reports the same diff as a real run. A file still changing after the last pass, usually because a fix matches its own output, is a failure and is left as it was.
+**Repeat until nothing changes.** Of overlapping matches of one language's rules, such as both calls in `console.log(console.log(x))`, one pass fixes only the outer one. When rules of several languages apply to a file (a `typescript` and a `javascript` rule on a `.js` file), each language's rules run on the text the previous language's fixed, so they can fix nested matches in one pass; rules that undo each other's fixes fail the file. `astGrep(rules, { repeat: true })` runs the rules again on the text they fixed until it no longer changes, up to 10 passes over each file (`{ repeat: 25 }` sets the most). The passes run on the text in memory, in the one step, so a dry run reports the same diff as a real run. A file still changing after the last pass, usually because a fix matches its own output, is a failure and is left as it was.
 
 ```ts
 const consoleToLogger = { id: "console-to-logger", language: "typescript", rule: { pattern: "console.log($$$ARGS)" }, fix: "logger.info($$$ARGS)" };
@@ -306,7 +346,7 @@ parse("tsx", text);                 // the original JSSG form
 
 The body is the code outside steps and callbacks. It runs again on every resume, and a step's saved result is reused only when the body calls that same step again, so the body has to come out the same each time:
 
-- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, and npm packages or local files whose imports only reach these. In the QuickJS workflow body, you can import `sep` and `delimiter` by name from `node:path` (or `path`); Node's `path.posix` and `path.win32` are not available there.
+- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, `codemod/git`, and npm packages or local files whose imports only reach these. In the QuickJS workflow body, you can import `sep` and `delimiter` by name from `node:path` (or `path`); Node's `path.posix` and `path.win32` are not available there.
 - **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use them inside a step or callback instead.
 - **`Date`, `Math.random`, `crypto.randomUUID` and `performance.now` are replay-safe.** Random numbers come from a generator seeded by the run, and the clock starts at the run's start time and moves only when a step finishes, to the time recorded for it.
 - **`console.log`** goes to the run's output.
@@ -316,28 +356,40 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 | Task | What it does |
 |---|---|
 | `forEachFile(selector?, callback)` | Run a callback, inline or imported, on every selected file. See [`forEachFile`](#foreachfileselector-callback). |
+| `forEachFile(selector, callback, reducer, initial)` | Run a callback on every selected file and fold what it returns into one value. Result: `{ reduced, changes, failures }`. See [Reducing outputs](#reducing-outputs). |
 | `forEachFile(selector?, astGrep(rules, { repeat }?))` | Apply ast-grep rules, written in the workflow or imported from YAML, to the selected files; `repeat` runs them until nothing changes. Result: `{ changes, matches, failures }`. See [ast-grep rules](#ast-grep-rules). |
-| `shell(command, { env, cwd })`, ``shell`command` `` | Run a shell command. Result: `{ output }`. See [Shell commands](#shell-commands). |
+| `shell(command, { env, cwd, allowFailure })`, ``shell`command` `` | Run a shell command. Result: `{ stdout, stderr, exitCode }`. See [Shell commands](#shell-commands). |
 | `shard(options)` | Split files into groups. See [Sharding](/community/workflows/sharding). |
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
 | `agent(prompt, options)` | Hand a prompt to a coding agent. See [Coding agents](#coding-agents). |
 | `installSkill({ package, path, harness, scope, force })` | Install a package's agent skill. |
-| `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback` on it. Imported from `codemod/deps`. See [Dependencies](#dependencies). Result: what the callback returns. |
+| `dependencyGraph(callback)`, `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback`, written inline, on it. Imported from `codemod/deps`. See [Dependencies](#dependencies). Result: what the callback returns. |
 | `approval(message)` | Wait for a person to approve. See [Approvals](#approvals). |
-| `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base })` | Git automation. See [Git steps](#git-steps). |
+| `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base, branch })` | Git automation. Imported from `codemod/git`. See [Git steps](#git-steps). |
 
 Callbacks kept in files and YAML rule files are imported, relative to the workflow file: there are no file paths to pass.
 
 ### Git steps
 
-`branch`, `commit` and `pullRequest` only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped.
+`branch`, `commit` and `pullRequest` come from `codemod/git`:
+
+```ts
+import { branch, commit, pullRequest } from "codemod/git";
+```
+
+They only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped. They moved out of `codemod/workflow`; when the CLI or `codemod/host` builds the workflow, importing one from there is an error that names `codemod/git`.
 
 They all work on the run's one checkout, so they can't run in parallel. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`, before it touches git. So does one inside a `codemod(...)` step that was started while other steps were running. The check happens when a step starts: a git step, or a `codemod(...)` step, that started first is not stopped by steps started after it, so don't start other steps while git work runs. To open one pull request per shard, run the shards one after another:
 
 ```ts
+import { forEachFile, shard, step } from "codemod/workflow";
+import { branch, commit, pullRequest } from "codemod/git";
+import migrate from "./scripts/migrate.ts";
+
+const shards = await step(shard({ method: { type: "directory", maxFilesPerShard: 50 }, files: "src/**/*.tsx" }));
 for (const current of shards) {
   await step(branch(`codemod-${current.name}`));
-  await step(forEachFile({ language: "tsx" }, jssg("./codemod.ts", { files: current._meta_files })));
+  await step(forEachFile({ include: current._meta_files, language: "tsx" }, migrate));
   await step(commit(`refactor: migrate ${current.name}`));
   await step(pullRequest({ title: `refactor: migrate ${current.name}` }));
 }
@@ -362,10 +414,8 @@ import { step } from "codemod/workflow";
 import { dependencyGraph } from "codemod/deps";
 
 const usesMui = await step(
-  dependencyGraph({ lockfiles: "yarn.lock" }, (g) =>
-    g.dependents("@material-ui/core", { kinds: "prod" })
-      .filter((edge) => edge.from.isWorkspace)
-      .map((edge) => edge.from.workspace),
+  dependencyGraph((g) =>
+    g.dependents("@material-ui/core", { kinds: "prod" }).map((edge) => edge.from.dir),
   ),
 );
 ```
@@ -373,15 +423,39 @@ const usesMui = await step(
 | On the graph | Returns |
 |---|---|
 | `g.workspaces()` | The repository's own packages |
-| `g.nodes(name?)`, `g.node(name, version?)` | Installed packages, each a `name@version` node |
-| `g.dependents(name, { kinds })` | Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the peer it was installed with) |
-| `g.chains({ from, to, kinds })` | Shortest chains from each `from` node (default: every workspace) to a `to` node |
-| `node.dependencies({ kinds })`, `node.dependents({ kinds })` | Edges out of and into one node |
-| `node.workspacesReaching({ kinds })` | Each workspace that reaches the node, with its chain |
+| `g.nodes(name?)` | Every node, or every installed version of `name` |
+| `g.node(name, version?)` | One node, or `undefined` when none matches. Throws when several versions of `name` are installed and no version is given: use `g.nodes(name)` |
+| `g.dependents(name, { kinds, includeThirdParty })` | Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the peer it was installed with) |
+| `g.chains({ from, to, kinds })` | The shortest chain from each `from` node (default: every one of the repository's own packages) to a `to` node, `from` first. Chains pass through the repository's own packages |
+| `node.dependencies({ kinds })` | Edges the node declares |
+| `node.installedBy({ kinds, includeThirdParty })` | Edges installed onto this exact node |
 | `node.releases({ accepting, newerThanMine })` | The package's releases from the registry, each with `breaking` relative to the installed version |
 | `edge.accepts(version)` | Whether the edge's declared range accepts a version: `true`, `false`, or `null` when it cannot tell |
 
-Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to` (`null` when the lockfile does not resolve it), `name`, `range` and `kind`. In a step's result, nodes become `name@version` text and edges `{ from, to, kind, range }`.
+What lists dependents is about the repository's own packages: `g.dependents` and `node.installedBy` return only edges from them unless you pass `includeThirdParty: true`, and `g.chains` starts from them unless you pass the `from` nodes. So `g.dependents("react")` is the repository's packages that declare React, not every library that does.
+
+A node has `ecosystem`, `name` and `version`, and `dir` (the directory, relative to the target) when it is one of the repository's own packages, which `local` tells. Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to` (`null` when the lockfile does not resolve it), `name`, `range` and `kind`. In a step's result, nodes become `name@version` text and edges `{ from, to, kind, range }`.
+
+Who uses a package, and how: `g.dependents` gives the repository's packages that declare it, with their ranges, and `g.chains` the ones that reach it through other packages. A chain goes through the repository's own packages, so in a monorepo where `packages/web` depends on `@demo/shared`, which depends on `moment`, web reaches moment through `@demo/shared`:
+
+```ts
+const moment = await step(dependencyGraph((g) => {
+  const installed = g.nodes("moment");
+  return {
+    installed: installed.map((node) => node.version),
+    // Declared in a package.json, Cargo.toml or pyproject.toml.
+    declaredBy: g.dependents("moment")
+      .map((edge) => ({ dir: edge.from.dir, range: edge.range, kind: edge.kind })),
+    // Reached only through other packages.
+    reachedBy: g.chains({ to: installed })
+      .filter((chain) => chain.length > 2)
+      .map((chain) => ({ dir: chain[0].dir, via: chain.slice(1, -1).map((node) => node.name) })),
+  };
+}));
+// { installed: ["2.29.4"],
+//   declaredBy: [{ dir: "packages/api", range: "^2.29.4", kind: "prod" }, { dir: "packages/shared", range: "^2.29.4", kind: "prod" }],
+//   reachedBy: [{ dir: "packages/web", via: ["@demo/shared"] }] }
+```
 
 ### `registry` and `semver`
 
@@ -433,6 +507,8 @@ const { major } = JSON.parse(stdout.trim().split("\n").at(-1)!);
 A command that exits with an error fails the step, and the error ends with what it printed on stderr. Pass `allowFailure: true` to get the result instead and check `exitCode` yourself. Each stream keeps its last 1 MiB of bytes. The result preserves line endings and replaces invalid UTF-8 with `�`.
 
 Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
+
+A dry run keeps what each step would change in memory, and later steps read that instead of the disk: `forEachFile` callbacks, `astGrep` rules, `jssgTransform` in function steps and nested `codemod()` runs see the text earlier steps left, renamed files at their new paths, and not the files they deleted. Shell commands don't run in a dry run, so they see none of it. When the run ends, the CLI prints a unified diff of everything the run would change (with `--format jsonl`, one `run_diff` event per file, with `path`, `diff`, `additions` and `deletions`). A renamed file shows as its old path removed and its new path added.
 
 If a `codemod()` step resolves a preview-only registry package during an apply run, the step fails before starting that package. Rerun the workflow with `--dry-run` to preview it. This also applies to packages called by nested workflows.
 
@@ -557,7 +633,8 @@ export default async function main({ params }: { params: { team?: string } }) {
 Both of these are steps: they appear in the run's steps, and a finished wait is not repeated on resume.
 
 ```ts
-import { sleep, waitForEvent } from "codemod/workflow";
+import { sleep, step, waitForEvent } from "codemod/workflow";
+import { pullRequest } from "codemod/git";
 
 await step("Open the pull request", pullRequest({ title: "Migrate to v2" }));
 const ci = await waitForEvent<{ passed: boolean }>("ci-finished", { timeout: "1h" });

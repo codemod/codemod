@@ -236,7 +236,7 @@ impl Worker {
     }
 
     /// What `jssgTransform` calls have made of the files they changed, so
-    /// far: `(path, on disk, now)`.
+    /// far: `(path, at the start of the step, now)`.
     pub fn changed_files(&self) -> Vec<(PathBuf, String, String)> {
         self.file_changes
             .pending

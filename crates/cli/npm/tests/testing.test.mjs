@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { addonPath } from "../runtime/addon.mjs";
-import { assertTree, fixtures, runWorkflow as run } from "../testing/index.mjs";
+import { assertTree, fixtures, runCallback, runWorkflow as run } from "../testing/index.mjs";
 
 const require = createRequire(import.meta.url);
 const binary = process.env.CODEMOD_BINARY ?? require("../codemod").findBinaryPath().binaryPath;
@@ -384,6 +384,116 @@ export default async function main() {
     },
   );
 
+  test(
+    `${host}: a reducer folds the outputs in path order, inline or imported`,
+    HOSTS[host],
+    async () => {
+      const path = join(
+        scratch({
+          "scripts/by-dir.ts": `
+export default async function byDir(acc: Record<string, string[]>, output: number, path: string) {
+  await Promise.resolve();
+  const dir = path.split("/")[0];
+  return { ...acc, [dir]: [...(acc[dir] ?? []), path + ":" + output] };
+}
+`,
+          "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+import byDir from "./scripts/by-dir.ts";
+export default async function main() {
+  const weight = 2;
+  const inline = await step("Inline", forEachFile({ include: "**/*.ts", concurrency: 3 }, async (file) => {
+    // Later files finish first.
+    await new Promise((resolve) => setTimeout(resolve, file.path.includes("a") ? 20 : 1));
+    file.write(file.text.replace("var", "let"));
+    return file.path.includes("skip") ? undefined : file.text.length;
+  }, (acc, size, path) => ({ paths: [...acc.paths, path], total: acc.total + size * weight }), { paths: [], total: 0 }));
+  const imported = await step("Imported", forEachFile("**/*.ts", (file) => file.text.length, byDir, {}));
+  return { inline, imported: imported.reduced };
+}
+`,
+        }),
+        "workflow.ts",
+      );
+      const result = await runWorkflow(path, {
+        target: {
+          "x/a.ts": "var a = 1;\n",
+          "x/b.ts": "var b = 1;\n",
+          "y/c.ts": "var c = 1;\n",
+          "y/skip.ts": "var s = 1;\n",
+        },
+      });
+      assert.equal(result.status, "succeeded", result.error);
+      assert.deepEqual(result.output.inline.reduced, {
+        paths: ["x/a.ts", "x/b.ts", "y/c.ts"],
+        total: 66,
+      });
+      assert.equal(result.output.inline.outputs, undefined);
+      assert.deepEqual(result.output.inline.changes.written.length, 4);
+      assert.deepEqual(result.output.imported, {
+        x: ["x/a.ts:11", "x/b.ts:11"],
+        y: ["y/c.ts:11", "y/skip.ts:11"],
+      });
+    },
+  );
+
+  test(
+    `${host}: a reducer that throws fails the step and nothing is written`,
+    HOSTS[host],
+    async () => {
+      const path = join(
+        scratch({
+          "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step("Fold", forEachFile("*.ts", (file) => {
+    file.write("changed\\n");
+    return file.path;
+  }, (count, path) => {
+    if (path === "b.ts") throw new Error("cannot fold b");
+    return count + 1;
+  }, 0));
+}
+`,
+        }),
+        "workflow.ts",
+      );
+      const result = await runWorkflow(path, { target: { "a.ts": "a\n", "b.ts": "b\n" } });
+      assert.equal(result.status, "failed");
+      assert.match(result.error, /the reducer failed: .*cannot fold b/);
+      assert.deepEqual(result.files, { "a.ts": "a\n", "b.ts": "b\n" });
+    },
+  );
+
+  test(
+    `${host}: a reducer that catches its own failStep() still fails the step`,
+    HOSTS[host],
+    async () => {
+      const path = join(
+        scratch({
+          "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+import { failStep } from "codemod/runtime";
+export default async function main() {
+  await step("Fold", forEachFile("*.ts", (file) => {
+    file.write("changed\\n");
+    return 1;
+  }, (count, n) => {
+    try { failStep("the fold is wrong"); } catch {}
+    return count + n;
+  }, 0));
+}
+`,
+        }),
+        "workflow.ts",
+      );
+      const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
+      assert.equal(result.status, "failed");
+      assert.match(result.error, /the reducer failed: .*the fold is wrong/);
+      assert.deepEqual(result.files, { "a.ts": "a\n" });
+    },
+  );
+
   test(`${host}: shard runs its filter and function, inline or imported`, HOSTS[host], async () => {
     const path = join(
       scratch({
@@ -541,7 +651,8 @@ export default async function main() {
   test(`${host}: git steps refuse to run alongside other steps`, HOSTS[host], async () => {
     const dir = scratch({
       "workflow.ts": `
-import { step, branch, commit } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { branch, commit } from "codemod/git";
 export default async function main() {
   await Promise.all(["a", "b"].map(async (name) => {
     await step(branch("codemod-" + name));
@@ -790,3 +901,142 @@ export default async function main() {
     assert.match(result.error ?? "", /dependencyGraph\(\) is not available on the Node\.js host/);
   },
 );
+
+const CALLBACK = `
+import { parse } from "codemod/ast-grep";
+export default function migrate(file: any) {
+  const root = parse(file).root();
+  const found = root.findAll({ rule: { pattern: "var $A = $B" } });
+  if (!found.length) return;
+  file.write(root.commitEdits(found.map((node: any) => node.replace(node.text().replace(/^var/, "let")))));
+  return { count: found.length };
+}
+`;
+
+test("runCallback runs a callback file on fixtures as jssg test does", HOSTS.quickjs, async () => {
+  const dir = scratch({
+    "migrate.ts": CALLBACK,
+    "tests/one/input.ts": "var a = 1;\n",
+    "tests/one/expected.ts": "let a = 1;\n",
+    "tests/tree/input/src/a.ts": "var a = 1;\nvar b = 2;\n",
+    "tests/tree/input/notes.md": "var x = 1\n",
+    "tests/tree/expected/src/a.ts": "let a = 1;\nlet b = 2;\n",
+    "tests/tree/expected/notes.md": "var x = 1\n",
+  });
+  const found = fixtures(join(dir, "tests"));
+  assert.equal(found.length, 2);
+  for (const fixture of found) {
+    const result = await runCallback(join(dir, "migrate.ts"), {
+      target: fixture.input,
+      language: "typescript",
+    });
+    assertTree(result, fixture.expected);
+  }
+  const result = await runCallback(join(dir, "migrate.ts"), {
+    target: join(dir, "tests/tree/input"),
+    language: "typescript",
+  });
+  assert.equal(result.status, "succeeded");
+  assert.deepEqual(result.outputs, [{ file: "src/a.ts", data: { count: 2 } }]);
+  assert.deepEqual(Object.keys(result.changes), ["src/a.ts"]);
+});
+
+test("runCallback resolves definitions with semantic analysis", HOSTS.quickjs, async () => {
+  const dir = scratch({
+    "find.ts": `
+import { parse } from "codemod/ast-grep";
+export default (file: any) => {
+  const use = parse(file).root().find({ rule: { pattern: "console.log($X)" } }).getMatch("X");
+  return use.definition()?.node.range().start.line ?? null;
+};
+`,
+  });
+  const target = { "a.ts": "const a = 1;\nconsole.log(a);\n" };
+  const file = await runCallback(join(dir, "find.ts"), { target, language: "typescript" });
+  assert.deepEqual(file.outputs, [{ file: "a.ts", data: 0 }]);
+  const none = await runCallback(join(dir, "find.ts"), {
+    target,
+    language: "typescript",
+    semanticAnalysis: "none",
+  });
+  assert.deepEqual(none.outputs, [{ file: "a.ts", data: null }]);
+});
+
+test("runCallback fails the run when the callback fails on a file", HOSTS.quickjs, async () => {
+  const dir = scratch({
+    "boom.ts": `export default (file: any) => { if (file.path === "b.ts") throw new Error("boom"); file.write("ok\\n"); };`,
+  });
+  const result = await runCallback(join(dir, "boom.ts"), {
+    target: { "a.ts": "a\n", "b.ts": "b\n" },
+    language: "typescript",
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? "", /b\.ts: .*boom/);
+  assert.deepEqual(
+    result.failures.map((failure) => failure.path),
+    ["b.ts"],
+  );
+  assert.equal(result.files["a.ts"], "ok\n");
+  assert.throws(() => assertTree(result, {}), /the run failed/);
+});
+
+test("runCallback applies renames and deletes to the copy", HOSTS.quickjs, async () => {
+  const dir = scratch({
+    "move.ts": `
+export default (file: any) => {
+  if (file.path === "old.ts") file.rename("lib/new.ts");
+  if (file.path === "gone.ts") file.delete();
+};
+`,
+  });
+  const result = await runCallback(join(dir, "move.ts"), {
+    target: { "old.ts": "a\n", "gone.ts": "b\n", "kept.ts": "c\n" },
+    language: "typescript",
+  });
+  assert.equal(result.status, "succeeded", result.error);
+  assert.deepEqual(result.files, { "kept.ts": "c\n", "lib/new.ts": "a\n" });
+});
+
+test("runCallback rejects a callback file that is not there", HOSTS.quickjs, async () => {
+  const dir = scratch({});
+  await assert.rejects(
+    runCallback(join(dir, "missing.ts"), { target: { "a.ts": "a\n" }, language: "typescript" }),
+    /no callback file/,
+  );
+});
+
+test("runCallback needs a target and a language", async () => {
+  await assert.rejects(runCallback("migrate.ts", { target: {} }), /language is required/);
+  await assert.rejects(runCallback("migrate.ts", {}), /target is required/);
+});
+
+test("node: workers stay within the reducer's window", HOSTS.node, async () => {
+  const path = join(
+    scratch({
+      "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  // On Node.js, callbacks and the reducer share globalThis.
+  const { gap } = await step("Fold", forEachFile("*.txt", () => {
+    const shared = globalThis as { started?: number };
+    shared.started = (shared.started ?? 0) + 1;
+    return 1;
+  }, async (acc: { folded: number; gap: number }) => {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    const started = (globalThis as { started?: number }).started ?? 0;
+    return { folded: acc.folded + 1, gap: Math.max(acc.gap, started - acc.folded - 1) };
+  }, { folded: 0, gap: 0 })).then((result) => result.reduced);
+  return gap;
+}
+`,
+    }),
+    "workflow.ts",
+  );
+  const target = Object.fromEntries(
+    Array.from({ length: 1400 }, (_, i) => [`f${String(i).padStart(4, "0")}.txt`, "x\n"]),
+  );
+  const result = await run(path, { target, host: "node" });
+  assert.equal(result.status, "succeeded", result.error);
+  assert.ok(result.output <= 1025, `workers got ${result.output} files ahead`);
+});

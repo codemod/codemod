@@ -132,26 +132,46 @@ pub(crate) fn run(task: &TaskContext<'_>, content: Value) -> TaskResult {
 
 /// The files shards are made of, relative to the run's target: those
 /// `files` selects under `target` (the package's languages without one),
-/// then those `filter` keeps. `None` when neither is given: built-in
-/// methods then take every file under `target`.
+/// then those `filter` keeps. When neither is given, a built-in method
+/// takes every text file under `target`, and a shard function gets `None`.
 fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<String>>, TaskError> {
-    if request.files.is_none() && request.filter.is_none() {
+    if let Some(target) = request.target.as_deref() {
+        let path = std::path::Path::new(target.trim());
+        if path.has_root()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            return Err(TaskError::Failed(format!(
+                "shard `target` '{target}' must be relative and stay within the run's target"
+            )));
+        }
+    }
+    let everything = request.files.is_none() && request.filter.is_none();
+    if everything && matches!(request.method, Method::Function { .. }) {
         return Ok(None);
     }
     let run = task.run;
     let base_dir = request
         .target
         .as_deref()
-        .map(|target| target.trim_start_matches("./").trim_end_matches('/'))
+        .map(|target| target.trim_start_matches("./").trim_matches('/'))
         .filter(|target| !target.is_empty() && *target != ".");
-    let files = request
-        .files
-        .as_ref()
-        .map_or_else(Files::default, |files| Files {
+    let files = match &request.files {
+        Some(files) => Files {
             include: files.include.clone(),
             exclude: files.exclude.clone(),
             language: files.language.clone(),
-        });
+        },
+        None if everything => Files {
+            include: vec!["**/*".into()],
+            ..Files::default()
+        },
+        None => Files::default(),
+    };
     let mut selector = Selector {
         include: files.include,
         exclude: files.exclude,
@@ -175,6 +195,15 @@ fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<Stri
         Some(dir) => run.target.join(dir),
         None => run.target.clone(),
     };
+    // Through symlinks too: the directory walked must be inside the run's target.
+    if let (Ok(root), Ok(resolved)) = (run.target.canonicalize(), base.canonicalize()) {
+        if !resolved.starts_with(&root) {
+            return Err(TaskError::Failed(format!(
+                "shard `target` '{}' must be relative and stay within the run's target",
+                request.target.as_deref().unwrap_or_default()
+            )));
+        }
+    }
     let under_target = |path: String| match base_dir {
         Some(dir) => format!("{dir}/{path}"),
         None => path,
@@ -183,7 +212,7 @@ fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<Stri
     let Some(filter) = &request.filter else {
         // Only text files: the ones a `forEachFile` callback would get.
         return Ok(Some(
-            for_each_file::read_selected(selected, None)
+            for_each_file::read_selected(selected, None, None)
                 .into_iter()
                 .map(|(path, _)| under_target(path))
                 .collect(),

@@ -228,6 +228,16 @@ impl Execution {
         context.store.put_run(&record)?;
         self.record = record;
         self.stop.release(&context.cancel);
+        if let Some(overlay) = &context.overlay {
+            for diff in overlay.diffs() {
+                context.events.emit(Event::RunDiff {
+                    path: diff.path,
+                    diff: diff.diff_text,
+                    additions: diff.additions,
+                    deletions: diff.deletions,
+                });
+            }
+        }
         context.events.emit(Event::RunFinished {
             run_id: self.record.id.clone(),
             status: self.record.status,
@@ -413,6 +423,7 @@ impl Engine {
             services: Arc::clone(&self.services),
             cancel,
             commit_lock: Arc::new(Mutex::new(())),
+            overlay: dry_run.then(|| Arc::new(crate::tasks::overlay::Overlay::new(&record.target))),
             alongside: false,
             test,
             stopped: AtomicBool::new(false),

@@ -238,6 +238,206 @@ export default async function main() {
     assert!(result.to_string().contains("one"), "{result}");
 }
 
+/// `[name, files]` of each shard a workflow returned.
+fn shard_files(result: &Value) -> Vec<(String, Vec<String>)> {
+    result
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|shard| {
+            let files = shard["_meta_files"].as_array().unwrap();
+            (
+                shard["name"].as_str().unwrap().to_string(),
+                files
+                    .iter()
+                    .map(|f| f.as_str().unwrap().to_string())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn codeowner_shards_group_by_the_last_matching_rule_and_cap_files() {
+    let h = Harness::new();
+    // docs/CODEOWNERS is the third place looked in; the last match wins and
+    // its first owner owns the file.
+    h.write(
+        "docs/CODEOWNERS",
+        "# owners\n/packages/ui/ @acme/ui @acme/other\npackages/api @acme/API_Team\n*.md @docs\n/packages/ui/f3.ts @someone\n",
+    );
+    for file in [
+        "ui/f1.ts", "ui/f2.ts", "ui/f3.ts", "ui/f4.ts", "api/a.ts", "api/b.md",
+    ] {
+        h.write(&format!("packages/{file}"), "export {}\n");
+    }
+    h.write("root.ts", "export {}\n");
+    h.write(".git/HEAD", "ref: refs/heads/main\n");
+    let report = h.start(
+        r#"
+import { step, shard } from "codemod/workflow";
+export default async function main() {
+  return step(shard({ method: { type: "codeowner", maxFilesPerShard: 2 }, files: "**/*.{ts,md}" }));
+}
+"#,
+        Value::Null,
+    );
+    let result = output(&report).unwrap();
+    let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        shard_files(&result),
+        vec![
+            ("acme-api_team-0".into(), names(&["packages/api/a.ts"])),
+            (
+                "acme-ui-0".into(),
+                names(&["packages/ui/f1.ts", "packages/ui/f2.ts"])
+            ),
+            ("acme-ui-1".into(), names(&["packages/ui/f4.ts"])),
+            ("docs-0".into(), names(&["packages/api/b.md"])),
+            ("someone-0".into(), names(&["packages/ui/f3.ts"])),
+            ("unowned-0".into(), names(&["root.ts"])),
+        ],
+        "{result}"
+    );
+    assert_eq!(result[0]["team"], json!("@acme/API_Team"));
+}
+
+#[test]
+fn built_in_shards_without_files_take_every_file_under_target() {
+    let h = Harness::new();
+    for file in ["a/one.ts", "a/two.css", "b/three.md", "top.txt"] {
+        h.write(&format!("packages/{file}"), "x\n");
+    }
+    h.write("other.ts", "x\n");
+    h.write(".git/config", "[core]\n");
+    // Not UTF-8: not a file a callback could read, so in no shard.
+    std::fs::write(
+        h.target.path().join("packages/a/logo.png"),
+        [0x89, 0x50, 0xff, 0xfe, 0x00],
+    )
+    .unwrap();
+    let report = h.start(
+        r#"
+import { step, shard } from "codemod/workflow";
+export default async function main() {
+  return [
+    await step("Packages", shard({ method: { type: "directory", maxFilesPerShard: 5 }, target: "packages" })),
+    await step("Everything", shard({ method: { type: "directory", maxFilesPerShard: 5 } })),
+  ];
+}
+"#,
+        Value::Null,
+    );
+    let result = output(&report).unwrap();
+    let packages = shard_files(&result[0]);
+    let names: Vec<&str> = packages.iter().map(|(name, _)| name.as_str()).collect();
+    // Files directly under `target` are the "." group.
+    assert_eq!(names, [".-0", "a-0", "b-0"], "{result}");
+    assert_eq!(packages[0].1, ["packages/top.txt"], "{result}");
+    assert_eq!(
+        packages[1].1,
+        ["packages/a/one.ts", "packages/a/two.css"],
+        "{result}"
+    );
+    let everything = result[1].to_string();
+    assert!(everything.contains("other.ts"), "{everything}");
+    assert!(!everything.contains(".git"), "{everything}");
+    assert!(!everything.contains("logo.png"), "{everything}");
+}
+
+#[test]
+fn a_shard_target_outside_the_run_target_fails_before_reading_it() {
+    let h = Harness::new();
+    h.write("a/one.ts", "x\n");
+    for target in ["../outside", "/etc"] {
+        let report = h.start(
+            &format!(
+                r#"
+import {{ step, shard }} from "codemod/workflow";
+export default async function main() {{
+  return step(shard({{ method: {{ type: "directory", maxFilesPerShard: 5 }}, target: {target:?} }}));
+}}
+"#
+            ),
+            Value::Null,
+        );
+        let error = output(&report).unwrap_err();
+        assert!(
+            error.contains("must be relative and stay within the run's target"),
+            "{error}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_shard_target_that_is_a_symlink_out_of_the_run_target_fails() {
+    let h = Harness::new();
+    let outside = tempfile::TempDir::new().unwrap();
+    std::fs::write(outside.path().join("secret.ts"), "x\n").unwrap();
+    std::os::unix::fs::symlink(outside.path(), h.target.path().join("out")).unwrap();
+    for target in ["out", ".//out/"] {
+        let report = h.start(
+            &format!(
+                r#"
+import {{ step, shard }} from "codemod/workflow";
+export default async function main() {{
+  return step(shard({{ method: {{ type: "directory", maxFilesPerShard: 5 }}, target: {target:?} }}));
+}}
+"#
+            ),
+            Value::Null,
+        );
+        let error = output(&report).unwrap_err();
+        assert!(
+            error.contains("must be relative and stay within the run's target"),
+            "{target}: {error}"
+        );
+    }
+}
+
+#[test]
+fn shards_given_previous_keep_their_files_and_new_files_get_new_shards() {
+    let h = Harness::new();
+    for n in 0..3 {
+        h.write(&format!("src/ui/f{n}.ts"), "export {}\n");
+    }
+    let source = r#"
+import { step, shard } from "codemod/workflow";
+export default async function main({ params }: any) {
+  return step(shard({
+    method: { type: "directory", maxFilesPerShard: 2 },
+    target: "src",
+    files: "**/*.ts",
+    previous: params.previous,
+  }));
+}
+"#;
+    let first = output(&h.start(source, json!({}))).unwrap();
+    assert_eq!(
+        shard_files(&first),
+        vec![
+            (
+                "ui-0".into(),
+                vec!["src/ui/f0.ts".to_string(), "src/ui/f1.ts".into()]
+            ),
+            ("ui-1".into(), vec!["src/ui/f2.ts".to_string()]),
+        ]
+    );
+    std::fs::remove_file(h.target.path().join("src/ui/f0.ts")).unwrap();
+    h.write("src/ui/a.ts", "export {}\n");
+    let second = output(&h.start(source, json!({ "previous": first }))).unwrap();
+    assert_eq!(
+        shard_files(&second),
+        vec![
+            ("ui-0".into(), vec!["src/ui/f1.ts".to_string()]),
+            ("ui-1".into(), vec!["src/ui/f2.ts".to_string()]),
+            ("ui-2".into(), vec!["src/ui/a.ts".to_string()]),
+        ],
+        "{second}"
+    );
+}
+
 #[test]
 fn codemod_steps_run_a_local_package_and_detect_cycles() {
     let h = Harness::new();
@@ -313,7 +513,8 @@ fn git_steps_are_skipped_unless_managed_git_is_on() {
     let h = approving();
     let report = h.start(
         r#"
-import { step, branch, commit, pullRequest } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { branch, commit, pullRequest } from "codemod/git";
 export default async function main() {
   return [
     await step(branch("codemod/test")),
@@ -366,7 +567,8 @@ fn git(h: &Harness, args: &[&str]) -> String {
 }
 
 const PARALLEL_SHARDS: &str = r#"
-import { step, approval, branch, commit, forEachFile } from "codemod/workflow";
+import { step, approval, forEachFile } from "codemod/workflow";
+import { branch, commit } from "codemod/git";
 export default async function main() {
   await Promise.all(["a", "b"].map(async (name) => {
     await step(approval(`Migrate ${name}?`));
@@ -415,7 +617,8 @@ fn each_git_step_is_refused_alongside_other_steps() {
         let h = approving();
         let source = format!(
             r#"
-import {{ step, shell, branch, commit, pullRequest }} from "codemod/workflow";
+import {{ step, shell }} from "codemod/workflow";
+import {{ branch, commit, pullRequest }} from "codemod/git";
 export default async function main() {{
   await Promise.all([step(shell("echo hi")), step({task})]);
 }}
@@ -434,7 +637,8 @@ fn managed_git_steps_run_one_shard_after_another() {
     let h = managed_git();
     let report = h.start(
         r#"
-import { step, shell, branch, commit, forEachFile } from "codemod/workflow";
+import { step, shell, forEachFile } from "codemod/workflow";
+import { branch, commit } from "codemod/git";
 export default async function main() {
   // Steps without git still run together.
   await Promise.all([
@@ -470,7 +674,8 @@ fn a_nested_codemod_run_alongside_other_steps_refuses_managed_git() {
     h.bundle_file(
         "child/workflow.ts",
         r#"
-import { step, branch } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { branch } from "codemod/git";
 export default async function main() {
   await step(branch("codemod-child"));
 }
@@ -995,6 +1200,164 @@ fn yarn_target(h: &Harness) {
     );
 }
 
+/// The demo monorepo: web -> @demo/shared -> moment, api -> moment.
+fn npm_workspaces_target(h: &Harness) {
+    h.write(
+        "package-lock.json",
+        include_str!("../../deps/tests/fixtures/npm-workspaces/package-lock.json"),
+    );
+}
+
+#[test]
+fn who_uses_a_package_follows_workspace_to_workspace_links() {
+    let h = Harness::new();
+    npm_workspaces_target(&h);
+    // The "who uses a package" example in docs/community/workflows/reference.mdx.
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph((g) => {
+    const installed = g.nodes("moment");
+    return {
+      installed: installed.map((node) => node.version),
+      declaredBy: g.dependents("moment")
+        .map((edge) => ({ dir: edge.from.dir, range: edge.range, kind: edge.kind })),
+      reachedBy: g.chains({ to: installed })
+        .filter((chain) => chain.length > 2)
+        .map((chain) => ({ dir: chain[0].dir, via: chain.slice(1, -1).map((node) => node.name) })),
+    };
+  }));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({
+            "installed": ["2.29.4"],
+            "declaredBy": [
+                { "dir": "packages/api", "range": "^2.29.4", "kind": "prod" },
+                { "dir": "packages/shared", "range": "^2.29.4", "kind": "prod" },
+            ],
+            "reachedBy": [{ "dir": "packages/web", "via": ["@demo/shared"] }],
+        })
+    );
+}
+
+#[test]
+fn a_node_knows_its_directory_and_what_installed_it() {
+    let h = Harness::new();
+    npm_workspaces_target(&h);
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph((g) => {
+    const shared = g.node("@demo/shared");
+    return {
+      shared: [shared.dir, shared.local],
+      moment: [g.node("moment").dir, g.node("moment").local],
+      installedBy: shared.installedBy().map((edge) => edge.from.dir),
+    };
+  }));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({
+            "shared": ["packages/shared", true],
+            "moment": [null, false],
+            "installedBy": ["packages/api", "packages/web"],
+        })
+    );
+}
+
+#[test]
+fn dependents_are_the_repositorys_own_packages_unless_third_party_ones_are_asked_for() {
+    let h = Harness::new();
+    npm_workspaces_target(&h);
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph((g) => ({
+    shared: g.dependents("@demo/shared").map((e) => e.from.dir),
+    undici: g.dependents("undici-types").map((e) => e.from),
+    undiciAll: g.dependents("undici-types", { includeThirdParty: true }).map((e) => e.from),
+    installedBy: g.node("undici-types").installedBy().map((e) => e.from),
+    installedByAll: g.node("undici-types").installedBy({ includeThirdParty: true, kinds: "prod" }).map((e) => e.from),
+    // The root package dev-depends on @types/node; codemod optionally depends on its binaries.
+    typesNode: g.node("@types/node").installedBy().map((e) => e.kind),
+    declaresTypesNode: g.dependents("@types/node").map((e) => [e.from.dir, e.kind]),
+    declaresTypesNodeProd: g.dependents("@types/node", { kinds: "prod" }).map((e) => e.from.dir),
+    typesNodeProd: g.node("@types/node").installedBy({ kinds: "prod" }).map((e) => e.from),
+    binary: g.node("@codemod.com/cli-linux-x64-gnu").installedBy({ includeThirdParty: true }).map((e) => e.kind),
+    binaryProd: g.node("@codemod.com/cli-linux-x64-gnu").installedBy({ includeThirdParty: true, kinds: "prod" }).map((e) => e.from),
+  })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({
+            "shared": ["packages/api", "packages/web"],
+            "undici": [],
+            "undiciAll": ["@types/node@22.20.5"],
+            "installedBy": [],
+            "installedByAll": ["@types/node@22.20.5"],
+            "typesNode": ["dev"],
+            "declaresTypesNode": [[".", "dev"]],
+            "declaresTypesNodeProd": [],
+            "typesNodeProd": [],
+            "binary": ["optional"],
+            "binaryProd": [],
+        })
+    );
+}
+
+#[test]
+fn node_by_name_alone_fails_when_several_versions_are_installed() {
+    let h = Harness::new();
+    h.write(
+        "package-lock.json",
+        r#"{
+          "lockfileVersion": 3,
+          "packages": {
+            "": { "name": "app", "dependencies": { "a": "^1.0.0", "b": "^2.0.0" } },
+            "node_modules/a": { "version": "1.0.0", "dependencies": { "b": "^1.0.0" } },
+            "node_modules/a/node_modules/b": { "version": "1.5.0" },
+            "node_modules/b": { "version": "2.1.0" }
+          }
+        }"#,
+    );
+    let workflow = |body: &str| {
+        format!(
+            r#"
+import {{ step }} from "codemod/workflow";
+import {{ dependencyGraph }} from "codemod/deps";
+export default async function main() {{ return await step("B", dependencyGraph((g) => {body})); }}
+"#
+        )
+    };
+    let report = h.start(&workflow(r#"g.node("b", "1.5.0")"#), Value::Null);
+    assert_eq!(output(&report).unwrap(), json!("b@1.5.0"));
+    let report = h.start(&workflow(r#"g.node("b", "2.1.0")"#), Value::Null);
+    assert_eq!(output(&report).unwrap(), json!("b@2.1.0"));
+    let report = h.start(&workflow(r#"g.node("b")"#), Value::Null);
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains(r#"g.node("b"): 2 versions are installed (1.5.0, 2.1.0); use g.nodes("b") or pass a version"#),
+        "{error}"
+    );
+}
+
 /// dnd's releases, counting how often the registry is asked.
 #[derive(Default)]
 struct FakeRegistry(std::sync::atomic::AtomicUsize);
@@ -1053,7 +1416,7 @@ fn a_dependency_graph_callback_walks_the_targets_lockfiles_through_a_live_handle
 import { step } from "codemod/workflow";
 import { dependencyGraph } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph({}, (g) => g.node("dnd").workspacesReaching().map((r) => r.chain)));
+  return await step(dependencyGraph({}, (g) => g.chains({ to: g.node("dnd") })));
 }
 "#,
         Value::Null,
@@ -1215,6 +1578,32 @@ export default async function main() {
     assert_eq!(
         output(&report).unwrap(),
         json!({ "read": ["yarn.lock"], "skipped": [["pnpm-lock.yaml", true]] })
+    );
+}
+
+#[test]
+fn a_dependency_graph_reads_the_lockfiles_its_options_select() {
+    let h = Harness::new();
+    // The root lockfile has moment; the selected nested one has table instead.
+    npm_workspaces_target(&h);
+    h.write("examples/app/yarn.lock", YARN_LOCK);
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph({ lockfiles: "examples/app/yarn.lock" }, (g) => ({
+    read: g.lockfiles,
+    table: g.nodes("table").length > 0,
+    moment: g.nodes("moment").length,
+  })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "read": ["examples/app/yarn.lock"], "table": true, "moment": 0 })
     );
 }
 
@@ -1410,6 +1799,157 @@ export default async function main() {
     );
     assert_eq!(output(&report).unwrap(), json!(2));
     assert_eq!(h.read("a.js"), "logger.info(console.log(1));\n");
+}
+
+/// A `typescript` rule selects `.js` files too, and applies to them: they are
+/// parsed as TypeScript, as `forEachFile({ language: "typescript" }, ...)`
+/// callbacks parse them.
+#[test]
+fn a_typescript_rule_applies_to_the_js_files_it_selects() {
+    let h = Harness::new();
+    for name in ["a.js", "b.ts", "c.mjs", "d.cjs", "e.py"] {
+        h.write(name, "console.log(1);\n");
+    }
+    let report = h.start(
+        r#"
+import { step, forEachFile, astGrep } from "codemod/workflow";
+export default async function main() {
+  const result = await step(forEachFile(astGrep({ id: "x", language: "typescript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" })));
+  return result.changes.written;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!(["a.js", "b.ts", "c.mjs", "d.cjs"])
+    );
+    for name in ["a.js", "b.ts", "c.mjs", "d.cjs"] {
+        assert_eq!(h.read(name), "logger.info(1);\n", "{name}");
+    }
+    assert_eq!(h.read("e.py"), "console.log(1);\n");
+}
+
+/// Rules of several languages each run on the files of their language,
+/// parsed with it: a `.js` file both a `javascript` and a `typescript` rule
+/// select gets both fixes, and a `.py` file only the `python` one.
+#[test]
+fn ast_grep_rules_of_several_languages_each_apply_to_their_files() {
+    for repeat in ["", ", { repeat: true }"] {
+        let h = Harness::new();
+        h.write("a.js", "console.log(1);\nalert(2);\n");
+        h.write("b.ts", "console.log(1);\nalert(2);\n");
+        h.write("c.py", "print(1)\n");
+        let report = h.start(
+            &format!(
+                r#"
+import {{ step, forEachFile, astGrep }} from "codemod/workflow";
+export default async function main() {{
+  const result = await step(forEachFile(astGrep([
+    {{ id: "log", language: "typescript", rule: {{ pattern: "console.log($A)" }}, fix: "logger.info($A)" }},
+    {{ id: "alert", language: "javascript", rule: {{ pattern: "alert($A)" }}, fix: "notify($A)" }},
+    {{ id: "print", language: "python", rule: {{ pattern: "print($A)" }}, fix: "log($A)" }},
+  ]{repeat})));
+  return [result.changes.written, result.matches];
+}}
+"#
+            ),
+            Value::Null,
+        );
+        // a.js gets a typescript and a javascript fix, b.ts and c.py one each.
+        assert_eq!(
+            output(&report).unwrap(),
+            json!([["a.js", "b.ts", "c.py"], 4]),
+            "{repeat}"
+        );
+        assert_eq!(h.read("a.js"), "logger.info(1);\nnotify(2);\n");
+        assert_eq!(h.read("b.ts"), "logger.info(1);\nalert(2);\n");
+        assert_eq!(h.read("c.py"), "log(1)\n");
+    }
+}
+
+/// Rules of two languages that undo each other on a file fail it, rather
+/// than counting fixes that leave nothing changed.
+#[test]
+fn ast_grep_rules_of_two_languages_that_undo_each_other_fail_the_file() {
+    let h = Harness::new();
+    h.write("a.js", "a();\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile, astGrep } from "codemod/workflow";
+export default async function main() {
+  await step(forEachFile(astGrep([
+    { id: "ab", language: "typescript", rule: { pattern: "a()" }, fix: "b()" },
+    { id: "ba", language: "javascript", rule: { pattern: "b()" }, fix: "a()" },
+  ], { repeat: true })));
+}
+"#,
+        Value::Null,
+    );
+    // Its only file failed, so the step did.
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("undo each other"), "{error}");
+    assert_eq!(h.read("a.js"), "a();\n");
+}
+
+/// In a dry run, a file can't be moved under a path an earlier step moved a
+/// file to, as a real run can't.
+#[test]
+fn a_dry_run_refuses_a_move_under_a_file_an_earlier_step_made() {
+    let source = r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step("One", forEachFile("a.txt", (file) => file.rename("out")));
+  await step("Two", forEachFile("b.txt", (file) => file.rename("out/b.txt")));
+}
+"#;
+    for dry in [false, true] {
+        let h = Harness::new();
+        h.write("a.txt", "a\n");
+        h.write("b.txt", "b\n");
+        let report = if dry {
+            h.dry_run(source)
+        } else {
+            h.start(source, Value::Null)
+        };
+        let failed = output(&report).is_err()
+            || report
+                .steps
+                .iter()
+                .any(|step| step.label == "Two" && step.status != StepStatus::Succeeded);
+        assert!(failed, "dry: {dry}: {:?}", report.ending);
+    }
+}
+
+/// A function step's `jssgTransform` that only renames a file an earlier
+/// dry-run step made moves it.
+#[test]
+fn a_dry_run_keeps_a_rename_only_jssg_transform_of_a_file_an_earlier_step_made() {
+    let h = Harness::new();
+    h.write("a.ts", "const a = 1;\n");
+    let report = h.dry_run(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { jssgTransform } from "codemod/ast-grep";
+export default async function main({ target }) {
+  await step("One", forEachFile("a.ts", (file) => file.rename("b.ts")));
+  await step("Two", async () => {
+    await jssgTransform((root) => { root.rename("c.ts"); return root.root().text(); }, `${target}/b.ts`, "typescript");
+  });
+}
+"#,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let paths: Vec<String> = h
+        .events
+        .take()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::RunDiff { path, .. } => Some(path),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paths, ["a.ts", "c.ts"]);
 }
 
 const CONSOLE_TO_LOGGER: &str = r#"{ id: "log", language: "javascript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" }"#;
@@ -2022,4 +2562,149 @@ export default async function main() {
     assert!(output(&report).is_ok(), "{:?}", report.ending);
     assert_eq!(h.read("a.ts"), "const a = 2;\n");
     assert_eq!(h.read("b.ts"), "const b = 2;\n");
+}
+
+/// A function step that returns with a timer or an interval still pending
+/// does not crash the run either.
+#[test]
+fn work_a_function_step_leaves_running_does_not_crash_the_run() {
+    let h = Harness::new();
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+export default async function main() {
+  const a = await step("Timer", () => { setTimeout(() => {}, 10_000); return 1; });
+  const b = await step("Interval", () => { setInterval(() => {}, 10); return 2; });
+  return [a, b];
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([1, 2]));
+}
+
+/// Nor does a `dependencyGraph` callback that leaves an interval running.
+#[test]
+fn work_a_dependency_graph_callback_leaves_running_does_not_crash_the_run() {
+    let h = Harness::new();
+    yarn_target(&h);
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph({}, (g) => { setInterval(() => {}, 10); setTimeout(() => {}, 10_000); return g.node("dnd").name; }));
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+}
+
+/// What every step of a dry run returns, and what it reports it would
+/// change in all, as a real run of the same workflow does it.
+const LATER_STEPS_SEE_EARLIER_ONES: &str = r#"
+import { step, forEachFile, astGrep } from "codemod/workflow";
+import { jssgTransform } from "codemod/ast-grep";
+export default async function main({ target }) {
+  await step("One", forEachFile("**/*.ts", (file) => {
+    if (file.path === "gone.ts") return file.delete();
+    file.write(file.text.replace("1", "2"));
+    if (file.path === "old.ts") file.rename("new.ts");
+  }));
+  const seen = await step("Two", forEachFile("**/*.ts", (file) => {
+    file.write(file.text.replace("2", "3"));
+    return file.path;
+  }));
+  const rules = await step("Three", forEachFile(astGrep({ id: "let", language: "typescript", rule: { pattern: "const $A = 3" }, fix: "let $A = 3;" })));
+  await step("Four", async () => {
+    await jssgTransform((root) => root.root().text().replace("let", "var"), `${target}/a.ts`, "typescript");
+  });
+  return { seen: seen.outputs, matches: rules.matches };
+}
+"#;
+
+fn later_steps_target(h: &Harness) {
+    h.write("a.ts", "const a = 1;\n");
+    h.write("old.ts", "const o = 1;\n");
+    h.write("gone.ts", "const g = 1;\n");
+}
+
+/// In a dry run each step reads what the earlier ones would have left:
+/// edited text, renamed files at their new paths, deleted files gone. The
+/// diff it reports at the end is a real run's, and nothing is written.
+#[test]
+fn a_dry_run_lets_later_steps_see_what_earlier_ones_would_change() {
+    use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata};
+    let real = Harness::new();
+    later_steps_target(&real);
+    let real_report = real.start(LATER_STEPS_SEE_EARLIER_ONES, Value::Null);
+    let expected_output = json!({ "seen": ["a.ts", "new.ts"], "matches": 2 });
+    assert_eq!(output(&real_report).unwrap(), expected_output);
+    assert_eq!(real.read("a.ts"), "var a = 3;\n");
+    assert_eq!(real.read("new.ts"), "let o = 3;\n");
+    assert!(!real.exists("old.ts") && !real.exists("gone.ts"));
+
+    let dry = Harness::new();
+    later_steps_target(&dry);
+    let dry_report = dry.dry_run(LATER_STEPS_SEE_EARLIER_ONES);
+    assert_eq!(output(&dry_report).unwrap(), expected_output);
+    assert_eq!(dry.read("a.ts"), "const a = 1;\n");
+    assert_eq!(dry.read("old.ts"), "const o = 1;\n");
+    assert_eq!(dry.read("gone.ts"), "const g = 1;\n");
+    assert!(!dry.exists("new.ts"));
+
+    let diffs: Vec<(String, String)> = dry
+        .events
+        .take()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::RunDiff { path, diff, .. } => Some((path, diff)),
+            _ => None,
+        })
+        .collect();
+    let diff = |path: &str, before: &str, after: &str| {
+        let config = DiffConfig {
+            color: false,
+            ..DiffConfig::default()
+        };
+        let diff = generate_unified_diff(
+            std::path::Path::new(path),
+            before,
+            after,
+            &config,
+            DiffMetadata::default(),
+        );
+        (path.to_string(), diff.diff_text)
+    };
+    assert_eq!(
+        diffs,
+        vec![
+            diff("a.ts", "const a = 1;\n", &real.read("a.ts")),
+            diff("gone.ts", "const g = 1;\n", ""),
+            diff("new.ts", "", &real.read("new.ts")),
+            diff("old.ts", "const o = 1;\n", ""),
+        ]
+    );
+    assert!(diffs[0].1.contains("+var a = 3;"), "{diffs:?}");
+}
+
+/// A real run reports no run diff: its steps' diffs are in the summary.
+#[test]
+fn only_a_dry_run_reports_its_diff_when_it_ends() {
+    let h = Harness::new();
+    h.write("a.txt", "1\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() { await step(forEachFile("a.txt", (file) => file.write("2\n"))); }
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert!(!h
+        .events
+        .take()
+        .iter()
+        .any(|event| matches!(event, Event::RunDiff { .. })));
 }

@@ -382,7 +382,7 @@ npx codemod <package-name>
 </ResponseField>
 
 <ResponseField name="--dry-run" type="boolean">
-  Run every step without changing files. Shell commands, agents and skill installs are skipped, and the run is not saved.
+  Run every step without changing files. Later steps see what earlier steps would have changed, and the run ends by printing the diff of all of it (`run_diff` events with `--format jsonl`). Shell commands, agents and skill installs are skipped, and the run is not saved.
 </ResponseField>
 
 <ResponseField name="--approve" type="boolean">
@@ -751,6 +751,10 @@ npx codemod jssg test <codemod_file> [options]
 
 <ResponseField name="--test-directory" type="string">
   The parent directory containing your test case subdirectories (default: `"tests"`). Do not pass a specific test case subdirectory — use `--filter` instead.
+</ResponseField>
+
+<ResponseField name="--callback" type="boolean">
+  The file is a `forEachFile` callback (its default export is `(file) => ...`), not a transform. It runs on each input as a `forEachFile` step runs it; what it returns is snapshotted in `data.json`. See [Test a forEachFile callback](/community/jssg/testing#test-a-foreachfile-callback).
 </ResponseField>
 
 <ResponseField name="--filter" type="string">

@@ -65,6 +65,28 @@ export default async function main({ params }: WorkflowContext<Params>) {
 
 Your transform files don't change. The workflow imports each one and runs it from a `forEachFile` callback through `jssgFile`, a compatibility adapter that is not part of the public workflow API: it gives the transform the root, `params`, `matrixValues` and `getSelector` matches it got before, and applies what it returns. Convert a step to a plain callback when you next work on it: `parse(file)` gives the root, and `file.write(text)` replaces returning the text.
 
+Your fixture tests keep working when you do. Make the transform file's default export a callback, and add `--callback` to its test command; the fixture folders stay as they are:
+
+```ts scripts/codemod.ts
+import { parse } from "codemod/ast-grep";
+import type { FileCallback } from "codemod/workflow";
+
+// Before: export default function transform(root) { ...; return text; }
+const migrate: FileCallback = (file) => {
+  const root = parse(file);
+  // ... the transform's body, unchanged ...
+  if (text) file.write(text);
+};
+export default migrate;
+```
+
+```diff package.json
+- "test": "npx codemod jssg test -l typescript ./scripts/codemod.ts"
++ "test": "npx codemod jssg test --callback -l typescript ./scripts/codemod.ts"
+```
+
+The workflow then imports it (`import migrate from "./scripts/codemod.ts"`) and gives it to `forEachFile`. A transform that read `options.params` reads them in the workflow instead; see [Test a forEachFile callback](/community/jssg/testing#test-a-foreachfile-callback).
+
 If `upgrade` suggests it, add the `codemod` package as a dev dependency, so your editor type-checks `workflow.ts`:
 
 ```bash
@@ -90,7 +112,7 @@ npm install --save-dev codemod
 | `${{ params.name }}` | `params.name`. In a list field, such as `include` or a commit's `add`, a value that is an array expands into one entry per item, as before. Inside any other text it becomes `asText(params.name, "params.name")`, which prints arrays and objects as JSON and null as nothing, and fails if the value is not set, as workflow.yaml did. Strings are printed as written (workflow.yaml printed `"007"` as `7`), and an object's integer-like keys such as `"10"` come first, in numeric order, as in JavaScript |
 | `${{ state.name }}` | `state.name`, a local object. Shell steps get it as `CODEMOD_STATE_<KEY>` variables, and the lines they write to `$STATE_OUTPUTS` are printed at the end of their stdout and copied into it by `applyStateOutputs`. JSSG transforms that call `getState` or `setState` cannot be translated; `upgrade` flags them |
 | `trigger: manual` | `await step(approval("<node name>"))` |
-| `branch_name`, `pull_request`, step `commit` | `branch`, `pullRequest` and `commit` steps |
+| `branch_name`, `pull_request`, step `commit` | `branch`, `pullRequest` and `commit` steps, imported from `codemod/git` |
 | `templates` and `use:` | Functions |
 
 Fields that never had an effect, such as `codemod.args` or template `outputs`, are left out. `upgrade` and `codemod workflow validate` list them, and `upgrade` leaves a `// codemod upgrade:` comment where each one was.
@@ -155,7 +177,7 @@ A `workflow.ts` written for an earlier preview may need these changes. Each fail
   await step(forEachFile({ language: "tsx" }, migrate));
   ```
 
-  In the callback, `parse(file)` (from `codemod/ast-grep`) gives the root a transform got, `file.write(text)` replaces returning the text, `file.rename(path)` replaces `root.rename()`, and the value it returns is collected into `outputs` (where a transform returned `{ edit, data }`). Values a transform read from `options.params` become variables the callback captures. `semanticAnalysis` and `capabilities` are now selector options of `forEachFile`. `jssg`'s `reduce` is gone: add up `outputs` after the step. `codemod jssg run` and `codemod jssg test` still run jssg transform files on their own.
+  In the callback, `parse(file)` (from `codemod/ast-grep`) gives the root a transform got, `file.write(text)` replaces returning the text, `file.rename(path)` replaces `root.rename()`, and the value it returns is collected into `outputs` (where a transform returned `{ edit, data }`). Values a transform read from `options.params` become variables the callback captures. `semanticAnalysis` and `capabilities` are now selector options of `forEachFile`. `jssg(path, { reduce, initial })` becomes `forEachFile(selector, callback, reduce, initial)`: the reducer now gets `(result, output, path)` where it got `(result, { file, data })`, and the step's result has the folded value as `reduced` (see [Reducing outputs](/community/workflows/reference#reducing-outputs)). It folds outputs in path order as files finish, so the outputs of a large target are never all held in memory. `codemod jssg run` and `codemod jssg test` still run jssg transform files on their own, and `codemod jssg test --callback` runs a callback file on the same fixtures.
 - **File paths were removed.** `forEachFile`, `shard` and `astGrep` take functions and rules, not paths:
   - `astGrep("./rules/config.yml")` → `import rules from "./rules/config.yml"` and `astGrep(rules)`, or rules written as objects: `astGrep({ id: "no-var", language: "javascript", rule: { pattern: "var $A = $B" }, fix: "let $A = $B;" })`;
   - `shard({ method: { function: "./scripts/shard.ts" } })` → an imported (or inline) shard function, `method: { function: shardFiles }`;

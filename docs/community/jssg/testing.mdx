@@ -102,6 +102,32 @@ npx codemod jssg test -l tsx ./scripts/codemod.ts --strictness loose
 See all available options in the [CLI reference](/community/cli#codemod-jssg).
 </Info>
 
+### Test a forEachFile callback
+
+A workflow's per-file logic is a [`forEachFile` callback](/community/workflows/reference). When it is kept in its own file as the default export, `(file) => ...`, test it with the same fixtures and command plus `--callback`:
+
+```ts scripts/migrate.ts
+import { parse } from "codemod/ast-grep";
+import type { FileCallback } from "codemod/workflow";
+
+const migrate: FileCallback<{ count: number }> = (file) => {
+  const root = parse(file).root();
+  const found = root.findAll({ rule: { pattern: "var $A = $B" } });
+  if (!found.length) return;
+  file.write(root.commitEdits(found.map((node) => node.replace(node.text().replace(/^var/, "let")))));
+  return { count: found.length };
+};
+export default migrate;
+```
+
+```bash
+npx codemod jssg test --callback -l typescript ./scripts/migrate.ts
+```
+
+The callback runs on each input as a `forEachFile` step with that `language` runs it: `file.path` is the file's path from the case (`input.ts`, or `src/a.ts` in an `input/` directory), `parse(file)` has file-level semantic analysis (`--semantic-workspace` gives it the whole case), and `file.write()` and `file.rename()` make the output compared with `expected`. What the callback returns is snapshotted in `data.json`, in the shape a transform's `data` is. A callback file takes no `params`: a test config that sets them is an error.
+
+Every other option works as it does for transforms. Without `--callback`, a callback file fails with a hint to add it. To check a callback from a test runner instead, use [`runCallback`](/community/workflows/testing#test-a-callback-file) from `codemod/testing`.
+
 ## Creating effective test cases
 
 **1. Start simple:**
@@ -159,7 +185,7 @@ function Component() {
 - Single-file fixtures update the matching `expected.*` file
 - Directory fixtures update changed files, create missing expected files, and remove stale expected files that should no longer exist
 
-`data.json` snapshots of the returned data are handled separately from directory tree comparisons.
+`data.json` snapshots of the returned data are handled separately from directory tree comparisons. A case has one `data.json`, next to its `input` and `expected` (for a directory case, at the case's root, with the data of every file, in subfolders too).
 
 ## Troubleshooting
 

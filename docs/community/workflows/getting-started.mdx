@@ -69,7 +69,7 @@ git commit -m "Before the migration"
 npx codemod@2.0.0-alpha.5 workflow run -w ./workflow.ts --dry-run
 ```
 
-It prints `Replaced 3 calls in 2 files`, and `git status` shows no changes. Now run it for real and look at the diff:
+It prints `Replaced 3 calls in 2 files` and the diff it would apply, and `git status` shows no changes. Now run it for real:
 
 ```bash
 npx codemod@2.0.0-alpha.5 workflow run -w ./workflow.ts
@@ -130,7 +130,7 @@ npx codemod@2.0.0-alpha.5 workflow run -w ./workflow.ts
 It prints `Replaced 3 calls in 2 files` and `Removed the util import from 2 files`. `git diff -- src` shows both imports gone, with blank lines left where they were. The next step cleans those up.
 
 <Note>
-  In a dry run, nothing is written, so each step sees the files as they are on disk. Here the second step still sees the `util.is*` calls and reports `Removed the util import from 0 files`.
+  A dry run writes nothing, but each step sees what the earlier ones would have changed, so a dry run reports the same counts as a real run. It ends by printing the diff it would apply.
 </Note>
 
 ### Move the callback to its own file

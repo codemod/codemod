@@ -62,6 +62,22 @@ struct State {
 #[derive(Debug, Clone, Default)]
 pub struct PendingFiles {
     inner: Arc<(Mutex<State>, Condvar)>,
+    /// Where a file's text comes from before the step changed it, when not
+    /// from disk: see [`PendingFiles::with_base`].
+    base: Option<Base>,
+}
+
+/// A file's text before the step changed it, for the files the caller has
+/// other text for; `None` for those read from disk.
+type BaseFn = dyn Fn(&Path) -> Option<std::io::Result<String>> + Send + Sync;
+
+#[derive(Clone)]
+struct Base(Arc<BaseFn>);
+
+impl std::fmt::Debug for Base {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Base")
+    }
 }
 
 /// One file taken with [`PendingFiles::take`]; gives it back when dropped,
@@ -140,6 +156,27 @@ impl State {
 }
 
 impl PendingFiles {
+    /// Files whose text before the step comes from `base` when it has the
+    /// file (a dry run's earlier steps changed it, in memory), else from
+    /// disk. `base` gets the path a file is kept under: canonical when the
+    /// file is on disk.
+    pub fn with_base(
+        base: impl Fn(&Path) -> Option<std::io::Result<String>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            inner: Arc::default(),
+            base: Some(Base(Arc::new(base))),
+        }
+    }
+
+    /// A file's text before the step changed it.
+    fn read_base(&self, key: &Path) -> std::io::Result<String> {
+        match self.base.as_ref().and_then(|base| (base.0)(key)) {
+            Some(text) => text,
+            None => std::fs::read_to_string(key),
+        }
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         self.inner.0.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -212,7 +249,7 @@ impl PendingFiles {
                 file.text.clone()
             }
             None => {
-                let text = std::fs::read_to_string(&key)?;
+                let text = self.read_base(&key)?;
                 state.files.insert(
                     key.clone(),
                     Pending {
@@ -255,7 +292,42 @@ impl PendingFiles {
         }
     }
 
-    /// Every file whose text the step changed: `(path, on disk, now)`, by path.
+    /// Write every changed file no transform holds now with `write`, and
+    /// forget it: the next take reads it from disk again, so writes made
+    /// meanwhile by other means (`root.write()`) are seen. Done under the
+    /// lock, so no transform takes a file between its write and its
+    /// eviction. A file `write` fails on stays pending; the errors are
+    /// returned with their paths.
+    pub fn write_released(
+        &self,
+        mut write: impl FnMut(&Path, &str) -> std::io::Result<()>,
+    ) -> Vec<(PathBuf, std::io::Error)> {
+        let mut state = self.lock();
+        let mut ready: Vec<PathBuf> = state
+            .files
+            .iter()
+            .filter(|(_, file)| file.holder.is_none() && file.text != file.original)
+            .map(|(path, _)| path.clone())
+            .collect();
+        ready.sort();
+        let mut errors = Vec::new();
+        for path in ready {
+            let Some(file) = state.files.get(&path) else {
+                continue;
+            };
+            match write(&path, &file.text) {
+                Ok(()) => {
+                    state.files.remove(&path);
+                }
+                Err(error) => errors.push((path, error)),
+            }
+        }
+        errors
+    }
+
+    /// Every file whose text the step changed: `(path, at the start of the
+    /// step, now)`, by path. The first text is the disk's, or in a dry run
+    /// what earlier steps left.
     pub fn changed(&self) -> Vec<(PathBuf, String, String)> {
         let mut changed: Vec<_> = self
             .lock()
