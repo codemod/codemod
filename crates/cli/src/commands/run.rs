@@ -124,6 +124,9 @@ pub struct Command {
     workflow: Option<String>,
 
     #[command(flatten)]
+    start: crate::workflow_exec::StartFlags,
+
+    #[command(flatten)]
     flags: crate::workflow_exec::RunFlags,
 }
 
@@ -322,7 +325,8 @@ pub async fn handler(
         name: Some(canonical_codemod_name.clone()),
         dry_run,
         settings: crate::workflow_exec::ExecSettings {
-            approve_all: pro_dry_run_required,
+            approve_all: args.start.approve || pro_dry_run_required,
+            managed_git: args.start.managed_git,
             skip_shard_steps: pro_dry_run_required,
             nested_observer: Some(run_telemetry.nested_observer(telemetry.clone())),
             ..args

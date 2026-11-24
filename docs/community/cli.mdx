@@ -377,6 +377,8 @@ npx codemod <package-name>
 
 </CodeGroup>
 
+A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>`) takes the same run flags as `workflow run`: `--target`, `--param`, `--dry-run`, `--approve`, `--managed-git`, `--allow-dirty`, `--allow-fs`, `--allow-fetch`, `--allow-child-process`, `--no-interactive`, `--install-skill`, `--agent` and `--format`. It picks one of the package's workflows with `--workflow <NAME>` instead of `--workflow-name`.
+
 <ResponseField name="-w, --workflow <PATH>" type="string" required>
   Path to a workflow file or a package directory. In a directory, the workflow declared in `codemod.yaml` runs, otherwise `workflow.ts`, otherwise `workflow.yaml`.
 </ResponseField>
@@ -389,6 +391,11 @@ npx codemod <package-name>
   Give every approval the workflow asks for (`approval(...)` steps, manual nodes in `workflow.yaml`, pull requests). Without it, a run nobody can answer for pauses at the first approval and can be continued with `workflow resume --approve`.
 
   `--approve` does not grant capabilities: those come from `--allow-fs`, `--allow-fetch` and `--allow-child-process`, or from your answer when the package asks.
+
+  ```bash
+  npx codemod workflow run -w ./my-codemod --approve --no-interactive
+  npx codemod @org/my-package@1.2.0 --approve --no-interactive
+  ```
 </ResponseField>
 
 A run is unattended when you pass `--no-interactive`, and also when there is no terminal to ask on (in CI, or with input piped in). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something.
@@ -1005,7 +1012,7 @@ Publish a Codemod package to a registry.
 npx codemod publish [PATH]
 ```
 
-`node_modules` is not published. A `workflow.ts`, and each callback and shard function it imports from its own file, is bundled with what it imports from npm packages; the modules the CLI provides (`codemod/workflow`, `codemod/ast-grep`, `fs`, ...) stay imports, and so do the workflow's imports of its callbacks, which the modules the build extracts import. YAML files it imports (ast-grep rules) are published as they are, and stay imports. A workflow that names a file by path where a callback or rules go does not build, so it does not publish: see [Imported callbacks](/community/workflows/reference#imported-callbacks).
+What `.gitignore` files in the package ignore is not published, nested ones included, and neither are `node_modules` and `.git` directories at any depth. A `workflow.ts`, and each callback and shard function it imports from its own file, is bundled with what it imports from npm packages; the modules the CLI provides (`codemod/workflow`, `codemod/ast-grep`, `fs`, ...) stay imports, and so do the workflow's imports of its callbacks, which the modules the build extracts import. YAML files it imports (ast-grep rules) are published as they are, and stay imports. A workflow that names a file by path where a callback or rules go does not build, so it does not publish: see [Imported callbacks](/community/workflows/reference#imported-callbacks).
 
 <ResponseField name="[PATH]" type="string">
   Path to codemod directory (defaults to current directory).
