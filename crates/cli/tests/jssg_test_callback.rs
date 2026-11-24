@@ -115,15 +115,26 @@ fn a_directory_case_runs_the_callback_on_each_file() {
     let dir = package();
     write(dir.path(), "tests/tree/input/a.ts", "var a = 1;\n");
     write(dir.path(), "tests/tree/input/b.ts", "const b = 2;\n");
+    write(dir.path(), "tests/tree/input/src/c.ts", "var c = 3;\n");
     write(dir.path(), "tests/tree/expected/a.ts", "let a = 1;\n");
     write(dir.path(), "tests/tree/expected/b.ts", "const b = 2;\n");
+    write(dir.path(), "tests/tree/expected/src/c.ts", "let c = 3;\n");
     let output = jssg_test(dir.path(), &["--callback", "migrate.ts"]);
     assert!(output.status.success(), "{}", text(&output));
-    // Where jssg test keeps a directory case's data.
+    // One data.json at the case's root, with the data of files in subfolders.
     assert_eq!(
-        json(&dir.path().join("tests/tree/input/data.json")),
-        serde_json::json!([{ "file": "a.ts", "data": { "path": "a.ts", "count": 1 } }])
+        json(&dir.path().join("tests/tree/data.json")),
+        serde_json::json!([
+            { "file": "a.ts", "data": { "path": "a.ts", "count": 1 } },
+            { "file": "src/c.ts", "data": { "path": "src/c.ts", "count": 1 } },
+        ])
     );
+    for stray in ["input/data.json", "input/src/data.json"] {
+        assert!(
+            !dir.path().join("tests/tree").join(stray).exists(),
+            "{stray} was written"
+        );
+    }
 }
 
 #[test]

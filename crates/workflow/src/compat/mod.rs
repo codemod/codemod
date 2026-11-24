@@ -979,7 +979,7 @@ impl Generator {
                                 shard_count(&builtin.max_files_per_shard),
                             ));
                             if let Some(min) = &builtin.min_shard_size {
-                                method.push(("minShardSize", shard_count(min)));
+                                method.push(("minShardSize", min_shard_size(min)));
                             }
                             object(&method)
                         }
@@ -1175,6 +1175,14 @@ impl Generator {
         }
         if self.uses_state_outputs {
             source.push_str(&STATE_OUTPUTS_HELPER.replace("{marker}", STATE_MARKER));
+        }
+        if self.body.contains(&format!("{}(", expr::TEXT)) {
+            source.push_str(expr::TEXT_HELPER);
+        }
+        if self.body.contains("optionalCount(") {
+            source.push_str(
+                "\n/** An optional count from a `${{ }}`: empty (a null value) leaves it unset. */\nfunction optionalCount(text: string): number | undefined {\n  return text.trim() === \"\" ? undefined : Number(text);\n}\n",
+            );
         }
         if self.uses_matrix_env {
             source.push_str(
@@ -1434,6 +1442,17 @@ fn compact_object(value: &Value) -> String {
                 .map(|(k, v)| (k.as_str(), compact_object(v)))
                 .collect();
             object(&fields)
+        }
+        other => other.to_string(),
+    }
+}
+
+/// An optional minimum shard size. A `${{ }}` that prints nothing (a null
+/// value) leaves it unset, as a null minimum did before.
+fn min_shard_size(value: &Value) -> String {
+    match value {
+        Value::String(text) if text.contains("${{") => {
+            format!("optionalCount({})", template(text))
         }
         other => other.to_string(),
     }

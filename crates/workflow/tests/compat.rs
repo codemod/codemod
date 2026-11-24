@@ -272,6 +272,38 @@ nodes:
         .all(|s| s.status == StepStatus::Succeeded));
 }
 
+/// A `min_shard_size` whose value is null leaves the minimum unset, as
+/// before, rather than asking for shards of at least 0 files.
+#[test]
+fn a_null_shard_minimum_is_left_unset() {
+    let h = Harness::new();
+    h.write("src/alpha/a.ts", "y = 'OLD'\n");
+    h.bundle_file("scripts/codemod.ts", TRANSFORM);
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: evaluate
+    name: Evaluate shards
+    steps:
+      - name: Build shards
+        shard:
+          method:
+            type: directory
+            max_files_per_shard: ${{ params.max }}
+            min_shard_size: ${{ params.min }}
+          target: src
+          output_state: shards
+          file_pattern: "**/*.ts"
+"#,
+    );
+    let report = h.start_loaded(workflow, json!({ "max": 10, "min": null }), false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let shards = report.steps[0].result.as_ref().unwrap().as_array().unwrap();
+    assert_eq!(shards.len(), 1, "{shards:?}");
+}
+
 /// The shard's transform runs as the YAML engine's prescan ran it: as a dry
 /// run, so a transform that changes files only then is what picks them.
 #[test]
@@ -656,6 +688,135 @@ nodes:
         error.contains("more than 1 MiB to $STATE_OUTPUTS"),
         "{error}"
     );
+}
+
+/// `${{ }}` in a string prints arrays and objects as compact JSON, in their
+/// own key order, and null as nothing, as workflow.yaml did (codemod 1.x).
+#[cfg(not(windows))]
+#[test]
+fn expressions_print_arrays_and_objects_as_json() {
+    let h = Harness::new();
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: set
+    name: Set
+    steps:
+      - name: Set
+        run: |
+          echo 'arr=["x",1,{"b":2,"a":1},null,true,1.5]' >> "$STATE_OUTPUTS"
+          echo 'obj={"z":1,"a":[1,2],"s":"t","n":null}' >> "$STATE_OUTPUTS"
+          echo 'num=3' >> "$STATE_OUTPUTS"
+          echo 'flt=2.50' >> "$STATE_OUTPUTS"
+          echo 'bool=true' >> "$STATE_OUTPUTS"
+          echo 'str=hello' >> "$STATE_OUTPUTS"
+          echo 'empty=[]' >> "$STATE_OUTPUTS"
+          echo 'eobj={}' >> "$STATE_OUTPUTS"
+      - name: Show ${{ state.arr }} ${{ state.empty }}
+        run: |
+          printf '%s\n' 'ARR=${{ state.arr }}' 'OBJ=${{ state.obj }}' 'OBJA=${{ state.obj.a }}' 'NUM=${{ state.num }}' 'FLT=${{ state.flt }}' 'BOOL=${{ state.bool }}' 'STR=${{ state.str }}' 'EMPTY=${{ state.empty }}' 'EOBJ=${{ state.eobj }}' 'P=${{ params.p }}' 'ZEROS=${{ params.zeros }}' 'NULL=[${{ params.nothing }}]'
+  - id: each
+    name: Each
+    depends_on: [set]
+    strategy:
+      type: matrix
+      values:
+        - name: one
+          tags: ["a", "b"]
+          meta: { k: 2, a: 1 }
+          n: 4
+    steps:
+      - name: Matrix
+        run: printf '%s\n' 'MNAME=${{ matrix.name }}' 'MTAGS=${{ matrix.tags }}' 'MMETA=${{ matrix.meta }}' 'MN=${{ matrix.n }}'
+"#,
+    );
+    let report = h.start_loaded(
+        workflow,
+        json!({ "p": { "q": [1, 2] }, "zeros": "007", "nothing": null }),
+        false,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let labels: Vec<&str> = report.steps.iter().map(|s| s.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "Set",
+            r#"Show ["x",1,{"b":2,"a":1},null,true,1.5] []"#,
+            "Matrix"
+        ]
+    );
+    let shown = printed(&report.steps[1].result.as_ref().unwrap()["stdout"]);
+    assert_eq!(
+        shown,
+        [
+            r#"ARR=["x",1,{"b":2,"a":1},null,true,1.5]"#,
+            r#"OBJ={"z":1,"a":[1,2],"s":"t","n":null}"#,
+            "OBJA=[1,2]",
+            "NUM=3",
+            "FLT=2.5",
+            "BOOL=true",
+            "STR=hello",
+            "EMPTY=[]",
+            "EOBJ={}",
+            r#"P={"q":[1,2]}"#,
+            // A string is printed as it is, never as a number.
+            "ZEROS=007",
+            "NULL=[]",
+        ]
+        .join("\n")
+    );
+    let matrix = printed(&report.steps[2].result.as_ref().unwrap()["stdout"]);
+    assert_eq!(
+        matrix,
+        [
+            "MNAME=one",
+            r#"MTAGS=["a","b"]"#,
+            r#"MMETA={"k":2,"a":1}"#,
+            "MN=4"
+        ]
+        .join("\n")
+    );
+}
+
+/// A `${{ }}` naming a value that is not set fails, as in workflow.yaml,
+/// instead of printing `undefined`.
+#[cfg(not(windows))]
+#[test]
+fn an_expression_naming_an_unset_value_fails_its_step() {
+    // A missing value, a value under a missing parent, and a missing value
+    // in a step's name.
+    for (expression, name, run) in [
+        ("state.missing", "Show", "echo '${{ state.missing }}'"),
+        (
+            "state.missing.child",
+            "Show",
+            "echo '${{ state.missing.child }}'",
+        ),
+        ("state.missing", "Show ${{ state.missing }}", "echo shown"),
+    ] {
+        let h = Harness::new();
+        let workflow = h.workflow_file(
+            "workflow.yaml",
+            &format!(
+                "version: \"1\"\nnodes:\n  - id: only\n    name: Only\n    steps:\n      - name: \"{name}\"\n        run: \"{run}\"\n"
+            ),
+        );
+        let report = h.start_loaded(workflow, Value::Null, false);
+        let error = format!("{:?}", report.ending);
+        assert!(output(&report).is_err(), "{error}");
+        assert!(
+            error.contains(&format!("${{{{ {expression} }}}} is not set")),
+            "{error}"
+        );
+        // The command never ran.
+        assert!(
+            report.steps.iter().all(|step| step.result.is_none()),
+            "{:?}",
+            report.steps
+        );
+    }
 }
 
 #[cfg(not(windows))]

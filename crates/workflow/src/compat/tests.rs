@@ -381,7 +381,7 @@ fn the_documented_features_translate_and_build() {
         !workflow_import.contains("commit"),
         "git steps imported from codemod/workflow: {workflow_import}"
     );
-    expect("state[\"shards\"] = await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", files: { language: \"tsx\" }, filter: (file) => jssgWouldChange(codemodTransform, file, { language: \"tsx\", params }), previous: state[\"shards\"] }));");
+    expect("state[\"shards\"] = await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${asText(params.pr_size, \"params.pr_size\")}`) }, target: \"./src\", files: { language: \"tsx\" }, filter: (file) => jssgWouldChange(codemodTransform, file, { language: \"tsx\", params }), previous: state[\"shards\"] }));");
     // Git steps share one checkout: the matrix with a pull request runs one
     // value at a time; the one without runs its values together.
     expect("const values: Matrix[] = (state[\"shards\"] ?? []);\n  if (!Array.isArray(values)) {\n    throw new Error(\"matrix values must be a list\");\n  }\n  for (let index = 0; index < values.length; index++) {\n    await applyNodeFor(params, state, values[index], index);\n  }");
@@ -392,12 +392,12 @@ fn the_documented_features_translate_and_build() {
     expect("import { jssgFile, jssgWouldChange } from \"codemod-internal:jssg-compat\";");
     expect("forEachFile({\n    include: matrix?._meta_files,\n    language: \"tsx\",\n  }, (file) => jssgFile(codemodTransform, file, {\n    language: \"tsx\",\n    params,\n    matrix: matrix ?? undefined,\n  }))");
     expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state })) {");
-    expect("await step(commit(`chore: ${matrix?.name}`, { allowEmpty: true }));");
+    expect("await step(commit(`chore: ${asText(matrix?.name, \"matrix.name\")}`, { allowEmpty: true }));");
     expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state })) {");
     expect("shell(\"echo fast\", { env: { ...matrixEnv(matrix), CI: \"true\" } })");
     expect("await lintFixTemplate({ ...params, ...{\"target_glob\":\"src/**\"} }, matrix, state);");
-    expect("await step(pullRequest({ title: `refactor: migrate ${matrix?.name}`, draft: true, branch: branchName }));");
-    expect("agent(`Summarize ${matrix?.team}`)");
+    expect("await step(pullRequest({ title: `refactor: migrate ${asText(matrix?.name, \"matrix.name\")}`, draft: true, branch: branchName }));");
+    expect("agent(`Summarize ${asText(matrix?.team, \"matrix.team\")}`)");
     expect("codemod(\"@codemod/other\", { params })");
     expect("const reportNodeDone = after([evaluateShardsNodeDone], () => reportNode(params));");
 
@@ -572,7 +572,10 @@ nodes:
         source.contains(r#"applyStateOutputs(state, await step("Version", shell("#),
         "{source}"
     );
-    assert!(source.contains("(\\necho ${state.version}\\n)"), "{source}");
+    assert!(
+        source.contains("(\\necho ${asText(state.version, \"state.version\")}\\n)"),
+        "{source}"
+    );
 }
 
 #[test]
