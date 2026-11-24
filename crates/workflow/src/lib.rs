@@ -18,6 +18,7 @@ use butterflow_core::nested_codemod_run::NestedCodemodRunObserver;
 use butterflow_core::registry::RegistryClient;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
+pub mod assess;
 pub mod build;
 mod callback_file;
 pub mod compat;
@@ -33,7 +34,8 @@ mod run;
 mod tasks;
 
 pub use build::{
-    build, inspect, rewrite_for_node, BuildError, Built, Inspection, InstalledSkill, FLOW_MODULE,
+    build, inspect, rewrite_for_node, uses_assess, BuildError, Built, Inspection, InstalledSkill,
+    FLOW_MODULE,
 };
 pub use butterflow_core::package_workflows::{
     declared_workflows, locate_workflow, DeclaredWorkflow,
@@ -72,6 +74,9 @@ pub struct Services {
     pub nested_observer: Option<Arc<dyn NestedCodemodRunObserver>>,
     /// Diffs and counters collected while the run progresses.
     pub summary: Arc<Summary>,
+    /// Answers `assess()` calls from `codemod/assess`; `None` fails them.
+    /// The CLI sets it up when the workflow imports `codemod/assess`.
+    pub decision: Option<Arc<dyn assess::DecisionModel>>,
 }
 
 /// What a run changed, for reports.

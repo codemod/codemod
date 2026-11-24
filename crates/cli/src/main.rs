@@ -7,6 +7,7 @@ use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 mod agent_log_renderer;
 mod ascii_art;
+mod assess_preflight;
 mod auth;
 mod auth_provider;
 mod capabilities_security_callback;

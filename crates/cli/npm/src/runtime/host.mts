@@ -38,7 +38,7 @@ import { fileURLToPath } from "node:url";
 
 import type { JsonValue } from "../testing/index.mts";
 import { addon } from "./addon.mts";
-import type { Addon, FileEffects, NativeRun } from "./addon.mts";
+import type { Addon, DecisionModelOptions, FileEffects, NativeRun } from "./addon.mts";
 import { context, stepScope } from "./context.mts";
 import type { RunScope, StepScope } from "./context.mts";
 import { ORCHESTRATOR_VERSION } from "./orchestrator-version.mts";
@@ -123,7 +123,15 @@ export interface HostRunOptions {
   captureConsole?: boolean;
   /** Stops the run. */
   signal?: AbortSignalLike;
+  /**
+   * The decision model `codemod/assess` asks, over what the workflow's
+   * codemod.yaml, the user config and the environment choose. `apiKey` and
+   * `baseUrl` are for whichever provider answers.
+   */
+  decisionModel?: DecisionModelOptions;
 }
+
+export type { DecisionModelOptions };
 
 export interface HostStepReport {
   readonly position: number;
@@ -202,6 +210,7 @@ export async function runWorkflow(
     capabilities: options.capabilities ?? [],
     store: options.store,
     resume: options.resume,
+    decisionModel: options.decisionModel,
   });
 
   const flight = inFlight();
@@ -609,6 +618,10 @@ async function forEachFile(
           failures: allFailures,
         },
   };
+  // What the step's `assess()` calls used, as the CLI reports it.
+  if (committed.assessed !== undefined) {
+    (result.result as Record<string, Json>).assessed = committed.assessed;
+  }
   if (!allFailures.length) return result;
   return {
     ...result,

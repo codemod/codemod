@@ -40,6 +40,11 @@ pub struct RunFlags {
     #[arg(long)]
     pub allow_child_process: bool,
 
+    /// Allow codemod/assess to send files to the decision model (System One
+    /// by default): asked for interactively, required without a terminal
+    #[arg(long)]
+    pub allow_ai: bool,
+
     /// No interactive mode
     #[arg(long)]
     pub no_interactive: bool,
@@ -105,6 +110,7 @@ impl RunFlags {
             no_interactive: self.no_interactive,
             format: self.format,
             capabilities,
+            allow_ai: self.allow_ai,
             agent: self.agent.clone(),
             registry: Some(registry),
             // Unattended runs install skills only when asked to.
@@ -124,6 +130,8 @@ pub struct ExecSettings {
     pub no_interactive: bool,
     pub format: OutputFormat,
     pub capabilities: HashSet<LlrtSupportedModules>,
+    /// `--allow-ai`: codemod/assess may send files to the decision model.
+    pub allow_ai: bool,
     pub agent: Option<String>,
     pub registry: Option<RegistryClient>,
     pub install_skill: Option<Arc<dyn InstallSkillExecutor>>,
@@ -204,9 +212,15 @@ pub fn status_label(store: &dyn RunStore, run: &RunRecord) -> String {
 
 pub async fn start(request: ExecRequest) -> Result<ExecOutcome> {
     let workflow = load_workflow(&request.workflow).map_err(|e| anyhow!("{e}"))?;
+    let decision = crate::assess_preflight::decision_model(
+        &workflow.path,
+        request.settings.allow_ai,
+        crate::utils::interactive::is_interactive(request.settings.no_interactive),
+        &crate::assess_preflight::TerminalPrompts,
+    )?;
     let format = request.settings.format;
     let dry_run = request.dry_run;
-    let (engine, renderer, summary) = engine(&request.settings)?;
+    let (engine, renderer, summary) = engine(&request.settings, decision)?;
     let started = Instant::now();
     let report = run_off_thread(engine, move |engine| {
         engine.start(StartRequest {
@@ -246,9 +260,16 @@ pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutc
     );
     settings.managed_git |= record.settings.managed_git;
     settings.agent = settings.agent.or(record.settings.agent);
+    // Asked again: a key given for the start is not kept.
+    let decision = crate::assess_preflight::decision_model(
+        &record.workflow_path,
+        settings.allow_ai,
+        crate::utils::interactive::is_interactive(settings.no_interactive),
+        &crate::assess_preflight::TerminalPrompts,
+    )?;
 
     let format = settings.format;
-    let (engine, renderer, summary) = engine(&settings)?;
+    let (engine, renderer, summary) = engine(&settings, decision)?;
     let started = Instant::now();
     let run_id = run_id.to_string();
     let report = run_off_thread(engine, move |engine| engine.resume(&run_id)).await?;
@@ -262,7 +283,10 @@ pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutc
     Ok(outcome)
 }
 
-fn engine(settings: &ExecSettings) -> Result<(Engine, Arc<Renderer>, Arc<Summary>)> {
+fn engine(
+    settings: &ExecSettings,
+    decision: Option<Arc<dyn codemod_workflow::assess::DecisionModel>>,
+) -> Result<(Engine, Arc<Renderer>, Arc<Summary>)> {
     let renderer = Arc::new(Renderer::new(settings.format));
     let interaction: Arc<dyn Interaction> = Arc::new(TerminalInteraction {
         interactive: crate::utils::interactive::is_interactive(settings.no_interactive),
@@ -281,6 +305,7 @@ fn engine(settings: &ExecSettings) -> Result<(Engine, Arc<Renderer>, Arc<Summary
         nested_observer: settings.nested_observer.clone(),
         package_registry: Some(Arc::new(codemod_deps::HttpRegistry::new())),
         summary: Arc::clone(&summary),
+        decision,
     };
     let engine = Engine::new(store(), renderer.clone(), interaction, services);
     Ok((engine, renderer, summary))

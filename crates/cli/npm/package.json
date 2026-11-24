@@ -16,6 +16,10 @@
     ".": {
       "types": "./types/index.d.ts"
     },
+    "./assess": {
+      "types": "./types/assess.d.ts",
+      "default": "./runtime/assess.mjs"
+    },
     "./ast-grep": {
       "types": "./types/main.d.ts",
       "default": "./runtime/ast-grep.mjs"
@@ -88,7 +92,7 @@
     "build": "node scripts/build.mjs",
     "prepack": "node scripts/build.mjs",
     "test": "node scripts/build.mjs && node --test tests/*.test.js tests/*.test.mjs",
-    "typecheck": "node scripts/build.mjs && tsc -p ../../workflow/src/js && tsc -p types && tsc -p type-tests && tsc -p type-tests/standalone/git && tsc -p type-tests/standalone/deps",
+    "typecheck": "node scripts/build.mjs && tsc -p ../../workflow/src/js && tsc -p types && tsc -p type-tests && tsc -p type-tests/standalone/git && tsc -p type-tests/standalone/deps && tsc -p type-tests/standalone/assess",
     "pull-llrt-types": "bash scripts/pull-llrt-types.sh"
   },
   "dependencies": {

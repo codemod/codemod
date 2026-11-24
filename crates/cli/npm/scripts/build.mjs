@@ -31,6 +31,11 @@ writeIfChanged(
     ),
 );
 writeIfChanged(
+  here("../src/runtime/assess-core.mts"),
+  GENERATED.replace("orchestrator.ts", "assess.ts") +
+    readFileSync(here("../../../workflow/src/js/assess.ts"), "utf8"),
+);
+writeIfChanged(
   here("../src/runtime/orchestrator-version.mts"),
   `${GENERATED}/** Identifies the orchestrator source this package was built from. */\nexport const ORCHESTRATOR_VERSION = "${version}";\n`,
 );

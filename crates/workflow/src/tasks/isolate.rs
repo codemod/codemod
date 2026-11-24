@@ -27,6 +27,8 @@ use crate::interaction::{Approval, Decision};
 /// `codemod/workflow` in isolates.
 const ISOLATE_WORKFLOW_MODULE: &str = "codemod-internal:isolate-workflow";
 const ISOLATE_GIT_MODULE: &str = "codemod-internal:isolate-git";
+/// `codemod/assess` in isolates and the workflow body.
+pub(crate) const ASSESS_MODULE: &str = "codemod-internal:assess";
 
 /// What the YAML translation's callbacks run jssg transforms with.
 pub(crate) const JSSG_COMPAT_MODULE: &str = "codemod-internal:jssg-compat";
@@ -122,17 +124,22 @@ pub(crate) fn isolate_modules() -> Vec<(String, String)> {
             JSSG_COMPAT_MODULE.to_string(),
             crate::js::jssg_compat_module().to_string(),
         ),
+        (
+            ASSESS_MODULE.to_string(),
+            crate::js::assess_module().to_string(),
+        ),
     ]
 }
 
-/// Steps, callbacks and the files they import may import `codemod/deps`,
-/// and `codemod/workflow` and `codemod/git` for helpers they share with the
-/// body.
+/// Steps, callbacks and the files they import may import `codemod/deps`
+/// and `codemod/assess`, and `codemod/workflow` and `codemod/git` for
+/// helpers they share with the body.
 pub(crate) fn isolate_codemod_modules() -> Vec<(&'static str, String)> {
     vec![
         ("workflow", ISOLATE_WORKFLOW_MODULE.to_string()),
         ("git", ISOLATE_GIT_MODULE.to_string()),
         ("deps", DEPENDENCIES_MODULE.to_string()),
+        ("assess", ASSESS_MODULE.to_string()),
     ]
 }
 
@@ -219,17 +226,24 @@ pub(crate) fn module_name(task: &TaskContext<'_>, id: &str) -> String {
 pub(crate) const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Start one isolate, with `__dependencyHost` installed for
-/// `codemod-internal:dependencies`.
+/// `codemod-internal:dependencies`, and `__assessHost` for `codemod/assess`
+/// when the step may assess (`forEachFile` callbacks and function steps).
 pub(crate) async fn start(
     options: WorkerOptions<OxcResolver>,
     registry: Option<Arc<dyn Registry>>,
+    assess: Option<crate::assess::AssessHandle>,
 ) -> Result<Worker, String> {
     let cancel = Arc::clone(&options.cancel);
     let worker = Worker::new(options)
         .await
         .map_err(|e| format!("could not start the step's runtime: {e}"))?;
     async_with!(worker.context => |ctx| {
-        deps_host::install(&ctx, registry, cancel).map_err(|e| e.to_string())
+        deps_host::install(&ctx, registry, cancel).map_err(|e| e.to_string())?;
+        match assess {
+            Some(handle) => crate::assess::install(&ctx, handle.run, handle.position, handle.cancel)
+                .map_err(|e| e.to_string()),
+            None => Ok(()),
+        }
     })
     .await?;
     Ok(worker)

@@ -67,7 +67,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     let attach_name = module_name(task, "dependency-graph");
 
     let (json, failure, changes) = block_on(async move {
-        let worker = isolate::start(options, registry).await?;
+        let worker = isolate::start(options, registry, None).await?;
         let sandbox = &worker;
         let json: Result<String, String> = async_with!(sandbox.context => |ctx| {
             let run = async {
