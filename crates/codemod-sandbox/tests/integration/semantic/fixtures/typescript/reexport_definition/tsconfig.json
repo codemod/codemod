@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@demo/shared": ["./packages/shared/src/index.ts"]
+    }
+  }
+}

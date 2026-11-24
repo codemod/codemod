@@ -1,6 +1,6 @@
 //! Accurate mode implementation for workspace-wide lazy indexing.
 
-use crate::cache::SymbolCache;
+use crate::cache::{ExportedSymbol, FileSymbols, ImportedSymbol, Symbol, SymbolCache};
 use crate::error::JsSemanticError;
 use crate::oxc_adapter::{find_symbol_at_range, parse_and_analyze};
 use crate::vfs_fs::VfsFileSystem;
@@ -43,14 +43,22 @@ pub enum WorkspaceWalker {
 /// existence checks all observe the virtual filesystem instead of the
 /// real disk. Needed for pg_ast_grep, which runs the analyzer against a
 /// `MemoryFS` seeded from a database snapshot at a specific commit.
+///
+/// `nearest` discovers the tsconfig closest to the importing file. It is
+/// consulted for bare specifiers the primary (root-tsconfig) resolver
+/// can't resolve, so `paths` declared in a nested tsconfig (e.g.
+/// `packages/tsconfig.json` in a monorepo whose root tsconfig only covers
+/// tooling) still apply.
 enum DualResolver {
     Physical {
         primary: Resolver,
         fallback: Resolver,
+        nearest: Resolver,
     },
     Vfs {
         primary: ResolverGeneric<VfsFileSystem>,
         fallback: ResolverGeneric<VfsFileSystem>,
+        nearest: ResolverGeneric<VfsFileSystem>,
     },
 }
 
@@ -74,6 +82,17 @@ impl DualResolver {
         match self {
             Self::Physical { fallback, .. } => fallback.resolve(directory, specifier),
             Self::Vfs { fallback, .. } => fallback.resolve(directory, specifier),
+        }
+    }
+
+    fn resolve_nearest_tsconfig(
+        &self,
+        directory: &Path,
+        specifier: &str,
+    ) -> Result<Resolution, ResolveError> {
+        match self {
+            Self::Physical { nearest, .. } => nearest.resolve(directory, specifier),
+            Self::Vfs { nearest, .. } => nearest.resolve(directory, specifier),
         }
     }
 }
@@ -169,8 +188,16 @@ impl AccurateAnalyzer {
             ..default_resolve_options()
         });
         let fallback = Resolver::new(default_resolve_options());
+        let nearest = Resolver::new(ResolveOptions {
+            tsconfig: Some(TsconfigDiscovery::Auto),
+            ..default_resolve_options()
+        });
 
-        DualResolver::Physical { primary, fallback }
+        DualResolver::Physical {
+            primary,
+            fallback,
+            nearest,
+        }
     }
 
     /// Build a VFS-backed resolver pair. Tsconfig discovery checks the
@@ -197,8 +224,19 @@ impl AccurateAnalyzer {
             VfsFileSystem::with_root(fs_root.clone()),
             fallback_opts,
         );
+        let nearest = ResolverGeneric::new_with_file_system(
+            VfsFileSystem::with_root(fs_root.clone()),
+            ResolveOptions {
+                tsconfig: Some(TsconfigDiscovery::Auto),
+                ..default_resolve_options()
+            },
+        );
 
-        DualResolver::Vfs { primary, fallback }
+        DualResolver::Vfs {
+            primary,
+            fallback,
+            nearest,
+        }
     }
 
     /// Read file content using the virtual filesystem.
@@ -289,8 +327,9 @@ impl AccurateAnalyzer {
     /// otherwise break resolution of simple local imports like `./utils`.
     ///
     /// Bare specifiers (e.g., `lodash`, `@acme/utils`) are NOT retried with the
-    /// fallback because their resolution intentionally depends on tsconfig `paths`
-    /// or `node_modules`.
+    /// tsconfig-free fallback because their resolution intentionally depends on
+    /// tsconfig `paths` or `node_modules`. They are retried with the tsconfig
+    /// nearest to the importing file, so nested `paths` aliases resolve.
     pub fn resolve_module(
         &self,
         specifier: &str,
@@ -309,10 +348,13 @@ impl AccurateAnalyzer {
                     }),
                 }
             }
-            Err(_) => Err(JsSemanticError::ModuleResolution {
-                specifier: specifier.to_string(),
-                from_path: from_path.to_path_buf(),
-            }),
+            Err(_) => match self.resolver.resolve_nearest_tsconfig(from_dir, specifier) {
+                Ok(resolution) => Ok(resolution.into_path_buf()),
+                Err(_) => Err(JsSemanticError::ModuleResolution {
+                    specifier: specifier.to_string(),
+                    from_path: from_path.to_path_buf(),
+                }),
+            },
         }
     }
 
@@ -408,14 +450,9 @@ impl AccurateAnalyzer {
                 )));
             }
 
-            // Try to resolve the import
-            match self.resolve_import_definition(
-                &import.module_specifier,
-                &canonical,
-                &import.local_name,
-                import.imported_name.as_deref(),
-                import.is_default,
-            )? {
+            // Try to resolve the import, following re-export chains
+            let target = self.resolve_import_target(&canonical, import);
+            match target.and_then(|t| self.target_definition(t, DefinitionKind::External)) {
                 Some(def) => return Ok(Some(def)),
                 None => {
                     // Module couldn't be resolved, return the import statement
@@ -431,6 +468,36 @@ impl AccurateAnalyzer {
                     )));
                 }
             }
+        }
+
+        // Check if this is a name inside a re-export (`export { a as b } from './x'`)
+        if let Some(export) = file_symbols.find_reexport_specifier_at(range) {
+            let site = DefinitionResult::new(
+                SymbolLocation::new(
+                    canonical.clone(),
+                    export.specifier_range.unwrap_or(export.range),
+                    language_core::SymbolKind::Export,
+                    export.name.clone(),
+                ),
+                content.to_string(),
+                DefinitionKind::Import,
+            );
+            if !options.resolve_external {
+                return Ok(Some(site));
+            }
+            let mut visited = HashSet::new();
+            return Ok(Some(
+                match self.follow_export(&canonical, &file_symbols, export, &mut visited) {
+                    ExportTarget::Symbol { path, symbol } => self
+                        .target_definition(
+                            ExportTarget::Symbol { path, symbol },
+                            DefinitionKind::External,
+                        )
+                        .unwrap_or(site),
+                    // Could not follow the source module: stay on the specifier.
+                    ExportTarget::Site { .. } => site,
+                },
+            ));
         }
 
         // Check if this is a direct symbol
@@ -472,6 +539,23 @@ impl AccurateAnalyzer {
         // Find the symbol at the given range
         let symbol = find_symbol_at_range(&file_symbols, range);
 
+        // A name inside `export { a } from './x'` has no local symbol: answer
+        // for the declaration it re-exports instead.
+        if symbol.is_none() {
+            if let Some(export) = file_symbols.find_reexport_specifier_at(range) {
+                let mut visited = HashSet::new();
+                if let ExportTarget::Symbol { path, symbol } =
+                    self.follow_export(&canonical, &file_symbols, export, &mut visited)
+                {
+                    if path != canonical {
+                        if let Some((_, target_content)) = self.cache.get(&path) {
+                            return self.find_references(&path, &target_content, symbol.range);
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(sym) = symbol {
             // Find all local references (excluding the definition itself)
             for reference in file_symbols.find_references_to(sym.symbol_id) {
@@ -496,62 +580,92 @@ impl AccurateAnalyzer {
                 // Index all files in workspace that might import this
                 self.index_workspace_files()?;
 
-                // Search all indexed files for imports of this module
+                let mut memo: HashMap<(PathBuf, String), Option<ExportTarget>> = HashMap::new();
+                let lands_on_sym = |target: Option<ExportTarget>| {
+                    matches!(
+                        target,
+                        Some(ExportTarget::Symbol { path, symbol })
+                            if path == canonical && symbol.symbol_id == sym.symbol_id
+                    )
+                };
+
+                // Search all indexed files for imports / re-exports that
+                // reach this symbol, directly or through barrels.
                 for cached_path in self.cache.files() {
                     if cached_path == canonical {
                         continue;
                     }
 
-                    if let Some((other_symbols, _)) = self.cache.get(&cached_path) {
-                        // Check imports from this file
-                        for import in &other_symbols.imports {
-                            // Try to resolve the import
-                            if let Ok(resolved) =
-                                self.resolve_module(&import.module_specifier, &cached_path)
+                    let Some((other_symbols, _)) = self.cache.get(&cached_path) else {
+                        continue;
+                    };
+
+                    for import in &other_symbols.imports {
+                        if import.is_namespace {
+                            continue;
+                        }
+                        let Ok(module) =
+                            self.resolve_module(&import.module_specifier, &cached_path)
+                        else {
+                            continue;
+                        };
+                        let name = import_export_name(import);
+                        if !lands_on_sym(self.resolve_export_memo(&module, name, &mut memo)) {
+                            continue;
+                        }
+
+                        files_map.entry(cached_path.clone()).or_default().push(
+                            SymbolLocation::new(
+                                cached_path.clone(),
+                                import.range,
+                                language_core::SymbolKind::Import,
+                                import.local_name.clone(),
+                            ),
+                        );
+
+                        // Also find references to this import in the file
+                        let import_symbol = other_symbols.symbols.iter().find(|s| {
+                            s.name == import.local_name
+                                && import.range.start <= s.range.start
+                                && import.range.end >= s.range.end
+                        });
+
+                        if let Some(imp_sym) = import_symbol {
+                            for ref_in_other in other_symbols.find_references_to(imp_sym.symbol_id)
                             {
-                                if resolved == canonical {
-                                    // This file imports from our file
-                                    let matches_name = import
-                                        .imported_name
-                                        .as_ref()
-                                        .map(|n| n == &sym.name)
-                                        .unwrap_or(false)
-                                        || import.local_name == sym.name;
-
-                                    if matches_name {
-                                        files_map.entry(cached_path.clone()).or_default().push(
-                                            SymbolLocation::new(
-                                                cached_path.clone(),
-                                                import.range,
-                                                language_core::SymbolKind::Import,
-                                                import.local_name.clone(),
-                                            ),
-                                        );
-
-                                        // Also find references to this import in the file
-                                        let import_symbol = other_symbols
-                                            .symbols
-                                            .iter()
-                                            .find(|s| s.name == import.local_name);
-
-                                        if let Some(imp_sym) = import_symbol {
-                                            for ref_in_other in
-                                                other_symbols.find_references_to(imp_sym.symbol_id)
-                                            {
-                                                files_map
-                                                    .entry(cached_path.clone())
-                                                    .or_default()
-                                                    .push(SymbolLocation::new(
-                                                        cached_path.clone(),
-                                                        ref_in_other.range,
-                                                        sym.kind,
-                                                        import.local_name.clone(),
-                                                    ));
-                                            }
-                                        }
-                                    }
-                                }
+                                files_map.entry(cached_path.clone()).or_default().push(
+                                    SymbolLocation::new(
+                                        cached_path.clone(),
+                                        ref_in_other.range,
+                                        sym.kind,
+                                        import.local_name.clone(),
+                                    ),
+                                );
                             }
+                        }
+                    }
+
+                    // Re-exports (`export { a } from './x'`) that forward this symbol
+                    for export in &other_symbols.exports {
+                        let (Some(source), Some(local_name), Some(local_range)) = (
+                            &export.re_export_from,
+                            &export.local_name,
+                            export.local_range,
+                        ) else {
+                            continue;
+                        };
+                        let Ok(module) = self.resolve_module(source, &cached_path) else {
+                            continue;
+                        };
+                        if lands_on_sym(self.resolve_export_memo(&module, local_name, &mut memo)) {
+                            files_map.entry(cached_path.clone()).or_default().push(
+                                SymbolLocation::new(
+                                    cached_path.clone(),
+                                    local_range,
+                                    language_core::SymbolKind::Export,
+                                    local_name.clone(),
+                                ),
+                            );
                         }
                     }
                 }
@@ -628,81 +742,165 @@ impl AccurateAnalyzer {
         Ok(())
     }
 
-    /// Resolve an import to its definition.
-    /// Returns `DefinitionKind::External` for successfully resolved cross-file definitions.
-    fn resolve_import_definition(
+    /// Resolve an import to the declaration it ultimately binds to,
+    /// following re-export chains through barrels.
+    fn resolve_import_target(
         &self,
-        module_specifier: &str,
         from_path: &Path,
-        local_name: &str,
-        imported_name: Option<&str>,
-        is_default: bool,
-    ) -> SemanticResult<Option<DefinitionResult>> {
-        // Try to resolve the module
-        let resolved_path = match self.resolve_module(module_specifier, from_path) {
-            Ok(path) => path,
-            Err(_) => return Ok(None), // External module, can't resolve
-        };
+        import: &ImportedSymbol,
+    ) -> Option<ExportTarget> {
+        if import.is_namespace {
+            return None;
+        }
+        let module = self
+            .resolve_module(&import.module_specifier, from_path)
+            .ok()?;
+        self.resolve_export(&module, import_export_name(import), &mut HashSet::new())
+    }
 
-        // Ensure the target file is indexed
-        let _ = self.ensure_indexed(&resolved_path);
+    /// Like [`Self::resolve_export`] with a per-query memo, used when many
+    /// imports across the workspace are checked against one symbol.
+    fn resolve_export_memo(
+        &self,
+        module_path: &Path,
+        export_name: &str,
+        memo: &mut HashMap<(PathBuf, String), Option<ExportTarget>>,
+    ) -> Option<ExportTarget> {
+        let key = (module_path.to_path_buf(), export_name.to_string());
+        if let Some(hit) = memo.get(&key) {
+            return hit.clone();
+        }
+        let result = self.resolve_export(module_path, export_name, &mut HashSet::new());
+        memo.insert(key, result.clone());
+        result
+    }
 
-        let (file_symbols, file_content) = match self.cache.get(&resolved_path) {
-            Some(entry) => entry,
-            None => return Ok(None),
-        };
+    /// Find what `export_name` of the module at `module_path` refers to,
+    /// following named re-exports (`export { a as b } from`), `export *`,
+    /// and local re-exports of imported bindings (`import { a } …; export { a }`).
+    /// Returns `None` when the module does not export the name.
+    fn resolve_export(
+        &self,
+        module_path: &Path,
+        export_name: &str,
+        visited: &mut HashSet<(PathBuf, String)>,
+    ) -> Option<ExportTarget> {
+        let path = module_path
+            .canonicalize()
+            .unwrap_or_else(|_| module_path.to_path_buf());
+        if !visited.insert((path.clone(), export_name.to_string())) {
+            return None; // re-export cycle
+        }
 
-        // Find the exported symbol
-        let export_name = if is_default {
-            "default"
-        } else {
-            imported_name.unwrap_or(local_name)
-        };
+        let _ = self.ensure_indexed(&path);
+        let (symbols, _) = self.cache.get(&path)?;
 
-        if let Some(export) = file_symbols.find_export_by_name(export_name) {
-            if let Some(local_id) = export.local_symbol_id {
-                if let Some(symbol) = file_symbols.find_symbol_by_id(local_id) {
-                    return Ok(Some(DefinitionResult::new(
-                        SymbolLocation::new(
-                            resolved_path,
-                            symbol.range,
-                            symbol.kind,
-                            symbol.name.clone(),
-                        ),
-                        file_content,
-                        DefinitionKind::External,
-                    )));
+        if let Some(export) = symbols
+            .exports
+            .iter()
+            .find(|e| e.name == export_name && e.name != "*")
+        {
+            return Some(self.follow_export(&path, &symbols, export, visited));
+        }
+
+        // `export * from './x'` forwards every name except `default`.
+        if export_name != "default" {
+            for export in symbols.exports.iter().filter(|e| e.name == "*") {
+                let Some(source) = &export.re_export_from else {
+                    continue;
+                };
+                let Ok(target) = self.resolve_module(source, &path) else {
+                    continue;
+                };
+                if let Some(found) = self.resolve_export(&target, export_name, visited) {
+                    return Some(found);
                 }
             }
-            return Ok(Some(DefinitionResult::new(
-                SymbolLocation::new(
-                    resolved_path,
-                    export.range,
-                    language_core::SymbolKind::Export,
-                    export.name.clone(),
-                ),
-                file_content,
-                DefinitionKind::External,
-            )));
         }
 
-        // Check for default export
-        if is_default {
-            if let Some(export) = file_symbols.get_default_export() {
-                return Ok(Some(DefinitionResult::new(
-                    SymbolLocation::new(
-                        resolved_path,
-                        export.range,
-                        language_core::SymbolKind::Export,
-                        "default".to_string(),
-                    ),
-                    file_content,
-                    DefinitionKind::External,
-                )));
+        None
+    }
+
+    /// Follow a single export entry of the module at `path` to its declaration.
+    /// Falls back to the export site when the chain can't be followed (unresolvable
+    /// module, `export * as ns`, `export default <expression>`).
+    fn follow_export(
+        &self,
+        path: &Path,
+        symbols: &FileSymbols,
+        export: &ExportedSymbol,
+        visited: &mut HashSet<(PathBuf, String)>,
+    ) -> ExportTarget {
+        let site = ExportTarget::Site {
+            path: path.to_path_buf(),
+            range: export.specifier_range.unwrap_or(export.range),
+            name: export.name.clone(),
+        };
+
+        if let Some(source) = &export.re_export_from {
+            let Some(local_name) = &export.local_name else {
+                return site; // `export * as ns from './x'`
+            };
+            let Ok(target) = self.resolve_module(source, path) else {
+                return site;
+            };
+            return self
+                .resolve_export(&target, local_name, visited)
+                .unwrap_or(site);
+        }
+
+        let Some(symbol) = export
+            .local_symbol_id
+            .and_then(|id| symbols.find_symbol_by_id(id))
+        else {
+            return site;
+        };
+
+        // `import { a } from './x'; export { a };` — keep following.
+        let import = symbols.imports.iter().find(|i| {
+            i.local_name == symbol.name
+                && i.range.start <= symbol.range.start
+                && i.range.end >= symbol.range.end
+        });
+        if let Some(import) = import.filter(|i| !i.is_namespace) {
+            if let Ok(target) = self.resolve_module(&import.module_specifier, path) {
+                if let Some(found) =
+                    self.resolve_export(&target, import_export_name(import), visited)
+                {
+                    return found;
+                }
             }
         }
 
-        Ok(None)
+        ExportTarget::Symbol {
+            path: path.to_path_buf(),
+            symbol: symbol.clone(),
+        }
+    }
+
+    /// Turn a resolved export target into a [`DefinitionResult`].
+    fn target_definition(
+        &self,
+        target: ExportTarget,
+        kind: DefinitionKind,
+    ) -> Option<DefinitionResult> {
+        let (path, location) = match target {
+            ExportTarget::Symbol { path, symbol } => {
+                let loc = SymbolLocation::new(path.clone(), symbol.range, symbol.kind, symbol.name);
+                (path, loc)
+            }
+            ExportTarget::Site { path, range, name } => {
+                let loc = SymbolLocation::new(
+                    path.clone(),
+                    range,
+                    language_core::SymbolKind::Export,
+                    name,
+                );
+                (path, loc)
+            }
+        };
+        let (_, content) = self.cache.get(&path)?;
+        Some(DefinitionResult::new(location, content, kind))
     }
 
     /// Get the symbol cache (for testing/debugging).
@@ -728,6 +926,32 @@ impl AccurateAnalyzer {
     ) -> SemanticResult<Option<String>> {
         // TODO: Implement type inference using oxc's type system
         Ok(None)
+    }
+}
+
+/// Where an exported name lands after following re-exports.
+#[derive(Debug, Clone)]
+enum ExportTarget {
+    /// A declaration in `path`.
+    Symbol { path: PathBuf, symbol: Symbol },
+    /// The chain stops at an export site in `path` (e.g. the source module
+    /// can't be resolved, or `export default <expression>`).
+    Site {
+        path: PathBuf,
+        range: ByteRange,
+        name: String,
+    },
+}
+
+/// The name an import binding asks its source module for.
+fn import_export_name(import: &ImportedSymbol) -> &str {
+    if import.is_default {
+        "default"
+    } else {
+        import
+            .imported_name
+            .as_deref()
+            .unwrap_or(&import.local_name)
     }
 }
 
@@ -1280,12 +1504,8 @@ console.log(x);
         // silently losing every cross-file query (the insights/CLI
         // parity bug).
         //
-        // The analyzer's own contract is to land the definition on the
-        // barrel's re-export site; downstream codemod logic (e.g.
-        // debarrel's `resolveSpecifier`) walks the re-export chain
-        // from there. So "success" here means: a definition is found,
-        // it lives in the barrel, and it's flagged as an external
-        // (cross-file) kind.
+        // The definition follows the barrel's re-export through to the
+        // declaration in `math.ts`, flagged as an external (cross-file) kind.
         let fs_root: VfsPath = MemoryFS::new().into();
         fs_root.join("app/utils").unwrap().create_dir_all().unwrap();
 
@@ -1335,9 +1555,11 @@ console.log(x);
 
         let file_str = def.location.file_path.to_string_lossy().into_owned();
         assert!(
-            file_str.contains("utils") && file_str.ends_with("index.ts"),
-            "expected definition in the barrel (utils/index.ts), got {file_str:?}"
+            file_str.ends_with("utils/math.ts"),
+            "expected definition followed through the barrel to utils/math.ts, got {file_str:?}"
         );
+        assert_eq!(def.location.name, "add");
+        assert_eq!(def.location.kind, language_core::SymbolKind::Function);
         assert_eq!(def.kind, DefinitionKind::External);
     }
 
@@ -1384,6 +1606,156 @@ console.log(x);
             result.is_ok(),
             "Should resolve ./utils via fallback when tsconfig extends is broken, got: {:?}",
             result
+        );
+    }
+
+    /// Lays out the demo monorepo shape: a root tsconfig without `paths`,
+    /// `packages/tsconfig.json` mapping `@demo/shared` to the barrel, and a
+    /// barrel re-exporting from `./dates`.
+    fn create_monorepo(with_node_modules_link: bool, with_nested_paths: bool) -> TempDir {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "strict": true }, "include": ["workflows"] }"#,
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("packages/shared/src")).unwrap();
+        fs::create_dir_all(root.join("packages/web/src")).unwrap();
+        if with_nested_paths {
+            fs::write(
+                root.join("packages/tsconfig.json"),
+                r#"{
+                    "compilerOptions": {
+                        "baseUrl": ".",
+                        "paths": { "@demo/shared": ["./shared/src/index.ts"] }
+                    },
+                    "include": ["*/src"]
+                }"#,
+            )
+            .unwrap();
+        }
+        fs::write(
+            root.join("packages/shared/package.json"),
+            r#"{ "name": "@demo/shared", "main": "src/index.ts" }"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("packages/shared/src/dates.ts"),
+            "export function toMoment(d: Date) { return d; }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("packages/shared/src/index.ts"),
+            "export { toMoment } from \"./dates\";\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("packages/web/src/app.ts"),
+            "import { toMoment } from \"@demo/shared\";\ntoMoment(new Date());\n",
+        )
+        .unwrap();
+        if with_node_modules_link {
+            fs::create_dir_all(root.join("node_modules/@demo")).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(
+                "../../packages/shared",
+                root.join("node_modules/@demo/shared"),
+            )
+            .unwrap();
+        }
+        dir
+    }
+
+    fn assert_import_reaches_dates(workspace: &TempDir) {
+        let analyzer = AccurateAnalyzer::new(workspace.path().to_path_buf());
+        let app = workspace.path().join("packages/web/src/app.ts");
+        let content = fs::read_to_string(&app).unwrap();
+        let pos = content.find("toMoment").unwrap() as u32;
+        let def = analyzer
+            .get_definition(
+                &app,
+                &content,
+                ByteRange::new(pos, pos + 8),
+                DefinitionOptions::default(),
+            )
+            .unwrap()
+            .expect("definition for imported toMoment");
+        assert_eq!(def.kind, DefinitionKind::External, "{def:?}");
+        assert!(
+            def.location
+                .file_path
+                .ends_with("packages/shared/src/dates.ts"),
+            "expected dates.ts, got {:?}",
+            def.location.file_path
+        );
+        assert_eq!(def.location.kind, language_core::SymbolKind::Function);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_workspace_package_name_follows_barrel() {
+        let workspace = create_monorepo(true, false);
+        assert_import_reaches_dates(&workspace);
+    }
+
+    #[test]
+    fn test_nested_tsconfig_paths_follow_barrel() {
+        let workspace = create_monorepo(false, true);
+        assert_import_reaches_dates(&workspace);
+    }
+
+    #[test]
+    fn test_reexport_cycle_terminates() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("a.ts"), "export * from './b';\n").unwrap();
+        fs::write(dir.path().join("b.ts"), "export * from './a';\n").unwrap();
+        let main = dir.path().join("main.ts");
+        let content = "import { missing } from './a';\nmissing();\n";
+        fs::write(&main, content).unwrap();
+
+        let analyzer = AccurateAnalyzer::new(dir.path().to_path_buf());
+        let pos = content.find("missing").unwrap() as u32;
+        let def = analyzer
+            .get_definition(
+                &main,
+                content,
+                ByteRange::new(pos, pos + 7),
+                DefinitionOptions::default(),
+            )
+            .unwrap()
+            .expect("falls back to the import statement");
+        assert_eq!(def.kind, DefinitionKind::Import);
+    }
+
+    #[test]
+    fn test_reexport_ignores_same_named_local_in_barrel() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("impl.ts"), "export function thing() {}\n").unwrap();
+        fs::write(
+            dir.path().join("index.ts"),
+            "function helper() { const thing = 1; return thing; }\nexport { thing } from './impl';\n",
+        )
+        .unwrap();
+        let main = dir.path().join("main.ts");
+        let content = "import { thing } from './index';\nthing();\n";
+        fs::write(&main, content).unwrap();
+
+        let analyzer = AccurateAnalyzer::new(dir.path().to_path_buf());
+        let pos = content.find("thing").unwrap() as u32;
+        let def = analyzer
+            .get_definition(
+                &main,
+                content,
+                ByteRange::new(pos, pos + 5),
+                DefinitionOptions::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            def.location.file_path.ends_with("impl.ts"),
+            "{:?}",
+            def.location.file_path
         );
     }
 }

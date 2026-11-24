@@ -58,27 +58,40 @@ pub fn setup_test_workspace(fixture_dir: &str) -> (TempDir, HashMap<String, Path
 
     let mut file_paths = HashMap::new();
 
-    // Copy all files from fixture directory to temp directory
+    // Copy all files (recursively) from fixture directory to temp directory.
+    // Keys are `/`-separated paths relative to the fixture directory.
     if fixture_path.exists() {
-        for entry in fs::read_dir(&fixture_path).expect("Failed to read fixture directory") {
-            let entry = entry.expect("Failed to read directory entry");
-            let file_name = entry.file_name();
-            let file_name_str = file_name.to_string_lossy().to_string();
-
-            if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                let content = fs::read_to_string(entry.path()).unwrap_or_else(|e| {
-                    panic!("Failed to read fixture file {:?}: {}", entry.path(), e)
-                });
-                let dest_path = temp_dir.path().join(&file_name);
-                fs::write(&dest_path, &content).unwrap_or_else(|e| {
-                    panic!("Failed to write fixture file {:?}: {}", dest_path, e)
-                });
-                file_paths.insert(file_name_str, dest_path);
-            }
-        }
+        copy_fixture_dir(&fixture_path, temp_dir.path(), "", &mut file_paths);
     }
 
     (temp_dir, file_paths)
+}
+
+fn copy_fixture_dir(
+    src: &Path,
+    dest: &Path,
+    prefix: &str,
+    file_paths: &mut HashMap<String, PathBuf>,
+) {
+    for entry in fs::read_dir(src).expect("Failed to read fixture directory") {
+        let entry = entry.expect("Failed to read directory entry");
+        let file_name = entry.file_name();
+        let key = format!("{prefix}{}", file_name.to_string_lossy());
+        let file_type = entry.file_type().expect("Failed to read file type");
+        let dest_path = dest.join(&file_name);
+
+        if file_type.is_dir() {
+            fs::create_dir_all(&dest_path).expect("Failed to create fixture subdirectory");
+            copy_fixture_dir(&entry.path(), &dest_path, &format!("{key}/"), file_paths);
+        } else if file_type.is_file() {
+            let content = fs::read_to_string(entry.path()).unwrap_or_else(|e| {
+                panic!("Failed to read fixture file {:?}: {}", entry.path(), e)
+            });
+            fs::write(&dest_path, &content)
+                .unwrap_or_else(|e| panic!("Failed to write fixture file {:?}: {}", dest_path, e));
+            file_paths.insert(key, dest_path);
+        }
+    }
 }
 
 /// Provider scope type
