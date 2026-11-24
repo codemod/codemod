@@ -102,6 +102,15 @@ interface DefinitionResult<M> {
 - No semantic provider is configured
 - No symbol is found at this position
 
+In workspace scope, JS/TS definitions follow re-exports to the original declaration. An imported
+name, and the name inside a named re-export (`export { a } from "./a"`,
+`export { a as b } from "./a"`, `import { a } from "./a"; export { a }`), resolve to the
+declaration, passing through any `export *` on the way. A name used in the file (for example a
+call site) resolves to its local binding in the import statement first (`kind: 'local'`); call
+`definition()` on that node to reach the declaration. Module specifiers resolve as the root
+tsconfig says (its `paths`), and through workspace packages linked in `node_modules`; a bare
+specifier that doesn't resolve that way is tried again with the tsconfig nearest the importing file.
+
 <Note>
   When a symbol comes from an unresolved import
   (e.g., `import x from "some-external-module"`), `definition()` now returns the import statement 
@@ -135,6 +144,11 @@ interface FileReferences<M> {
   In file scope mode, `references()` only searches the current file. In
   workspace scope mode, it searches all indexed files in the workspace.
 </Note>
+
+In workspace scope, `references()` on an exported declaration also finds files that import it
+through barrels, plus the source-side name of each named re-export (`a` in
+`export { a as b } from "./a"`). An `export *` is followed but has no node of its own in the
+result. On a name inside a re-export it answers for the declaration being re-exported.
 
 ### `root.write(content)`
 
