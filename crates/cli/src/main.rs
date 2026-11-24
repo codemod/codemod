@@ -688,6 +688,51 @@ mod tests {
         );
     }
 
+    /// `npx codemod run pkg@ver --approve` failed with "unexpected argument":
+    /// a registry run takes `workflow run`'s non-interactive flags.
+    #[test]
+    fn run_takes_the_non_interactive_flags_workflow_run_takes() {
+        let flags = [
+            "--approve",
+            "--managed-git",
+            "--dry-run",
+            "--no-interactive",
+            "--param",
+            "a=b",
+            "--allow-fs",
+            "--allow-fetch",
+            "--allow-child-process",
+            "--allow-dirty",
+        ];
+        let workflow_run = Cli::try_parse_from(
+            ["codemod", "workflow", "run", "-w", "workflow.ts"]
+                .into_iter()
+                .chain(flags),
+        );
+        assert!(workflow_run.is_ok(), "{:?}", workflow_run.err());
+
+        let run_args = |cli: Cli| match cli.command {
+            Some(Commands::Run(args)) => args,
+            _ => panic!("not a run command"),
+        };
+        for prefix in [
+            vec!["codemod", "run", "@org/pkg@1.0.0"],
+            vec!["codemod", "@org/pkg@1.0.0"],
+        ] {
+            let args: Vec<String> = prefix.into_iter().chain(flags).map(String::from).collect();
+            let full = match classify_implicit_route(&args[1..]) {
+                Some(ImplicitRoute::Run(full)) if args[1] != "run" => full,
+                _ => args,
+            };
+            let run = run_args(Cli::try_parse_from(&full).unwrap_or_else(|e| panic!("{e}")));
+            assert_eq!(
+                format!("{run:?}").matches(": true").count(),
+                8,
+                "approve, managed_git, dry_run, no_interactive, allow_fs, allow_fetch, allow_child_process, allow_dirty: {run:?}"
+            );
+        }
+    }
+
     #[test]
     fn parser_accepts_ai_install_without_subcommand() {
         let parse_result = Cli::try_parse_from(["codemod", "ai"]);

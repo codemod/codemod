@@ -57,6 +57,19 @@ pub struct RunFlags {
     pub format: OutputFormat,
 }
 
+/// Flags for starting a run that `workflow run` and `run` (registry
+/// packages) share; `workflow resume` has its own `--approve`.
+#[derive(clap::Args, Debug, Default, Clone)]
+pub struct StartFlags {
+    /// Give every approval the workflow asks for (manual steps, pull requests)
+    #[arg(long)]
+    pub approve: bool,
+
+    /// Let branch, commit and pull request steps change the git repository
+    #[arg(long)]
+    pub managed_git: bool,
+}
+
 impl RunFlags {
     /// Capabilities granted with `--allow-*` flags.
     pub fn granted(&self) -> HashSet<LlrtSupportedModules> {
