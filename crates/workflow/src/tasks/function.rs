@@ -85,8 +85,7 @@ pub(crate) fn call(
         })
         .await;
         let (failure, changes) = side_effects(sandbox);
-        // Timers or promises the code left running would abort the process
-        // when the runtime is freed: wait for them a little, else leak it.
+        // Clears timers the code left running, so the runtime can be freed.
         worker.shutdown(isolate::SHUTDOWN_GRACE).await;
         Ok::<_, String>((json?, failure, changes))
     })?;
