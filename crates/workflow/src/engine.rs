@@ -437,6 +437,7 @@ impl Engine {
             test,
             stopped: AtomicBool::new(false),
             interruption: Mutex::new(None),
+            assess: Default::default(),
         });
         Execution {
             record,

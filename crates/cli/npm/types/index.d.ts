@@ -7,4 +7,5 @@
 /// <reference path="modules/jssg-compat.d.ts" />
 /// <reference path="modules/deps.d.ts" />
 /// <reference path="modules/git.d.ts" />
+/// <reference path="modules/assess.d.ts" />
 /// <reference path="modules/langs.d.ts" />

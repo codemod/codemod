@@ -89,7 +89,7 @@ impl Fold {
             workflow_path,
         } = self;
         let json = block_on(async move {
-            let sandbox = isolate::start(options, registry).await?;
+            let sandbox = isolate::start(options, registry, None).await?;
             let json = async_with!(sandbox.context => |ctx| {
                 let run = async {
                     let declared = Module::declare(ctx.clone(), name.as_str(), module.as_str())?;

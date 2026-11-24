@@ -66,7 +66,14 @@ pub fn is_git_module(specifier: &str) -> bool {
     codemod_module(specifier) == Some("git")
 }
 
-/// Prelude appended to every extracted callback module.
+/// Specifier of the assessment module: `assess` and the question builders.
+pub const ASSESS_MODULE: &str = "codemod/assess";
+
+/// Whether a specifier names the assessment module (`codemod/assess`, or
+/// `codemod:assess`).
+pub fn is_assess_module(specifier: &str) -> bool {
+    codemod_module(specifier) == Some("assess")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{file}:{line}:{column}: {message}")]
@@ -132,7 +139,9 @@ pub fn module_class(specifier: &str) -> Result<ModuleClass, String> {
     match codemod_module(specifier) {
         Some("workflow") => return Ok(ModuleClass::Workflow),
         // `codemod/git` only describes steps, as `codemod/workflow` does.
-        Some("ast-grep" | "deps" | "git") => return Ok(ModuleClass::Pure),
+        // `codemod/assess` builds questions anywhere; `assess()` itself
+        // rejects outside a step, as `registry` does.
+        Some("ast-grep" | "deps" | "git" | "assess") => return Ok(ModuleClass::Pure),
         Some(_) => return Ok(ModuleClass::StepsOnly),
         None => {}
     }
@@ -1205,6 +1214,60 @@ pub fn check_imports(file: &Path, source: &str, built: &Built) -> Result<(), Bui
         }
     }
     Ok(())
+}
+
+/// Whether the workflow at `file`, or a local file it imports (directly or
+/// not), imports `codemod/assess`: the run then needs a decision model, which
+/// the CLI checks for before any step runs. Packages in `node_modules` are
+/// not followed.
+pub fn uses_assess(file: &Path) -> bool {
+    use codemod_sandbox::sandbox::resolvers::{ModuleResolver, OxcResolver};
+
+    let Ok(file) = std::path::absolute(file) else {
+        return false;
+    };
+    let base_dir = file
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let Ok(resolver) = OxcResolver::new(base_dir, None) else {
+        return false;
+    };
+    let mut pending = vec![file];
+    let mut visited = HashSet::new();
+    while let Some(path) = pending.pop() {
+        if !visited.insert(path.clone()) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for specifier in module_specifiers(&path, &text) {
+            if is_assess_module(&specifier) {
+                return true;
+            }
+            if !(specifier.starts_with("./") || specifier.starts_with("../")) {
+                continue;
+            }
+            if let Ok(resolved) = resolver.resolve(&path.to_string_lossy(), &specifier) {
+                let resolved = PathBuf::from(resolved);
+                let script = resolved.extension().is_some_and(|e| {
+                    matches!(
+                        e.to_str(),
+                        Some("ts" | "mts" | "cts" | "tsx" | "js" | "mjs" | "cjs" | "jsx")
+                    )
+                });
+                if script
+                    && !resolved
+                        .components()
+                        .any(|c| c.as_os_str() == "node_modules")
+                {
+                    pending.push(resolved);
+                }
+            }
+        }
+    }
+    false
 }
 
 struct ImportWalk<'a, R> {

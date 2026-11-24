@@ -253,7 +253,27 @@ impl HostedRun {
             alongside: false,
         };
         let (changes, failures) = for_each_file::commit_effects(&task, files)?;
-        Ok(json!({ "changes": changes, "failures": failures }))
+        let mut committed = json!({ "changes": changes, "failures": failures });
+        // What the step's `assess()` calls used, as the CLI reports it.
+        if let Some(usage) = self.context.assess.take(position) {
+            task.log(usage.describe());
+            committed["assessed"] = json!(usage);
+        }
+        self.context.assess.finish_step(position);
+        Ok(committed)
+    }
+
+    /// Answer an `assess()` call of the step at `position` (the request as
+    /// `codemod/assess` sends it). Blocks until the model answers. Returns
+    /// `{ ok: true, value }` or `{ ok: false, error }` as JSON.
+    pub fn assess(&self, position: u64, request: &str) -> String {
+        if let Err(error) = self.open() {
+            return json!({ "ok": false, "error": error.to_string() }).to_string();
+        }
+        match crate::assess::ask(&self.context, position, &self.context.cancel, request) {
+            Ok(value) => format!(r#"{{"ok":true,"value":{value}}}"#),
+            Err(error) => json!({ "ok": false, "error": error }).to_string(),
+        }
     }
 
     /// Report a step's progress through its files.

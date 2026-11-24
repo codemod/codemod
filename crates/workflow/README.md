@@ -30,6 +30,7 @@ export default async function main() {
 | `src/engine.rs` | `Engine::start` / `resume` / `cancel` over a `RunStore` (`crates/state`) |
 | `src/tasks/` | Host tasks, each a thin adapter over an existing executor: `forEachFile`, `astGrep`, `shell`, `shard`, `codemod`, `agent`, `installSkill`, `approval`, `branch` / `commit` / `pullRequest` (imported from `codemod/git`, `src/js/git.ts`), and `dependencyGraph` (over the `codemod-deps` crate) |
 | `src/js/deps.ts`, `src/deps_host.rs`, `src/js/dependencies.ts`, `src/js/semver.ts` | `codemod/deps`: `dependencyGraph`, `registry` and `semver` in the body (`deps.ts`) and in isolates (`dependencies.ts`), batching lookups started together; the host side over `Services::package_registry` |
+| `src/assess/`, `src/js/assess.ts` | `codemod/assess`: typed questions about a file in callbacks and function steps (`questions.rs`), the context assembled from its imports through re-exports and its dependents (`context.rs`), System One and OpenAI Decisions over HTTP with retries (`http.rs`), and which model answers (`config.rs`); the run's model is `Services::decision` |
 | `src/tasks/changes.rs` | One commit path for every task that edits files: conflict checks, dry run, diffs |
 | `src/compat/` | workflow.yaml to TypeScript; `${{ }}` expressions become TypeScript or fall back to `evaluate()`, which uses the YAML engine's evaluator |
 | `src/events.rs`, `src/interaction.rs` | What the engine reports, and the questions it asks; the CLI implements both |

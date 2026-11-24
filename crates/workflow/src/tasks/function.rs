@@ -36,7 +36,12 @@ struct Outcome {
 pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome, String> {
     let request: Request =
         serde_json::from_value(request).map_err(|e| format!("bad function step: {e}"))?;
-    let (result, changes) = call(task, &request.callback, &request.captures, None)?;
+    let called = call_with(task, &request.callback, &request.captures, None, true);
+    if let Some(usage) = task.run.assess.take(task.position) {
+        task.log(usage.describe());
+    }
+    task.run.assess.finish_step(task.position);
+    let (result, changes) = called?;
     let planned = changes::plan(task, &changes)?;
     changes::commit(task, &planned, task.run.dry_run)?;
     Ok(TaskOutcome::new(result))
@@ -51,6 +56,17 @@ pub(crate) fn call(
     captures: &Value,
     args: Option<&Value>,
 ) -> Result<(Value, Vec<JssgFileChange>), String> {
+    call_with(task, callback, captures, args, false)
+}
+
+/// [`call`], where a function step (`assess`) may call `assess()`.
+fn call_with(
+    task: &TaskContext<'_>,
+    callback: &str,
+    captures: &Value,
+    args: Option<&Value>,
+    assess: bool,
+) -> Result<(Value, Vec<JssgFileChange>), String> {
     let module = task
         .run
         .callbacks
@@ -63,9 +79,10 @@ pub(crate) fn call(
     let name = module_name(task, callback);
     let workflow_path = task.run.workflow_path.clone();
     let registry = isolates.registry.clone();
+    let assess = assess.then(|| crate::assess::AssessHandle::new(task));
 
     let (json, failure, changes) = block_on(async move {
-        let worker = isolate::start(options, registry).await?;
+        let worker = isolate::start(options, registry, assess).await?;
         let sandbox = &worker;
         let json: Result<String, String> = async_with!(sandbox.context => |ctx| {
             let run = async {

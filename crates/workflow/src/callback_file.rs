@@ -97,7 +97,7 @@ pub async fn run_callback_file(request: CallbackFileRequest) -> Result<CallbackF
         semantic_provider,
         pending_files: None,
     };
-    let worker = isolate::start(options, None).await?;
+    let worker = isolate::start(options, None, None).await?;
     let sandbox = &worker;
     let outcome: Result<FileOutcome, String> = async_with!(sandbox.context => |ctx| {
         let setup = async {

@@ -34,6 +34,19 @@ pub struct OpenOptions {
     pub store: Option<String>,
     /// Continue this run instead of starting one (`store: "local"`).
     pub resume: Option<String>,
+    /// The decision model `codemod/assess` asks, over what the workflow's
+    /// codemod.yaml, the user config and the environment choose.
+    pub decision_model: Option<DecisionModelOptions>,
+}
+
+#[napi(object)]
+pub struct DecisionModelOptions {
+    /// `"systemone"` or `"openai"`.
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    /// The API root, for a proxy or a fake in tests.
+    pub base_url: Option<String>,
 }
 
 struct Inner {
@@ -92,6 +105,7 @@ impl Run {
                 .map_err(|_| Error::from_reason(format!("unknown capability '{name}'")))?;
             capabilities.insert(module);
         }
+        let decision = decision_model(&workflow, options.decision_model)?;
         let events = Arc::new(CollectEvents::default());
         let summary = Arc::new(Summary::default());
         let engine = Engine::new(
@@ -103,6 +117,7 @@ impl Run {
             Services {
                 capabilities,
                 summary: Arc::clone(&summary),
+                decision,
                 ..Services::default()
             },
         );
@@ -228,6 +243,14 @@ impl Run {
         serde_json::from_str(&json).map_err(to_napi)
     }
 
+    /// Answer an `assess()` call of the step at `position`. Resolves to
+    /// `{ ok: true, value }` or `{ ok: false, error }` as JSON.
+    #[napi]
+    pub async fn assess(&self, position: u32, request: String) -> Result<String> {
+        let inner = Arc::clone(&self.inner);
+        off_thread(move || inner.run.assess(position.into(), &request)).await
+    }
+
     /// The files a `forEachFile` selector picks: `{ language, files: [[path, text]] }`.
     #[napi]
     pub async fn select_files(&self, selector: String) -> Result<Value> {
@@ -312,4 +335,44 @@ fn manifest_capabilities(workflow_dir: &Path) -> HashSet<LlrtSupportedModules> {
 
 fn to_napi(error: impl std::fmt::Display) -> Error {
     Error::from_reason(error.to_string())
+}
+
+/// The decision model for a run that uses `codemod/assess`: chosen as the
+/// CLI chooses it, with `options` over the environment. Nobody is asked: a
+/// call without a key fails, naming what to set.
+fn decision_model(
+    workflow: &Path,
+    options: Option<DecisionModelOptions>,
+) -> Result<Option<Arc<dyn codemod_workflow::assess::DecisionModel>>> {
+    use codemod_workflow::assess::config::Layers;
+    use codemod_workflow::assess::HttpDecisionModels;
+
+    if options.is_none() && !(workflow.is_file() && codemod_workflow::uses_assess(workflow)) {
+        return Ok(None);
+    }
+    let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let mut layers = Layers::for_workflow(workflow).map_err(Error::from_reason)?;
+    if let Some(options) = options {
+        if options.provider.is_some() || options.model.is_some() {
+            // Over the workflow's choice, as a call's would be.
+            layers.workflow = codemod_workflow::assess::ModelPreference {
+                provider: options.provider.clone(),
+                model: options.model,
+            };
+        }
+        if let Some(provider) = options.provider {
+            env.insert("DECISION_PROVIDER".into(), provider);
+        }
+        // Given here, they are for whichever provider answers.
+        for provider in codemod_workflow::assess::Provider::ALL {
+            if let Some(key) = &options.api_key {
+                env.insert(provider.key_var().into(), key.clone());
+            }
+            if let Some(url) = &options.base_url {
+                env.insert(provider.base_url_var().into(), url.clone());
+            }
+        }
+    }
+    let models = HttpDecisionModels::new(layers, env).map_err(Error::from_reason)?;
+    Ok(Some(Arc::new(models)))
 }

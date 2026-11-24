@@ -106,7 +106,13 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         &selector,
         &files,
         request.reduce.as_ref(),
+        true,
     )?;
+    let assessed = run.assess.take(task.position);
+    run.assess.finish_step(task.position);
+    if let Some(usage) = &assessed {
+        task.log(usage.describe());
+    }
 
     let mut total = 0;
     let mut outputs = Vec::new();
@@ -154,7 +160,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         .into_iter()
         .map(|(path, error)| json!({ "path": path, "error": error }))
         .collect();
-    let result = match reduced {
+    let mut result = match reduced {
         Some(reduced) => json!({
             "reduced": reduced,
             "changes": changes,
@@ -166,6 +172,9 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
             "failures": failures,
         }),
     };
+    if let Some(usage) = assessed {
+        result["assessed"] = json!(usage);
+    }
     Ok(TaskOutcome::new(result).with_failures(failed, total))
 }
 
@@ -197,7 +206,8 @@ struct Ran {
 /// Run the extracted callback `callback` on the selected `files`, in
 /// workers, as the selector says (language, concurrency, semantic analysis,
 /// capabilities, `containing`). Each worker reads its files. Gives each
-/// file's outcome, in the order of `files`; nothing is committed.
+/// file's outcome, in the order of `files`; nothing is committed. With
+/// `assess`, the callback may call `assess()` from `codemod/assess`.
 fn run_callback(
     task: &TaskContext<'_>,
     callback: &str,
@@ -205,6 +215,7 @@ fn run_callback(
     selector: &Selector,
     files: &[Selected],
     reduce: Option<&Reduce>,
+    assess: bool,
 ) -> Result<Ran, String> {
     let run = task.run;
     let module = run
@@ -288,6 +299,7 @@ fn run_callback(
                     let job = Job {
                         options,
                         registry: isolates.registry.clone(),
+                        assess: assess.then(|| crate::assess::AssessHandle::new(task)),
                         name: &name,
                         module,
                         captures: &captures,
@@ -360,7 +372,8 @@ pub(crate) fn callback_outputs(
     files: &[Selected],
 ) -> Result<Vec<FileOutput>, String> {
     // A filter changes nothing: what transforms changed is dropped.
-    let Ran { outcomes, .. } = run_callback(task, callback, captures, selector, files, None)?;
+    let Ran { outcomes, .. } =
+        run_callback(task, callback, captures, selector, files, None, false)?;
     Ok(files
         .iter()
         .zip(outcomes)
@@ -585,6 +598,7 @@ type WorkerResult = Result<Vec<(usize, Result<Done, String>)>, String>;
 struct Job<'a> {
     options: WorkerOptions<OxcResolver>,
     registry: Option<Arc<dyn Registry>>,
+    assess: Option<crate::assess::AssessHandle>,
     name: &'a str,
     module: &'a str,
     captures: &'a str,
@@ -606,6 +620,7 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
     let Job {
         options,
         registry,
+        assess,
         name,
         module,
         captures,
@@ -622,7 +637,7 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
         in_order,
     } = job;
     block_on(async move {
-        let worker = isolate::start(options, registry).await?;
+        let worker = isolate::start(options, registry, assess).await?;
         let sandbox = &worker;
         let results = async_with!(sandbox.context => |ctx| {
             let setup = async {

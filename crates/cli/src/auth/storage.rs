@@ -9,12 +9,24 @@ use std::path::PathBuf;
 
 use crate::auth::types::{AuthTokens, UserInfo};
 
+/// `config.json` in the codemod config directory. Other tools write to it
+/// too (an interactive launcher sets `decisionModel` and `agent`), so keys
+/// this version does not know are kept when it is saved.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub default_registry: String,
     pub registries: HashMap<String, RegistryAuthConfig>,
-    #[serde(default)]
     pub anonymous_feedback: AnonymousFeedbackConfig,
+    /// The decision model `codemod/assess` asks, unless the workflow or the
+    /// call names one: `{ "provider": "systemone" | "openai", "model": "..." }`.
+    #[serde(rename = "decisionModel", skip_serializing_if = "Option::is_none")]
+    pub decision_model: Option<codemod_workflow::assess::ModelPreference>,
+    /// The preferred coding agent (`claude-code`, `codex`, ...).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(flatten)]
+    pub other: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for Config {
@@ -47,6 +59,9 @@ impl Config {
             default_registry: registry_url.to_string(),
             registries,
             anonymous_feedback: AnonymousFeedbackConfig::default(),
+            decision_model: None,
+            agent: None,
+            other: serde_json::Map::new(),
         }
     }
 }
@@ -352,6 +367,37 @@ mod tests {
     use std::collections::HashSet;
     use std::fs;
     use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn the_decision_model_agent_and_unknown_keys_survive_a_save() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        // As another tool may write it: without the registry settings.
+        fs::write(
+            temp_dir.path().join("config.json"),
+            r#"{ "decisionModel": { "provider": "openai", "model": "gpt-6-luna" }, "agent": "claude-code", "launcher": { "lastRun": 1 } }"#,
+        )
+        .expect("expected config write");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        let config = storage.load_config().expect("config");
+        assert_eq!(config.agent.as_deref(), Some("claude-code"));
+        assert_eq!(
+            config
+                .decision_model
+                .as_ref()
+                .and_then(|d| d.provider.as_deref()),
+            Some("openai")
+        );
+        assert!(!config.default_registry.is_empty());
+        storage.enable_anonymous_feedback().expect("save");
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(temp_dir.path().join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved["decisionModel"]["model"], "gpt-6-luna");
+        assert_eq!(saved["agent"], "claude-code");
+        assert_eq!(saved["launcher"]["lastRun"], 1);
+        assert_eq!(saved["anonymous_feedback"]["enabled"], true);
+    }
 
     #[test]
     fn missing_feedback_config_defaults_to_disabled() {

@@ -527,3 +527,59 @@ export default async function main() {
     assert_eq!(result["steps"].as_array().unwrap().len(), 2);
     assert_eq!(fixture.read("src/a.ts"), "let a = 1;\n");
 }
+
+#[test]
+fn a_workflow_that_assesses_fails_before_any_step_without_permission_or_a_key() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { assess, yesNo } from "codemod/assess";
+export default async function main() {
+  await step("Mark", forEachFile("src/a.ts", (file) => { file.write("marked\n"); }));
+  await step("Ask", forEachFile("src/*.ts", (file) => assess(file, { questions: { ok: yesNo("Fine?") } })));
+}
+"#,
+    );
+    let home = TempDir::new().unwrap();
+    let run = |extra: &[&str]| {
+        let package = fixture.package.path().to_str().unwrap();
+        let target = fixture.target.path().to_str().unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codemod"));
+        command
+            .args(["workflow", "run", "-w", package, "--target", target])
+            .args(["--no-interactive", "--allow-dirty"])
+            .args(extra)
+            .env("CODEMOD_RUN_STORE_DIR", fixture.store.path())
+            .env("DISABLE_ANALYTICS", "true")
+            // No user config, and no key.
+            .env("HOME", home.path())
+            .env("XDG_CONFIG_HOME", home.path())
+            .env("APPDATA", home.path());
+        for name in [
+            "TYPESAFE_API_KEY",
+            "OPENAI_API_KEY",
+            "DECISION_API_KEY",
+            "DECISION_PROVIDER",
+            "DECISION_MODEL",
+        ] {
+            command.env_remove(name);
+        }
+        command.output().expect("failed to run codemod")
+    };
+
+    let output = run(&[]);
+    assert!(!output.status.success());
+    assert!(text(&output).contains("--allow-ai"), "{}", text(&output));
+
+    let output = run(&["--allow-ai"]);
+    assert!(!output.status.success());
+    assert!(
+        text(&output).contains("set TYPESAFE_API_KEY (or DECISION_API_KEY)"),
+        "{}",
+        text(&output)
+    );
+    // Neither run got to the first step.
+    assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
+}

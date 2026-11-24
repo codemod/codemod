@@ -6,7 +6,9 @@
 //! register under `codemod/<name>`.
 
 /// The codemod runtime modules, by name.
-pub const CODEMOD_MODULES: &[&str] = &["ast-grep", "workflow", "deps", "git", "runtime", "llm"];
+pub const CODEMOD_MODULES: &[&str] = &[
+    "ast-grep", "workflow", "deps", "git", "assess", "runtime", "llm",
+];
 
 /// The module a specifier names (`"ast-grep"` for both `codemod/ast-grep` and
 /// `codemod:ast-grep`), if it names one.

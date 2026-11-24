@@ -68,6 +68,9 @@ fn run_case_blocking(request: CaseRequest) -> Result<CaseRun> {
             capabilities: request.capabilities,
             registry: request.registry,
             summary: Arc::clone(&summary),
+            // A test asks the decision model only when it is set up in the
+            // environment; a missing key fails the call that needs it.
+            decision: crate::assess_preflight::test_decision_model(&workflow.path),
             ..Services::default()
         },
     );

@@ -398,6 +398,10 @@ A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>
   ```
 </ResponseField>
 
+<ResponseField name="--allow-ai" type="boolean">
+  Let `assess()` from [`codemod/assess`](/community/workflows/reference#assessing-files-with-codemod%2Fassess) send files to the decision model (System One unless configured otherwise). Without it, an interactive run asks before any step runs, and an unattended run that imports `codemod/assess` fails at once. The provider's key comes from the environment (`TYPESAFE_API_KEY`, `OPENAI_API_KEY`); an interactive run without one asks for a key to use for that run only. `workflow resume` checks both again.
+</ResponseField>
+
 A run is unattended when you pass `--no-interactive`, and also when there is no terminal to ask on (in CI, or with input piped in). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something.
 
 <ResponseField name="--managed-git" type="boolean">

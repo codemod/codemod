@@ -131,6 +131,21 @@ export interface RunWorkflowOptions {
   host?: "node" | "quickjs";
   /** The workflow file, when `workflow` is the module itself. */
   path?: PathLike;
+  /**
+   * The decision model `codemod/assess` asks: `provider` and `model` over
+   * what the workflow and the environment choose, and `apiKey` and
+   * `baseUrl` (a fake server, in tests) for whichever provider answers.
+   */
+  decisionModel?: DecisionModelOptions;
+}
+
+/** The decision model a test run's `codemod/assess` asks. */
+export interface DecisionModelOptions {
+  /** `"systemone"` or `"openai"`. */
+  provider?: string;
+  model?: string;
+  apiKey?: string;
+  baseUrl?: string;
 }
 
 export type RunStatus = "succeeded" | "failed" | "canceled" | "awaiting-approval" | "stopped";
@@ -327,6 +342,7 @@ export async function runWorkflow(
             capabilities: options.capabilities ?? [],
           },
           options.signal,
+          decisionEnv(options.decisionModel),
         );
     const files = readTree(dir);
     checkLabels(result, options);
@@ -428,6 +444,7 @@ async function runInProcess(
       path: options.path === undefined ? undefined : toPath(options.path),
       signal: options.signal,
       captureConsole: true,
+      decisionModel: options.decisionModel,
     });
   } catch (error) {
     throw new Error(`cannot run ${describeWorkflow(workflow, options)}: ${messageOf(error)}`, {
@@ -548,16 +565,34 @@ function labels(steps: readonly StepRun[]): string {
   return steps.length ? steps.map((step) => JSON.stringify(step.label)).join(", ") : "(none)";
 }
 
+/** The CLI's environment for `decisionModel`: it reads the same settings from there. */
+function decisionEnv(decision: DecisionModelOptions | undefined): Record<string, string> {
+  if (!decision) return {};
+  const env: Record<string, string> = {};
+  if (decision.provider !== undefined) env.DECISION_PROVIDER = decision.provider;
+  if (decision.model !== undefined) env.DECISION_MODEL = decision.model;
+  if (decision.apiKey !== undefined) {
+    env.TYPESAFE_API_KEY = decision.apiKey;
+    env.OPENAI_API_KEY = decision.apiKey;
+  }
+  if (decision.baseUrl !== undefined) {
+    env.TYPESAFE_BASE_URL = decision.baseUrl;
+    env.OPENAI_BASE_URL = decision.baseUrl;
+  }
+  return env;
+}
+
 function harness(
   spec: HarnessSpec | CallbackHarnessSpec,
   signal: AbortSignalLike | undefined,
+  env: Record<string, string> = {},
 ): Promise<RunResult> {
   const what = "workflow" in spec ? spec.workflow : spec.callback;
   const binary = codemodBinary();
   return new Promise((resolvePromise, reject) => {
     const child = spawn(binary, ["workflow", "harness"], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, NO_COLOR: "1", DISABLE_ANALYTICS: "true" },
+      env: { ...process.env, ...env, NO_COLOR: "1", DISABLE_ANALYTICS: "true" },
       // Stopping a process takes a real signal.
       signal: signal as AbortSignal | undefined,
     });
