@@ -136,7 +136,10 @@ impl SettingsFile {
     }
 
     /// Save the settings, keeping every other key in the file. `None` removes
-    /// its key.
+    /// its key. A file without registry settings (nobody logged in yet) gets
+    /// the defaults written too, as `codemod login` would: earlier CLI
+    /// versions (1.x, and 2.0 before alpha.7) cannot read the file without
+    /// them, and fail every command that loads it.
     pub fn save(&self, settings: &UserSettings) -> Result<()> {
         let mut object = match std::fs::read_to_string(&self.path) {
             Ok(text) => match serde_json::from_str::<Value>(&text) {
@@ -163,6 +166,21 @@ impl SettingsFile {
             Some(model) => object.insert(DECISION_MODEL_KEY.into(), serde_json::to_value(model)?),
             None => object.remove(DECISION_MODEL_KEY),
         };
+        let has_registry = object
+            .get("default_registry")
+            .and_then(Value::as_str)
+            .is_some_and(|registry| !registry.trim().is_empty());
+        if !has_registry {
+            if let Value::Object(defaults) =
+                serde_json::to_value(crate::auth::storage::Config::default())?
+            {
+                for key in ["default_registry", "registries"] {
+                    if let Some(value) = defaults.get(key) {
+                        object.insert(key.into(), value.clone());
+                    }
+                }
+            }
+        }
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create {}", parent.display()))?;
@@ -300,6 +318,47 @@ mod tests {
     }
 
     #[test]
+    fn a_new_file_gets_the_registry_settings_older_versions_need() {
+        // What 1.x and 2.0.0-alpha.6 require of config.json.
+        #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
+        struct EarlierConfig {
+            default_registry: String,
+            registries: std::collections::HashMap<String, Value>,
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = file_in(&dir);
+        let settings = UserSettings {
+            agent: None,
+            decision_model: Some(DecisionModel::default()),
+        };
+        file.save(&settings).unwrap();
+
+        let text = std::fs::read_to_string(file.path()).unwrap();
+        let earlier: EarlierConfig = serde_json::from_str(&text).unwrap();
+        let defaults = crate::auth::storage::Config::default();
+        assert_eq!(earlier.default_registry, defaults.default_registry);
+        assert!(earlier.registries.contains_key(&defaults.default_registry));
+        assert_eq!(file.load(), settings);
+
+        // Registry settings already there are left as they are.
+        std::fs::write(
+            file.path(),
+            r#"{"default_registry":"https://registry.example","registries":{"https://registry.example":{}}}"#,
+        )
+        .unwrap();
+        file.save(&settings).unwrap();
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+        assert_eq!(saved["default_registry"], "https://registry.example");
+        assert_eq!(
+            saved["registries"],
+            json!({ "https://registry.example": {} })
+        );
+    }
+
+    #[test]
     fn saving_none_removes_the_key() {
         let dir = tempfile::tempdir().unwrap();
         let file = file_in(&dir);
@@ -311,7 +370,9 @@ mod tests {
         file.save(&UserSettings::default()).unwrap();
         let saved: Value =
             serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
-        assert_eq!(saved, json!({}));
+        let mut keys: Vec<&String> = saved.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["default_registry", "registries"]);
     }
 
     #[test]
