@@ -168,6 +168,8 @@ test("rewrites the files the first step found", async () => {
 });
 ```
 
+A `given` result has the step's shape: a `forEachFile` step with a [reducer](/community/workflows/reference#reducing-outputs) gives `{ reduced, changes, failures }`, so `given: { "Count rewrites": { reduced: 3 } }` is enough when the workflow only reads `reduced`.
+
 A label in `until` or `given` that matches no step is an error that lists the run's steps. Steps without a label get one from their task, such as `forEachFile src/**/*.ts`.
 
 ### Test a callback file

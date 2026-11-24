@@ -360,10 +360,49 @@ declare module "codemod:workflow" {
   }
 
   /**
+   * What `forEachFile(selector, callback, reducer, initial)` gives: the
+   * callback's outputs folded into one value, in place of `outputs`.
+   */
+  export interface ReducedResult<Reduced> {
+    /** What the reducer returned for the last output, or `initial` when no file returned one. */
+    reduced: Reduced;
+    changes: FileChanges;
+    /**
+     * Files whose callback threw; their outputs are not folded. With some,
+     * the step is partial; when the callback throws on every file, the step
+     * fails instead.
+     */
+    failures: FileFailure[];
+  }
+
+  /**
+   * A `forEachFile` reducer: folds one file's output into the result so far,
+   * as `Array#reduce`'s callback does. `path` is the file's path. Outputs
+   * come in path order. It may be async.
+   *
+   * @example
+   * ```ts
+   * // scripts/by-package.ts
+   * import type { FileReducer } from "codemod/workflow";
+   *
+   * const byPackage: FileReducer<Record<string, number>, number> = (counts, count, path) => {
+   *   const name = path.split("/")[1] ?? ".";
+   *   return { ...counts, [name]: (counts[name] ?? 0) + count };
+   * };
+   * export default byPackage;
+   * ```
+   */
+  export type FileReducer<Reduced, Output> = (
+    result: Reduced,
+    output: Output,
+    path: string,
+  ) => Reduced | PromiseLike<Reduced>;
+
+  /**
    * A `forEachFile` callback kept in its own file, as the file's default
    * export: annotate it with this type, then import it into the workflow
    * and give it to `forEachFile`. `Output` is what it returns for a file,
-   * collected into the step's `outputs`.
+   * collected into the step's `outputs` (or folded by its reducer).
    *
    * @example
    * ```ts
@@ -423,6 +462,18 @@ declare module "codemod:workflow" {
     selector: AstGrepSelector,
     rules: AstGrepHandler,
   ): Task<AstGrepResult>;
+  /** `astGrep(...)` returns nothing per file, so there is nothing to reduce. */
+  export function forEachFile(
+    selector: AstGrepSelector,
+    rules: AstGrepHandler,
+    reducer: AstGrepTakesNoReducer,
+    initial?: unknown,
+  ): never;
+
+  /** What a reducer given with `astGrep(...)` is told it should be: it takes none. */
+  export interface AstGrepTakesNoReducer {
+    "astGrep(...) returns nothing per file, so there is nothing to reduce: give a reducer only with a callback": never;
+  }
 
   /**
    * Runs `callback` once for every selected file, in parallel, in isolates.
@@ -455,6 +506,55 @@ declare module "codemod:workflow" {
   export function forEachFile<Returned>(
     callback: (file: WorkflowFile) => Returned & NoInfer<CallbackReturn<Returned>>,
   ): Task<ForEachFileResult<Exclude<Awaited<Returned>, void | undefined>>>;
+  /**
+   * Runs `callback` on every selected file, as above, and folds what it
+   * returns into one value with `reducer`, starting from `initial` (JSON),
+   * as `Array#reduce` does. The step's result has that value as `reduced`,
+   * in place of `outputs`: with many files, the outputs are never all held
+   * at once.
+   *
+   * Each output is folded as its file finishes, in path order whatever
+   * order files finish in, so the result is the same on every run. Files
+   * that return nothing, or whose callback throws, are not folded. A
+   * reducer that throws fails the step, and nothing the step's callbacks
+   * changed is written. Write the reducer inline or import it from its
+   * file, as callbacks are; it runs in an isolate of its own.
+   *
+   * @example
+   * ```ts
+   * const { reduced } = await step(forEachFile(
+   *   "packages/*\/src/**\/*.ts",
+   *   (file) => {
+   *     const found = parse(file).root().findAll({ rule: { pattern: "var $A = $B" } });
+   *     return found.length || undefined;
+   *   },
+   *   (counts, count, path) => {
+   *     const name = path.split("/")[1];
+   *     return { ...counts, [name]: (counts[name] ?? 0) + count };
+   *   },
+   *   {} as Record<string, number>,
+   * ));
+   * reduced; // Record<string, number>
+   * ```
+   */
+  export function forEachFile<Returned, Reduced>(
+    selector: FileSelector,
+    callback: (file: WorkflowFile) => Returned & NoInfer<CallbackReturn<Returned>>,
+    reducer: (
+      result: Reduced,
+      output: Exclude<Awaited<Returned>, void | undefined>,
+      path: string,
+    ) => ReducerReturn<Reduced>,
+    initial: Reduced,
+  ): Task<ReducedResult<Reduced>>;
+
+  /**
+   * What a `forEachFile` reducer may return: the result, as JSON, or a
+   * promise of it. Anything else is marked with `NotJson`, as for callbacks.
+   */
+  export type ReducerReturn<Reduced> =
+    | (Reduced & NoInfer<JsonCompatible<Reduced>>)
+    | PromiseLike<Reduced & NoInfer<JsonCompatible<Reduced>>>;
 
   /**
    * What a `forEachFile` callback may return: JSON or nothing, or a promise
@@ -853,36 +953,6 @@ declare module "codemod:workflow" {
    * the run pauses here until `codemod workflow resume --id <id> --approve`.
    */
   export function approval(message: string): Task<{ approved: true }>;
-
-  /**
-   * Checks out a branch for the following changes. Only with `--managed-git`.
-   * Git steps share one checkout: one started while other steps are still
-   * running fails, so run shards that use git one at a time.
-   */
-  export function branch(name: string): Task<Skippable<{ branch: string }>>;
-
-  /** Commits changes. Only with `--managed-git`. Not alongside other steps; see `branch`. */
-  export function commit(
-    message: string,
-    options?: { add?: readonly string[]; allowEmpty?: boolean },
-  ): Task<Skippable<{ committed: boolean }>>;
-
-  export interface PullRequestOptions {
-    title: string;
-    body?: string;
-    draft?: boolean;
-    base?: string;
-    /** Defaults to the current branch. */
-    branch?: string;
-  }
-
-  /**
-   * Pushes the branch and opens a pull request. Only with `--managed-git`.
-   * Not alongside other steps; see `branch`.
-   */
-  export function pullRequest(
-    options: PullRequestOptions,
-  ): Task<Skippable<{ branch: string; url: string | null }>>;
 
   /** A step failed. */
   export class StepError extends Error {

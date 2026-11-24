@@ -124,6 +124,11 @@ interface KindOptions {
   kinds?: string | string[];
 }
 
+interface DependentOptions extends KindOptions {
+  /** Also list third-party packages; by default only the repository's own. */
+  includeThirdParty?: boolean;
+}
+
 function kindsOf(options?: KindOptions): string {
   const kinds = options?.kinds;
   if (kinds === undefined) return "";
@@ -160,7 +165,7 @@ interface NodeRecord {
   ecosystem: Ecosystem;
   name: string;
   version: string;
-  workspace?: string | null;
+  dir?: string | null;
 }
 
 interface EdgeRecord {
@@ -204,26 +209,32 @@ export function __graph() {
     (JSON.parse(host.edges(direction, String(key), kindsOf(options))) as EdgeRecord[]).map(
       (edge) => new DependencyEdge(edge),
     );
+  /** Edges onto a package, from the repository's own packages unless `includeThirdParty`. */
+  const dependentEdges = (direction: string, key: string | number, options?: DependentOptions) => {
+    const found = edges(direction, key, options);
+    return options?.includeThirdParty ? found : found.filter((edge) => edge.from.local);
+  };
   const nodesOf = (json: string) => (JSON.parse(json) as NodeRecord[]).map(nodeOf);
 
   class PackageNode {
     readonly ecosystem: Ecosystem;
     readonly name: string;
     readonly version: string;
-    /** Directory of one of the repository's own packages; null for third-party packages. */
-    readonly workspace: string | null;
+    /** Directory of one of the repository's own packages; null for installed packages. */
+    readonly dir: string | null;
 
     constructor(record: NodeRecord) {
       ids.set(this, record.id);
       this.ecosystem = record.ecosystem;
       this.name = record.name;
       this.version = record.version;
-      this.workspace = record.workspace ?? null;
+      this.dir = record.dir ?? null;
       Object.freeze(this);
     }
 
-    get isWorkspace(): boolean {
-      return this.workspace !== null;
+    /** Whether this is one of the repository's own packages. */
+    get local(): boolean {
+      return this.dir !== null;
     }
 
     /** Edges this node declares. */
@@ -231,16 +242,9 @@ export function __graph() {
       return edges("out", idOf(this), options);
     }
 
-    /** Edges installed onto this exact node. */
-    dependents(options?: KindOptions): DependencyEdge[] {
-      return edges("in", idOf(this), options);
-    }
-
-    /** Each workspace that reaches this node, with its shortest chain (workspace first). */
-    workspacesReaching(options?: KindOptions) {
-      return graph
-        .chains({ from: graph.workspaces(), to: this, kinds: options?.kinds })
-        .map((chain) => Object.freeze({ workspace: chain[0], chain }));
+    /** Edges installed onto this exact node, from the repository's own packages unless `includeThirdParty`. */
+    installedBy(options?: DependentOptions): DependencyEdge[] {
+      return dependentEdges("in", idOf(this), options);
     }
 
     /**
@@ -337,15 +341,32 @@ export function __graph() {
     nodes: (name?: string): PackageNode[] =>
       nodesOf(name === undefined ? host.nodes("all", "") : host.nodes("named", name)),
 
-    /** One node by name, and version when several are installed. */
-    node: (name: string, version?: string): PackageNode | undefined =>
-      graph.nodes(name).find((node) => version === undefined || node.version === version),
+    /** One node by name, and by version when several are installed; throws when several are and no version is given. */
+    node: (name: string, version?: string): PackageNode | undefined => {
+      const named = graph.nodes(name);
+      if (version !== undefined) return named.find((node) => node.version === version);
+      const versions = [...new Set(named.map((node) => node.version))];
+      if (versions.length > 1) {
+        throw new Error(
+          `g.node("${name}"): ${versions.length} versions are installed (${versions.join(", ")}); use g.nodes("${name}") or pass a version`,
+        );
+      }
+      return named[0];
+    },
 
-    /** Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the installed peer). */
-    dependents: (name: string, options?: KindOptions): DependencyEdge[] =>
-      edges("named", name, options),
+    /**
+     * Edges that declare a dependency on `name`, resolved or not (a peer edge
+     * resolves only when pnpm records the installed peer), from the
+     * repository's own packages unless `includeThirdParty`.
+     */
+    dependents: (name: string, options?: DependentOptions): DependencyEdge[] =>
+      dependentEdges("named", name, options),
 
-    /** Shortest chains from each `from` node (default: every workspace) to any `to` node. */
+    /**
+     * The shortest chain from each `from` node (default: every workspace) to
+     * any `to` node, `from` first. Chains pass through the repository's own
+     * packages, so `web > @demo/shared > moment` reaches moment from web.
+     */
     chains: ({ from, to, kinds }: ChainOptions = {}): readonly PackageNode[][] => {
       if (to === undefined) throw new TypeError("chains({ to }): name the node or nodes to reach");
       const starts = from === undefined ? graph.workspaces() : many(from);

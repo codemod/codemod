@@ -63,6 +63,8 @@ export interface StartRequest {
   task: TaskContent;
   /** The step's function, on hosts that run callbacks in place. */
   fn?: Callback;
+  /** A `forEachFile` step's reducer, on hosts that run callbacks in place. */
+  reducer?: Callback;
   /** How long the task may run, from the step's `timeout`. */
   timeoutMs?: number;
   /** When the step began to wait (`sleep`, `waitForEvent`). */
@@ -193,6 +195,14 @@ export interface ForEachFileTask {
   readonly [TASK]: "forEachFile";
   readonly selector: Selector;
   readonly callback: Extracted;
+  /** `forEachFile(selector, callback, reducer, initial)`: folds the outputs into one value. */
+  readonly reducer?: Reducer;
+}
+
+/** A `forEachFile` reducer and the value it starts from. */
+export interface Reducer {
+  readonly callback: Extracted;
+  readonly initial: Json;
 }
 
 export interface HostTask {
@@ -226,6 +236,10 @@ export interface AstGrepHandler {
   /** Passes over each file at most; more than one repeats until nothing changes. */
   readonly repeat?: number;
 }
+
+/** Why `forEachFile(selector, astGrep(rules), reducer, initial)` is refused (the build says it too). */
+const AST_GREP_REDUCER =
+  "forEachFile: astGrep(...) returns nothing per file, so there is nothing to reduce; give a reducer only with a callback, forEachFile(selector, (file) => ..., reducer, initial)";
 
 /** Passes `astGrep(rules, { repeat: true })` makes over a file at most. */
 const REPEAT_PASSES = 10;
@@ -277,13 +291,25 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     return null;
   }
 
-  /** Run a callback, or `astGrep(...)` rules, on every selected file. */
-  function forEachFile(selector: unknown, callback?: unknown): ForEachFileTask | HostTask {
+  /**
+   * Run a callback, or `astGrep(...)` rules, on every selected file. With a
+   * reducer (`forEachFile(selector, callback, reducer, initial)`), what the
+   * callback returns is folded into one value, in path order, as files
+   * finish: the step's result has `reduced` instead of `outputs`.
+   */
+  function forEachFile(
+    selector: unknown,
+    callback?: unknown,
+    ...reduce: unknown[]
+  ): ForEachFileTask | HostTask {
     if (callback === undefined && (callbackOf(selector) || isHandler(selector))) {
       callback = selector;
       selector = undefined;
     }
-    if (isHandler(callback)) return astGrepFiles(selector, callback);
+    if (isHandler(callback)) {
+      if (reduce.length) throw new TypeError(AST_GREP_REDUCER);
+      return astGrepFiles(selector, callback);
+    }
     const extracted = callbackOf(callback);
     if (!extracted) {
       throw new TypeError(
@@ -296,7 +322,38 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
       [TASK]: "forEachFile" as const,
       selector: normalizeSelector(selector),
       callback: extracted,
+      ...(reduce.length ? { reducer: reducerOf(reduce, extracted) } : {}),
     });
+  }
+
+  /** `forEachFile`'s reducer and initial value, checked. */
+  function reducerOf([reducer, initial, ...rest]: unknown[], callback: Extracted): Reducer {
+    if (rest.length) {
+      throw new TypeError(
+        "forEachFile takes a selector, a callback, and optionally a reducer and its initial value",
+      );
+    }
+    const extracted = callbackOf(reducer);
+    if (!extracted) {
+      throw new TypeError(
+        typeof reducer === "function"
+          ? "forEachFile: the reducer was not extracted by the build; run the workflow through the codemod-workflow build"
+          : "forEachFile's reducer must be a function, (result, output, path) => result, written inline or imported from its file",
+      );
+    }
+    // Both run in place, or both in isolates.
+    if (!extracted.fn !== !callback.fn) {
+      throw new TypeError(
+        "forEachFile: the reducer was not extracted by the build like the callback; run the workflow through the codemod-workflow build",
+      );
+    }
+    if (initial === undefined) {
+      throw new TypeError(
+        "forEachFile: a reducer needs an initial value: forEachFile(selector, callback, reducer, initial)",
+      );
+    }
+    checkJson(initial, "forEachFile: the reducer's initial value");
+    return { callback: extracted, initial };
   }
 
   /**
@@ -331,7 +388,9 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
    * with a live handle on it, in its own isolate. Only what the callback
    * returns is recorded.
    */
-  function dependencyGraph(options: unknown, callback: unknown): DependencyGraphTask {
+  function dependencyGraph(...args: unknown[]): DependencyGraphTask {
+    // `dependencyGraph(callback)` or `dependencyGraph(options, callback)`.
+    const [options, callback] = args.length < 2 ? [undefined, args[0]] : args;
     const extracted = callbackOf(callback);
     if (!extracted || extracted.fn) {
       throw new TypeError(
@@ -346,15 +405,6 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
       lockfiles:
         lockfiles === undefined ? undefined : globs(lockfiles, "lockfiles", "dependencyGraph: "),
       callback: extracted,
-    });
-  }
-
-  function hostTask(kind: string, options: unknown): HostTask {
-    const content = withoutUndefined(options);
-    checkJson(content, kind);
-    return Object.freeze({
-      [TASK]: "host" as const,
-      content: { ...(content as Record<string, unknown>), kind },
     });
   }
 
@@ -534,21 +584,6 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     });
   }
 
-  /** Check out a branch for the following changes (managed git only). */
-  function branch(name: string): HostTask {
-    return hostTask("branch", { name });
-  }
-
-  /** Commit changes (managed git only). */
-  function commit(message: string, options: object = {}): HostTask {
-    return hostTask("commit", { ...options, message });
-  }
-
-  /** Push the branch and open a pull request (managed git only). */
-  function pullRequest(options: object): HostTask {
-    return hostTask("pullRequest", options);
-  }
-
   return {
     callbackOf,
     __callback,
@@ -564,11 +599,39 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     approval,
     sleep,
     waitForEvent,
-    branch,
-    commit,
-    pullRequest,
   };
 }
+
+function hostTask(kind: string, options: unknown): HostTask {
+  const content = withoutUndefined(options);
+  checkJson(content, kind);
+  return Object.freeze({
+    [TASK]: "host" as const,
+    content: { ...(content as Record<string, unknown>), kind },
+  });
+}
+
+// ------------------------------------------------------------------ git ---
+
+/**
+ * The git steps, `codemod/git`. They describe tasks like the rest; `step`
+ * runs them. Not part of `createTasks`, so `codemod/workflow` doesn't export
+ * them.
+ */
+export const gitTasks = Object.freeze({
+  /** Check out a branch for the following changes (managed git only). */
+  branch(name: string): HostTask {
+    return hostTask("branch", { name });
+  },
+  /** Commit changes (managed git only). */
+  commit(message: string, options: object = {}): HostTask {
+    return hostTask("commit", { ...options, message });
+  },
+  /** Push the branch and open a pull request (managed git only). */
+  pullRequest(options: object): HostTask {
+    return hostTask("pullRequest", options);
+  },
+});
 
 /** `astGrep`'s rules as a list of JSON objects, or why they are not. */
 function ruleList(value: unknown): Json[] {
@@ -848,6 +911,7 @@ export function createRuntime(host: Host) {
     // captures are a snapshot taken when the step is called.
     let content: TaskContent;
     let fn: Callback | undefined;
+    let reducer: Callback | undefined;
     const callback = callbackOf(task);
     if (callback) {
       content = { kind: "function", callback: callback.id, captures: capturesOf(callback) };
@@ -863,6 +927,14 @@ export function createRuntime(host: Host) {
         callback: task.callback.id,
         captures: capturesOf(task.callback),
       };
+      if (task.reducer) {
+        content.reduce = {
+          callback: task.reducer.callback.id,
+          captures: capturesOf(task.reducer.callback) ?? {},
+          initial: task.reducer.initial,
+        };
+        reducer = task.reducer.callback.fn;
+      }
       fn = task.callback.fn;
     } else if (isTask(task) && task[TASK] === "dependencyGraph") {
       content = withoutUndefined({
@@ -956,6 +1028,7 @@ export function createRuntime(host: Host) {
       label: name,
       task: content,
       fn,
+      ...(reducer && { reducer }),
       ...(policy.timeout !== undefined && { timeoutMs: policy.timeout }),
       ...(since !== undefined && { since }),
       ...(alongside && { alongside }),
@@ -1224,7 +1297,8 @@ function canonical(value: unknown): string {
 function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (isRecord(value)) {
-    const sorted: Record<string, unknown> = {};
+    // No prototype: an own `__proto__` key is kept as data, as JSON has it.
+    const sorted = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(value).sort()) sorted[key] = sortKeys(value[key]);
     return sorted;
   }

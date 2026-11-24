@@ -12,7 +12,8 @@ The `shard` task splits a large migration into groups of files ("shards"), for e
 2. The workflow runs the codemod for every shard, limited to that shard's files, one shard at a time when each gets its own branch and pull request.
 
 ```ts workflow.ts
-import { step, shard, forEachFile, approval, branch, commit, pullRequest } from "codemod/workflow";
+import { step, shard, forEachFile, approval } from "codemod/workflow";
+import { branch, commit, pullRequest } from "codemod/git";
 import migrate from "./scripts/migrate.ts";
 import wouldChange from "./scripts/would-change.ts";
 
@@ -41,7 +42,7 @@ export default async function main() {
 - **`previous`** (not used here) takes an earlier result, to keep assignments stable when shards are evaluated again (see [Re-evaluation](#re-evaluation)).
 - **`filter`** keeps the files it returns `true` for: here, those the migration would change (`wouldChange` can call the same helpers `migrate` does, without writing). It is a `forEachFile` callback, written inline or imported; what it does to a file is not kept.
 - **`include: current._meta_files`** limits each run of the migration to its shard's files.
-- `branch`, `commit` and `pullRequest` only touch git when the run uses `--managed-git`. See [Workflow Reference](/community/workflows/reference#tasks).
+- `branch`, `commit` and `pullRequest` come from `codemod/git` and only touch git when the run uses `--managed-git`. See [Git steps](/community/workflows/reference#git-steps).
 
 <Warning>
 Don't run shards that use git steps at the same time, for example with `Promise.all`. Git steps share the run's one checkout, so one shard could commit on another shard's branch. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`. Shards without git steps can still run in parallel. Separate checkouts per shard are planned as an explicit API.
@@ -57,7 +58,8 @@ Files are chosen before they reach any shard method:
 
 - `files` selects the eligible files under `target`: a glob, a list of globs, or `{ include, exclude, language }`. Without it, the files of the package's `targets.languages`.
 - `filter`, when given, runs on each of them, in isolates, and keeps those it returns `true` for. If it throws on every file, the shard step fails.
-- A built-in method given neither `files` nor `filter` takes every file under `target`.
+- A built-in method given neither `files` nor `filter` takes every text file under `target`.
+- Files are walked as `forEachFile` walks them: `.gitignore`d files are left out, other hidden files (such as `.github/`) are not, and git's own `.git` is never walked.
 
 <ParamField path="target" type="string" default=".">
   Directory to scan, relative to the run's target.
@@ -79,23 +81,27 @@ Files are chosen before they reach any shard method:
 
 ### Directory
 
-Groups files by their immediate subdirectory under `target`, then bin-packs them.
+Groups files by their immediate subdirectory under `target`, then splits each group into shards of at most `maxFilesPerShard` files. For one shard per package of a monorepo, set `target` to the directory the packages are in:
 
 ```ts
-shard({ method: { type: "directory", maxFilesPerShard: 20, minShardSize: 5 }, target: "./src", files: "**/*.tsx" })
+shard({ method: { type: "directory", maxFilesPerShard: 20, minShardSize: 5 }, target: "packages", files: "**/*.tsx" })
 ```
 
-Each shard has `name` (`"{directory}-{index}"`, for example `"components-0"`), `directory` and `_meta_files`.
+Each shard has `name` (`"{directory}-{index}"`, for example `"ui-0"`, `"ui-1"`), `directory` and `_meta_files`. Files directly under `target` form the `"."` group (`".-0"`), or `"shard-0"`, `"shard-1"`, ... when every file is directly under `target`.
 
 ### Codeowner
 
-Groups files by their owning team from `.github/CODEOWNERS` (or a root `CODEOWNERS`), then bin-packs them.
+Groups files by their code owner, then splits each owner's files into shards of at most `maxFilesPerShard` files: one or more shards per owner.
 
 ```ts
 shard({ method: { type: "codeowner", maxFilesPerShard: 30 }, target: "./src", files: "**/*.tsx" })
 ```
 
-Each shard has `name` (`"{team}-{index}"`, for example `"platform-team-0"`), `team` and `_meta_files`.
+- The `CODEOWNERS` file is the first of `.github/CODEOWNERS`, `CODEOWNERS` and `docs/CODEOWNERS` in the run's target (the repository root), whatever `target` is.
+- As on GitHub, the last rule that matches a file wins. Its first owner owns the file.
+- Files no rule matches, or every file when there is no `CODEOWNERS` file, go to the `unowned` team.
+
+Each shard has `name` (`"{team}-{index}"`, the team lowercased without `@` and with `/` as `-`: `@acme/platform` gives `"acme-platform-0"`), `team` (`"@acme/platform"`) and `_meta_files`.
 
 ### Method options
 
@@ -166,6 +172,22 @@ When the repository changes, run the shard step again with `previous` set to the
 - **Shards whose files were all deleted are dropped.**
 
 Custom shard functions receive the same value as `previousShards` and can implement their own incremental logic.
+
+A workflow keeps no state between runs, so pass the earlier result in yourself, for example as a parameter: `previous: params.previousShards`.
+
+## From workflow.yaml
+
+`codemod workflow upgrade` turns a YAML `shard` step into a `shard(...)` call that gives the same shards:
+
+| workflow.yaml | workflow.ts |
+|---|---|
+| `method: { type: directory, max_files_per_shard: 20, min_shard_size: 5 }` | `method: { type: "directory", maxFilesPerShard: 20, minShardSize: 5 }` |
+| `method: { type: codeowner, max_files_per_shard: 30 }` | `method: { type: "codeowner", maxFilesPerShard: 30 }` |
+| `method: { function: ./shard.ts }` | `method: { function: shardFn }`, with `import shardFn from "./shard.ts"` |
+| `target: ./src` | `target: "./src"` |
+| `file_pattern: "**/*.ts"` | `files: "**/*.ts"` |
+| `js-ast-grep: { js_file, language, include }` | `files: { include, language }` and a `filter` that keeps the files the transform would change |
+| `output_state: shards`, then a matrix node with `from_state: shards` | `const shards = await step(shard(...))`, then a `for` loop over `shards` |
 
 ## Shipping plain and sharded variants in one package
 

@@ -1,0 +1,12 @@
+{
+  "extends": "@codemod.com/tsconfig/base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "lib": ["ESNext"],
+    "types": [],
+    "skipLibCheck": false
+  },
+  // One module imported on its own: its declaration must bring what it needs.
+  "include": ["./*.ts"]
+}
