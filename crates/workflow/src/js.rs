@@ -49,6 +49,16 @@ javascript! {
     pub(crate) fn deps_module = include_str!("js/deps.ts"), "deps.ts"
 }
 javascript! {
+    /// `codemod/git` in the workflow body: `branch`, `commit` and
+    /// `pullRequest`.
+    pub(crate) fn git_module = include_str!("js/git.ts"), "git.ts"
+}
+javascript! {
+    /// `codemod/git` in isolates, for files steps and callbacks import: its
+    /// functions as errors.
+    pub(crate) fn isolate_git_module = include_str!("js/isolate_git.ts"), "isolate_git.ts"
+}
+javascript! {
     /// `codemod-internal:semver`: `semver` for the body and isolates.
     pub(crate) fn semver_module = include_str!("js/semver.ts"), "semver.ts"
 }

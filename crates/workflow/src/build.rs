@@ -57,6 +57,15 @@ pub fn is_deps_module(specifier: &str) -> bool {
     codemod_module(specifier) == Some("deps")
 }
 
+/// Specifier of the git module: `branch`, `commit` and `pullRequest`.
+pub const GIT_MODULE: &str = "codemod/git";
+
+/// Whether a specifier names the git module (`codemod/git`, or
+/// `codemod:git`).
+pub fn is_git_module(specifier: &str) -> bool {
+    codemod_module(specifier) == Some("git")
+}
+
 /// Prelude appended to every extracted callback module.
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -122,7 +131,8 @@ const PURE_BUILTINS: &[&str] = &[
 pub fn module_class(specifier: &str) -> Result<ModuleClass, String> {
     match codemod_module(specifier) {
         Some("workflow") => return Ok(ModuleClass::Workflow),
-        Some("ast-grep" | "deps") => return Ok(ModuleClass::Pure),
+        // `codemod/git` only describes steps, as `codemod/workflow` does.
+        Some("ast-grep" | "deps" | "git") => return Ok(ModuleClass::Pure),
         Some(_) => return Ok(ModuleClass::StepsOnly),
         None => {}
     }
@@ -243,6 +253,7 @@ enum Isolated {
     FunctionStep,
     ShardFunction,
     ShardFilter,
+    Reducer,
 }
 
 impl Isolated {
@@ -253,6 +264,7 @@ impl Isolated {
             Isolated::FunctionStep => "function step",
             Isolated::ShardFunction => "shard function",
             Isolated::ShardFilter => "shard filter",
+            Isolated::Reducer => "forEachFile reducer",
         }
     }
 }
@@ -270,6 +282,9 @@ const REMOVED_STATE_API: &[&str] = &[
 
 /// Exports that moved from `codemod/workflow` to `codemod/deps`.
 const MOVED_TO_DEPS: &[&str] = &["dependencyGraph", "registry", "semver"];
+
+/// Exports that moved from `codemod/workflow` to `codemod/git`.
+const MOVED_TO_GIT: &[&str] = &["branch", "commit", "pullRequest"];
 
 pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
     let allocator = Allocator::default();
@@ -344,6 +359,14 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                     ),
                                 ));
                             }
+                            if module == FLOW_MODULE && MOVED_TO_GIT.contains(&imported.as_str()) {
+                                return Err(analysis.error(
+                                    s.span.start,
+                                    format!(
+                                        "'{imported}' moved to \"{GIT_MODULE}\": import {{ {imported} }} from \"{GIT_MODULE}\""
+                                    ),
+                                ));
+                            }
                             let line = format!(
                                 "import {{ {imported} as {} }} from {:?};",
                                 s.local.name, module
@@ -395,6 +418,34 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
             Statement::ClassDeclaration(class) => {
                 if let Some(id) = &class.id {
                     analysis.collect_whole(id.symbol_id(), class.span);
+                }
+            }
+            Statement::ExportNamedDeclaration(export)
+                if !export.export_kind.is_type()
+                    && export.source.as_ref().is_some_and(|source| {
+                        codemod_module(&source.value) == Some("workflow")
+                    }) =>
+            {
+                // `export { branch } from "codemod/workflow"`: the same
+                // migration hints as an import.
+                for specifier in &export.specifiers {
+                    if specifier.export_kind.is_type() {
+                        continue;
+                    }
+                    let name = specifier.local.name().to_string();
+                    let moved_to = if MOVED_TO_GIT.contains(&name.as_str()) {
+                        GIT_MODULE
+                    } else if MOVED_TO_DEPS.contains(&name.as_str()) {
+                        DEPS_MODULE
+                    } else {
+                        continue;
+                    };
+                    return Err(analysis.error(
+                        specifier.span.start,
+                        format!(
+                            "'{name}' moved to \"{moved_to}\": import {{ {name} }} from \"{moved_to}\""
+                        ),
+                    ));
                 }
             }
             Statement::ExportNamedDeclaration(export) => match &export.declaration {
@@ -452,6 +503,31 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                     }
                 }
             }
+            // `deps.dependencyGraph` through a namespace import: the build
+            // finds graph callbacks by the imported name only.
+            AstKind::StaticMemberExpression(member)
+                if member.property.name == "dependencyGraph" =>
+            {
+                let Expression::Identifier(object) = &member.object else {
+                    continue;
+                };
+                let namespace = scoping
+                    .get_reference(object.reference_id())
+                    .symbol_id()
+                    .and_then(|symbol| analysis.imports.get(&symbol))
+                    .filter(|import| {
+                        is_deps_module(&import.source) && import.line.starts_with("import * as ")
+                    });
+                if let Some(import) = namespace {
+                    return Err(analysis.error(
+                        member.span.start,
+                        format!(
+                            "import dependencyGraph by name (import {{ dependencyGraph }} from \"{}\"): the build finds its callbacks by that name",
+                            import.source
+                        ),
+                    ));
+                }
+            }
             AstKind::CallExpression(call) => {
                 let Expression::Identifier(callee) = &call.callee else {
                     continue;
@@ -472,7 +548,20 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                         } else {
                             Isolated::GraphCallback
                         };
-                        match call.arguments.last() {
+                        // `forEachFile(selector, callback, reducer, initial)`.
+                        let reducing = task == "forEachFile" && call.arguments.len() > 2;
+                        if reducing {
+                            sites.extend(
+                                reducer_site(&analysis, &imported, call)
+                                    .map_err(|(at, message)| analysis.error(at, message))?,
+                            );
+                        }
+                        let callback = if reducing {
+                            call.arguments.get(1)
+                        } else {
+                            call.arguments.last()
+                        };
+                        match callback {
                             Some(Argument::ArrowFunctionExpression(f)) => {
                                 sites.push((f.span, kind))
                             }
@@ -501,7 +590,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                     if task == "forEachFile" {
                                         "forEachFile takes a callback, written inline or imported from its file, or astGrep(...), optionally after a selector"
                                     } else {
-                                        "dependencyGraph takes options and a callback"
+                                        "dependencyGraph takes a callback, optionally after options"
                                     }
                                     .to_string(),
                                 ));
@@ -754,6 +843,55 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
     })
 }
 
+/// Why `forEachFile(selector, astGrep(rules), reducer, initial)` is a build
+/// error (the orchestrator says the same at run time).
+const AST_GREP_REDUCER: &str = "forEachFile: astGrep(...) returns nothing per file, so there is nothing to reduce; give a reducer only with a callback, forEachFile(selector, (file) => ..., reducer, initial)";
+
+/// The reducer of `forEachFile(selector, callback, reducer, initial)` to
+/// extract: `None` when it is imported from a file (the imported analysis
+/// has it), or where and why it cannot be.
+fn reducer_site(
+    analysis: &Analysis<'_>,
+    imported: &crate::imported::Imports,
+    call: &oxc::ast::ast::CallExpression<'_>,
+) -> Result<Option<(Span, Isolated)>, (u32, String)> {
+    if let Some(Argument::CallExpression(handler)) = call.arguments.get(1) {
+        let is_ast_grep = match &handler.callee {
+            Expression::Identifier(callee) => analysis
+                .scoping
+                .get_reference(callee.reference_id())
+                .symbol_id()
+                .and_then(|symbol| analysis.imports.get(&symbol))
+                .is_some_and(|import| {
+                    is_flow_module(&import.source) && import.imported.as_deref() == Some("astGrep")
+                }),
+            _ => false,
+        };
+        if is_ast_grep {
+            return Err((handler.span.start, AST_GREP_REDUCER.to_string()));
+        }
+    }
+    let Some(reducer) = call.arguments.get(2) else {
+        return Ok(None);
+    };
+    match reducer {
+        Argument::ArrowFunctionExpression(f) => Ok(Some((f.span, Isolated::Reducer))),
+        Argument::FunctionExpression(f) => Ok(Some((f.span, Isolated::Reducer))),
+        other
+            if imported
+                .callbacks
+                .iter()
+                .any(|callback| callback.argument == other.span()) =>
+        {
+            Ok(None)
+        }
+        other => Err((
+            other.span().start,
+            "forEachFile's reducer must be written inline, as (result, output, path) => ..., or imported from its file (import count from \"./scripts/count.ts\"), so the build can extract it".to_string(),
+        )),
+    }
+}
+
 /// The inline functions `shard` runs in isolates: `method.function` and
 /// `filter`, written in its options.
 fn shard_functions(call: &oxc::ast::ast::CallExpression<'_>) -> Vec<(Span, Isolated)> {
@@ -973,6 +1111,7 @@ impl Analysis<'_> {
             // Other imports are copied as written: in an isolate,
             // `codemod/deps` gives `registry` and `semver` that run there.
             if is_flow_module(&import.source)
+                || is_git_module(&import.source)
                 || is_deps_module(&import.source) && imported == "dependencyGraph"
             {
                 return Err(self.error(
@@ -1103,6 +1242,9 @@ impl<R: codemod_sandbox::sandbox::resolvers::ModuleResolver> ImportWalk<'_, R> {
                 "{shown} calls {call} with a callback, but callbacks are only extracted from the workflow file: call it there, and keep the files it imports to plain helpers"
             ));
         }
+        if let Some(hint) = moved_import(path, &text) {
+            return Err(format!("{shown}: {hint}"));
+        }
         for specifier in module_specifiers(path, &text) {
             match module_class(&specifier) {
                 Ok(ModuleClass::StepsOnly) => return Ok(Some(vec![shown, specifier])),
@@ -1122,6 +1264,62 @@ impl<R: codemod_sandbox::sandbox::resolvers::ModuleResolver> ImportWalk<'_, R> {
         }
         Ok(None)
     }
+}
+
+/// The migration hint for a helper's import (or re-export) of a name that
+/// moved out of `codemod/workflow`.
+fn moved_import(path: &Path, text: &str) -> Option<String> {
+    use oxc::ast::ast::ModuleDeclaration;
+
+    let allocator = Allocator::default();
+    let source_type = SourceType::from_path(path).unwrap_or_else(|_| SourceType::mjs());
+    let parsed = Parser::new(&allocator, text, source_type).parse();
+    let hint = |name: &str| {
+        let moved_to = if MOVED_TO_GIT.contains(&name) {
+            GIT_MODULE
+        } else if MOVED_TO_DEPS.contains(&name) {
+            DEPS_MODULE
+        } else {
+            return None;
+        };
+        Some(format!(
+            "'{name}' moved to \"{moved_to}\": import {{ {name} }} from \"{moved_to}\""
+        ))
+    };
+    for statement in &parsed.program.body {
+        match statement.as_module_declaration() {
+            Some(ModuleDeclaration::ImportDeclaration(import))
+                if !import.import_kind.is_type()
+                    && codemod_module(&import.source.value) == Some("workflow") =>
+            {
+                for specifier in import.specifiers.iter().flatten() {
+                    if let ImportDeclarationSpecifier::ImportSpecifier(s) = specifier {
+                        if !s.import_kind.is_type() {
+                            if let Some(hint) = hint(&s.imported.name()) {
+                                return Some(hint);
+                            }
+                        }
+                    }
+                }
+            }
+            Some(ModuleDeclaration::ExportNamedDeclaration(export))
+                if !export.export_kind.is_type()
+                    && export.source.as_ref().is_some_and(|source| {
+                        codemod_module(&source.value) == Some("workflow")
+                    }) =>
+            {
+                for specifier in &export.specifiers {
+                    if !specifier.export_kind.is_type() {
+                        if let Some(hint) = hint(&specifier.local.name()) {
+                            return Some(hint);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// A call in a file the workflow imports that needs the build to extract a
@@ -1195,7 +1393,12 @@ fn callback_call(path: &Path, text: &str) -> Option<&'static str> {
             )
         });
         // A transform (`forEachFile(jssg(...))`) has no callback to extract.
-        let given_call = matches!(call.arguments.last(), Some(Argument::CallExpression(_)));
+        let callback = if call.arguments.len() > 2 {
+            call.arguments.get(1)
+        } else {
+            call.arguments.last()
+        };
+        let given_call = matches!(callback, Some(Argument::CallExpression(_)));
         if (called == "forEachFile" && !given_call) || given_function {
             return Some(if called == "step" {
                 "step()"

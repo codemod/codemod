@@ -113,6 +113,44 @@ export default async function main() {}
 }
 
 #[test]
+fn dependency_graph_through_a_namespace_import_asks_for_a_named_import() {
+    let h = Harness::new();
+    for module in ["codemod/deps", "codemod:deps"] {
+        let error = load_error(
+            &h,
+            &format!(
+                r#"
+import {{ step }} from "codemod/workflow";
+import * as deps from "{module}";
+export default async function main() {{ await step(deps.dependencyGraph((g) => g.workspaces())); }}
+"#
+            ),
+        );
+        assert!(
+            error.contains(
+                "import dependencyGraph by name (import { dependencyGraph } from \"codemod/deps\")"
+            ),
+            "{module}: {error}"
+        );
+    }
+}
+
+#[test]
+fn a_namespace_import_of_the_deps_module_for_semver_builds() {
+    let h = Harness::new();
+    let path = h.bundle.path().join("workflow.ts");
+    std::fs::write(
+        &path,
+        r#"
+import * as deps from "codemod/deps";
+export default async function main() { return deps.semver.compare("1.0.0", "2.0.0"); }
+"#,
+    )
+    .unwrap();
+    assert!(load_workflow(&path).is_ok());
+}
+
+#[test]
 fn importing_a_removed_state_function_says_what_replaced_it() {
     let h = Harness::new();
     let error = load_error(
@@ -123,6 +161,92 @@ export default async function main() { setState("x", 1); }
 "#,
     );
     assert!(error.contains("'setState' was removed"), "{error}");
+}
+
+#[test]
+fn importing_git_steps_from_the_workflow_module_points_to_codemod_git() {
+    let h = Harness::new();
+    let error = load_error(
+        &h,
+        r#"
+import { step, commit } from "codemod/workflow";
+export default async function main() { await step(commit("x")); }
+"#,
+    );
+    assert!(
+        error.contains(r#"'commit' moved to "codemod/git": import { commit } from "codemod/git""#),
+        "{error}"
+    );
+}
+
+#[test]
+fn re_exporting_moved_functions_from_the_workflow_module_points_to_their_module() {
+    let h = Harness::new();
+    for (export, hint) in [
+        ("branch as makeBranch", r#"'branch' moved to "codemod/git""#),
+        ("semver", r#"'semver' moved to "codemod/deps""#),
+    ] {
+        let error = load_error(
+            &h,
+            &format!(
+                r#"
+export {{ {export} }} from "codemod/workflow";
+export default async function main() {{}}
+"#
+            ),
+        );
+        assert!(error.contains(hint), "{error}");
+    }
+}
+
+#[test]
+fn a_helper_importing_git_steps_from_the_workflow_module_points_to_codemod_git() {
+    let h = Harness::new();
+    h.bundle_file(
+        "lib/open.ts",
+        "import { pullRequest } from \"codemod/workflow\";\nexport const open = () => pullRequest({ title: \"x\" });\n",
+    );
+    let error = load_error(
+        &h,
+        r#"
+import { step } from "codemod/workflow";
+import { open } from "./lib/open.ts";
+export default async function main() { await step(open()); }
+"#,
+    );
+    assert!(
+        error.contains(r#"'pullRequest' moved to "codemod/git""#),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_type_only_re_export_from_the_workflow_module_builds() {
+    let h = Harness::new();
+    let path = h.bundle.path().join("workflow.ts");
+    std::fs::write(
+        &path,
+        r#"
+export type { branch } from "codemod/workflow";
+export default async function main() {}
+"#,
+    )
+    .unwrap();
+    assert!(load_workflow(&path).is_ok());
+}
+
+#[test]
+fn git_steps_cannot_start_inside_a_callback() {
+    let h = Harness::new();
+    let error = load_error(
+        &h,
+        r#"
+import { step } from "codemod/workflow";
+import { branch } from "codemod/git";
+export default async function main() { await step(() => { branch("x"); }); }
+"#,
+    );
+    assert!(error.contains("uses 'branch' inside a"), "{error}");
 }
 
 #[test]

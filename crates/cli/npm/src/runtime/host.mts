@@ -40,7 +40,7 @@ import type { JsonValue } from "../testing/index.mts";
 import { addon } from "./addon.mts";
 import type { Addon, FileEffects, NativeRun } from "./addon.mts";
 import { context, stepScope } from "./context.mts";
-import type { RunScope } from "./context.mts";
+import type { RunScope, StepScope } from "./context.mts";
 import { ORCHESTRATOR_VERSION } from "./orchestrator-version.mts";
 import {
   AwaitingApprovalError,
@@ -521,6 +521,7 @@ async function forEachFile(
   const failures: { path: string; error: string }[] = [];
   const effects: FileEffects[] = [];
   const concurrency = selector.concurrency ?? 1;
+  const fold = task.reducer ? inOrderFold(task, outer, step, concurrency) : undefined;
 
   const one = async (index: number, [path, text]: [path: string, text: string]) => {
     const { file, effects: done, close } = fileHandle(path, text, step.language);
@@ -536,12 +537,14 @@ async function forEachFile(
       }
       if (output !== undefined) {
         checkJson(output, "return value");
-        outputs[index] = { output };
+        if (fold) fold.output(index, path, output);
+        else outputs[index] = { output };
       }
       if (done.length) effects.push({ path, original: text, effects: done });
     } catch (error) {
       failures.push({ path, error: describeError(error) });
     } finally {
+      fold?.done(index);
       close();
       processed++;
       if (processed === total || processed % every === 0) {
@@ -564,12 +567,19 @@ async function forEachFile(
         await new Promise((turn) => setImmediate(turn));
       }
       if (run.refusesSteps()) throw new CanceledError();
-      if (limit.expired) return;
+      if (limit.expired || fold?.failed) return;
+      // Stay within the fold's window, as the engine does.
+      if (fold) await fold.room(index);
+      if (limit.expired || fold?.failed) return;
       await one(index, file);
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, total) }, worker));
   // Out of time: the step has already failed, and nothing it did is written.
+  if (limit.expired) throw new CanceledError("the step ran out of time");
+  // A reducer that failed fails the step before anything is written.
+  const reduced = fold ? await fold.end() : undefined;
+  // The reducer may have finished after the step ran out of time.
   if (limit.expired) throw new CanceledError("the step ran out of time");
 
   effects.sort((a, b) => (a.path < b.path ? -1 : 1));
@@ -591,16 +601,111 @@ async function forEachFile(
     );
   }
   const result: Outcome = {
-    result: {
-      outputs: outputs.flatMap((entry) => (entry ? [entry.output] : [])),
-      changes: committed.changes,
-      failures: allFailures,
-    },
+    result: fold
+      ? { reduced: reduced ?? null, changes: committed.changes, failures: allFailures }
+      : {
+          outputs: outputs.flatMap((entry) => (entry ? [entry.output] : [])),
+          changes: committed.changes,
+          failures: allFailures,
+        },
   };
   if (!allFailures.length) return result;
   return {
     ...result,
     partial: `${allFailures.length} of ${total} ${total === 1 ? "file" : "files"} failed`,
+  };
+}
+
+/** Folds a `forEachFile` step's outputs, in the order of its files. */
+interface InOrderFold {
+  /** What the callback returned for file `index`. */
+  output(index: number, path: string, output: Json): void;
+  /** File `index` is done: its output, if it has one, can be folded. */
+  done(index: number): void;
+  /** Resolves once file `index` is within the window of the fold, or it failed. */
+  room(index: number): Promise<void>;
+  /** Set once the reducer threw: process no more files. */
+  readonly failed: boolean;
+  /** The folded value, once every file is done; rejects with the reducer's error. */
+  end(): Promise<Json>;
+}
+
+/**
+ * The reducer's fold, as the engine does it: outputs are folded in the
+ * order of the step's files (sorted by path) as they arrive, holding only
+ * those that arrive before an earlier file's.
+ */
+function inOrderFold(
+  task: InPlaceTask,
+  outer: RunScope,
+  step: StepScope,
+  concurrency: number,
+): InOrderFold {
+  const reducer = task.reducer as Callback;
+  const reduce = task.task.reduce as { initial: Json };
+  let folded: unknown = JSON.parse(JSON.stringify(reduce.initial));
+  // How far workers may get ahead of the fold, as in the engine.
+  const window = Math.max(concurrency * 4, 1024);
+  // The reducer's own scope: a failStep() it catches still fails the step.
+  const reducing = stepScope(step.position, step.label, step.language);
+  const waiting: { index: number; go: () => void }[] = [];
+  const wake = () => {
+    for (let i = waiting.length - 1; i >= 0; i--) {
+      const one = waiting[i]!;
+      if (error || one.index < next + window) {
+        one.go();
+        waiting.splice(i, 1);
+      }
+    }
+  };
+  let next = 0;
+  const early = new Map<number, { path: string; output: Json } | null>();
+  const outputs = new Map<number, { path: string; output: Json }>();
+  let chain: Promise<void> = Promise.resolve();
+  let error: { error: unknown } | undefined;
+  const drain = async () => {
+    for (;;) {
+      if (error || !early.has(next)) return;
+      const entry = early.get(next);
+      early.delete(next);
+      next++;
+      wake();
+      if (!entry) continue;
+      try {
+        reducing.failure = undefined;
+        folded = await context.run({ ...outer, step: reducing }, () =>
+          reducer(folded, entry.output, entry.path),
+        );
+        if (reducing.failure !== undefined) error = { error: new Error(reducing.failure) };
+      } catch (cause) {
+        error = { error: cause };
+      }
+      if (error) wake();
+    }
+  };
+  return {
+    output(index, path, output) {
+      outputs.set(index, { path, output });
+    },
+    done(index) {
+      early.set(index, outputs.get(index) ?? null);
+      outputs.delete(index);
+      chain = chain.then(drain);
+    },
+    room(index) {
+      if (error || index < next + window) return Promise.resolve();
+      return new Promise((go) => waiting.push({ index, go }));
+    },
+    get failed() {
+      return error !== undefined;
+    },
+    async end() {
+      await chain;
+      if (error) throw new Error(`the reducer failed: ${describeError(error.error)}`);
+      const result = folded === undefined ? null : folded;
+      checkJson(result, "the reducer's result");
+      return result;
+    },
   };
 }
 
