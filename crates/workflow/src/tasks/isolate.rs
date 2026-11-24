@@ -67,42 +67,8 @@ impl StepIsolates {
         WorkerOptions {
             capabilities: self.capabilities.clone(),
             resolver: Arc::clone(&self.resolver),
-            // The callback prelude takes its helpers from the orchestrator;
-            // `registry` and `semver` come from the dependencies module.
-            modules: vec![
-                (
-                    crate::run::ORCHESTRATOR_MODULE.to_string(),
-                    crate::js::orchestrator().to_string(),
-                ),
-                (
-                    crate::run::SEMVER_MODULE.to_string(),
-                    crate::js::semver_module().to_string(),
-                ),
-                (
-                    DEPENDENCIES_MODULE.to_string(),
-                    crate::js::dependencies_module().to_string(),
-                ),
-                (
-                    ISOLATE_WORKFLOW_MODULE.to_string(),
-                    crate::js::isolate_workflow_module().to_string(),
-                ),
-                (
-                    ISOLATE_GIT_MODULE.to_string(),
-                    crate::js::isolate_git_module().to_string(),
-                ),
-                (
-                    JSSG_COMPAT_MODULE.to_string(),
-                    crate::js::jssg_compat_module().to_string(),
-                ),
-            ],
-            // Steps, callbacks and the files they import may import
-            // `codemod/deps`, and `codemod/workflow` and `codemod/git` for
-            // helpers they share with the body.
-            codemod_modules: vec![
-                ("workflow", ISOLATE_WORKFLOW_MODULE.to_string()),
-                ("git", ISOLATE_GIT_MODULE.to_string()),
-                ("deps", DEPENDENCIES_MODULE.to_string()),
-            ],
+            modules: isolate_modules(),
+            codemod_modules: isolate_codemod_modules(),
             llm_request_handler: None,
             runtime_event_callback: Some(Arc::new(move |event: RuntimeEvent| {
                 if event.kind != RuntimeEventKind::SetCurrentUnit {
@@ -125,6 +91,49 @@ impl StepIsolates {
                 .map(super::overlay::Overlay::pending_files),
         }
     }
+}
+
+/// The in-memory modules every isolate has. The callback prelude takes its
+/// helpers from the orchestrator; `registry` and `semver` come from the
+/// dependencies module.
+pub(crate) fn isolate_modules() -> Vec<(String, String)> {
+    vec![
+        (
+            crate::run::ORCHESTRATOR_MODULE.to_string(),
+            crate::js::orchestrator().to_string(),
+        ),
+        (
+            crate::run::SEMVER_MODULE.to_string(),
+            crate::js::semver_module().to_string(),
+        ),
+        (
+            DEPENDENCIES_MODULE.to_string(),
+            crate::js::dependencies_module().to_string(),
+        ),
+        (
+            ISOLATE_WORKFLOW_MODULE.to_string(),
+            crate::js::isolate_workflow_module().to_string(),
+        ),
+        (
+            ISOLATE_GIT_MODULE.to_string(),
+            crate::js::isolate_git_module().to_string(),
+        ),
+        (
+            JSSG_COMPAT_MODULE.to_string(),
+            crate::js::jssg_compat_module().to_string(),
+        ),
+    ]
+}
+
+/// Steps, callbacks and the files they import may import `codemod/deps`,
+/// and `codemod/workflow` and `codemod/git` for helpers they share with the
+/// body.
+pub(crate) fn isolate_codemod_modules() -> Vec<(&'static str, String)> {
+    vec![
+        ("workflow", ISOLATE_WORKFLOW_MODULE.to_string()),
+        ("git", ISOLATE_GIT_MODULE.to_string()),
+        ("deps", DEPENDENCIES_MODULE.to_string()),
+    ]
 }
 
 /// The capabilities a step's code gets: the run's, and the ones it asks for

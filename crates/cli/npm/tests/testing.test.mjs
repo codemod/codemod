@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { addonPath } from "../runtime/addon.mjs";
-import { assertTree, fixtures, runWorkflow as run } from "../testing/index.mjs";
+import { assertTree, fixtures, runCallback, runWorkflow as run } from "../testing/index.mjs";
 
 const require = createRequire(import.meta.url);
 const binary = process.env.CODEMOD_BINARY ?? require("../codemod").findBinaryPath().binaryPath;
@@ -901,6 +901,115 @@ export default async function main() {
     assert.match(result.error ?? "", /dependencyGraph\(\) is not available on the Node\.js host/);
   },
 );
+
+const CALLBACK = `
+import { parse } from "codemod/ast-grep";
+export default function migrate(file: any) {
+  const root = parse(file).root();
+  const found = root.findAll({ rule: { pattern: "var $A = $B" } });
+  if (!found.length) return;
+  file.write(root.commitEdits(found.map((node: any) => node.replace(node.text().replace(/^var/, "let")))));
+  return { count: found.length };
+}
+`;
+
+test("runCallback runs a callback file on fixtures as jssg test does", HOSTS.quickjs, async () => {
+  const dir = scratch({
+    "migrate.ts": CALLBACK,
+    "tests/one/input.ts": "var a = 1;\n",
+    "tests/one/expected.ts": "let a = 1;\n",
+    "tests/tree/input/src/a.ts": "var a = 1;\nvar b = 2;\n",
+    "tests/tree/input/notes.md": "var x = 1\n",
+    "tests/tree/expected/src/a.ts": "let a = 1;\nlet b = 2;\n",
+    "tests/tree/expected/notes.md": "var x = 1\n",
+  });
+  const found = fixtures(join(dir, "tests"));
+  assert.equal(found.length, 2);
+  for (const fixture of found) {
+    const result = await runCallback(join(dir, "migrate.ts"), {
+      target: fixture.input,
+      language: "typescript",
+    });
+    assertTree(result, fixture.expected);
+  }
+  const result = await runCallback(join(dir, "migrate.ts"), {
+    target: join(dir, "tests/tree/input"),
+    language: "typescript",
+  });
+  assert.equal(result.status, "succeeded");
+  assert.deepEqual(result.outputs, [{ file: "src/a.ts", data: { count: 2 } }]);
+  assert.deepEqual(Object.keys(result.changes), ["src/a.ts"]);
+});
+
+test("runCallback resolves definitions with semantic analysis", HOSTS.quickjs, async () => {
+  const dir = scratch({
+    "find.ts": `
+import { parse } from "codemod/ast-grep";
+export default (file: any) => {
+  const use = parse(file).root().find({ rule: { pattern: "console.log($X)" } }).getMatch("X");
+  return use.definition()?.node.range().start.line ?? null;
+};
+`,
+  });
+  const target = { "a.ts": "const a = 1;\nconsole.log(a);\n" };
+  const file = await runCallback(join(dir, "find.ts"), { target, language: "typescript" });
+  assert.deepEqual(file.outputs, [{ file: "a.ts", data: 0 }]);
+  const none = await runCallback(join(dir, "find.ts"), {
+    target,
+    language: "typescript",
+    semanticAnalysis: "none",
+  });
+  assert.deepEqual(none.outputs, [{ file: "a.ts", data: null }]);
+});
+
+test("runCallback fails the run when the callback fails on a file", HOSTS.quickjs, async () => {
+  const dir = scratch({
+    "boom.ts": `export default (file: any) => { if (file.path === "b.ts") throw new Error("boom"); file.write("ok\\n"); };`,
+  });
+  const result = await runCallback(join(dir, "boom.ts"), {
+    target: { "a.ts": "a\n", "b.ts": "b\n" },
+    language: "typescript",
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? "", /b\.ts: .*boom/);
+  assert.deepEqual(
+    result.failures.map((failure) => failure.path),
+    ["b.ts"],
+  );
+  assert.equal(result.files["a.ts"], "ok\n");
+  assert.throws(() => assertTree(result, {}), /the run failed/);
+});
+
+test("runCallback applies renames and deletes to the copy", HOSTS.quickjs, async () => {
+  const dir = scratch({
+    "move.ts": `
+export default (file: any) => {
+  if (file.path === "old.ts") file.rename("lib/new.ts");
+  if (file.path === "gone.ts") file.delete();
+};
+`,
+  });
+  const result = await runCallback(join(dir, "move.ts"), {
+    target: { "old.ts": "a\n", "gone.ts": "b\n", "kept.ts": "c\n" },
+    language: "typescript",
+  });
+  assert.equal(result.status, "succeeded", result.error);
+  assert.deepEqual(result.files, { "kept.ts": "c\n", "lib/new.ts": "a\n" });
+});
+
+test("runCallback rejects a callback file that is not there", HOSTS.quickjs, async () => {
+  const dir = scratch({});
+  await assert.rejects(
+    runCallback(join(dir, "missing.ts"), { target: { "a.ts": "a\n" }, language: "typescript" }),
+    /no callback file/,
+  );
+});
+
+test("runCallback needs a target and a language", async () => {
+  await assert.rejects(runCallback("migrate.ts", { target: {} }), /language is required/);
+  await assert.rejects(runCallback("migrate.ts", {}), /target is required/);
+});
 
 test("node: workers stay within the reducer's window", HOSTS.node, async () => {
   const path = join(

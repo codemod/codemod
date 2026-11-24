@@ -292,6 +292,39 @@ impl PendingFiles {
         }
     }
 
+    /// Write every changed file no transform holds now with `write`, and
+    /// forget it: the next take reads it from disk again, so writes made
+    /// meanwhile by other means (`root.write()`) are seen. Done under the
+    /// lock, so no transform takes a file between its write and its
+    /// eviction. A file `write` fails on stays pending; the errors are
+    /// returned with their paths.
+    pub fn write_released(
+        &self,
+        mut write: impl FnMut(&Path, &str) -> std::io::Result<()>,
+    ) -> Vec<(PathBuf, std::io::Error)> {
+        let mut state = self.lock();
+        let mut ready: Vec<PathBuf> = state
+            .files
+            .iter()
+            .filter(|(_, file)| file.holder.is_none() && file.text != file.original)
+            .map(|(path, _)| path.clone())
+            .collect();
+        ready.sort();
+        let mut errors = Vec::new();
+        for path in ready {
+            let Some(file) = state.files.get(&path) else {
+                continue;
+            };
+            match write(&path, &file.text) {
+                Ok(()) => {
+                    state.files.remove(&path);
+                }
+                Err(error) => errors.push((path, error)),
+            }
+        }
+        errors
+    }
+
     /// Every file whose text the step changed: `(path, at the start of the
     /// step, now)`, by path. The first text is the disk's, or in a dry run
     /// what earlier steps left.

@@ -66,16 +66,16 @@ pub(crate) enum Effect {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct FileOutcome {
-    ok: bool,
+pub(crate) struct FileOutcome {
+    pub ok: bool,
     #[serde(default)]
-    error: Option<String>,
+    pub error: Option<String>,
     #[serde(default)]
-    effects: Vec<Effect>,
+    pub effects: Vec<Effect>,
     #[serde(default)]
-    output: Value,
+    pub output: Value,
     #[serde(default)]
-    has_output: bool,
+    pub has_output: bool,
 }
 
 #[derive(Deserialize)]

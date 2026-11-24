@@ -19,6 +19,7 @@ use butterflow_core::registry::RegistryClient;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
 pub mod build;
+mod callback_file;
 pub mod compat;
 mod deps_host;
 mod engine;
@@ -40,6 +41,7 @@ pub use butterflow_core::package_workflows::{
 pub use butterflow_state::run_store::{
     LocalStore, MemoryStore, RunRecord, RunSettings, RunStatus, RunStore, StepRecord, StepStatus,
 };
+pub use callback_file::{run_callback_file, CallbackFileRequest, CallbackFileRun};
 pub use engine::{
     cancel_run, is_typescript, load_workflow, send_event, Canceled, Engine, EngineError,
     LoadedWorkflow, RunReport, StartRequest, StopHandle,

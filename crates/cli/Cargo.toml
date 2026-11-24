@@ -13,6 +13,7 @@ rust-version.workspace = true
 ast-grep-config = { workspace = true }
 butterflow-models = { workspace = true }
 butterflow-core = { workspace = true }
+dunce = "1"
 butterflow-state = { workspace = true }
 butterflow-runners = { workspace = true }
 codemod-sandbox = { workspace = true }
