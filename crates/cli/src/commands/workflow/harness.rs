@@ -1,7 +1,10 @@
 //! `codemod workflow harness`: hidden. Runs one workflow test for the
 //! `codemod/testing` helpers in the npm package. Reads a JSON spec on stdin
-//! and writes the result as one JSON line on stdout.
+//! and writes the result as one JSON line on stdout. A spec with `callback`
+//! instead of `workflow` runs a forEachFile callback file on the target's
+//! files (`runCallback`).
 
+use std::collections::HashSet;
 use std::io::Read as _;
 use std::path::PathBuf;
 
@@ -15,7 +18,7 @@ use serde_json::{Map, Value};
 use crate::engine::create_registry_client;
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::utils::workflow_source::resolve_workflow_source_with_name;
-use crate::workflow_test::{run_case, CaseRequest};
+use crate::workflow_test::{run_callback_case, run_case, CallbackCaseRequest, CaseRequest};
 
 #[derive(Args, Debug)]
 pub struct Command {}
@@ -24,7 +27,17 @@ pub struct Command {}
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Spec {
     /// A workflow file or a package directory.
-    workflow: String,
+    #[serde(default)]
+    workflow: Option<String>,
+    /// A forEachFile callback file, to run instead of a workflow.
+    #[serde(default)]
+    callback: Option<PathBuf>,
+    /// The language of the files the callback runs on.
+    #[serde(default)]
+    language: Option<String>,
+    /// For a callback: `"file"` (the default), `"workspace"` or `"none"`.
+    #[serde(default)]
+    semantic_analysis: Option<String>,
     #[serde(default)]
     workflow_name: Option<String>,
     /// The directory the run changes (the helpers make a copy first).
@@ -53,23 +66,51 @@ pub async fn handler(_args: &Command) -> Result<()> {
         .context("cannot read the test spec from stdin")?;
     let spec: Spec = serde_json::from_str(&input).context("invalid test spec")?;
 
-    let (workflow, workflow_dir) =
-        resolve_workflow_source_with_name(&spec.workflow, spec.workflow_name.as_deref())?;
-    let mut capabilities = resolve_capabilities(
-        ResolveCapabilitiesArgs {
-            allow_fs: false,
-            allow_fetch: false,
-            allow_child_process: false,
-        },
-        None,
-        Some(workflow_dir),
-    );
-    for name in &spec.capabilities {
-        let module = name
-            .parse::<LlrtSupportedModules>()
-            .map_err(|_| anyhow::anyhow!("unknown capability '{name}'"))?;
-        capabilities.insert(module);
+    if let Some(callback) = spec.callback {
+        let language = spec
+            .language
+            .ok_or_else(|| anyhow::anyhow!("a callback test needs a language"))?;
+        let script_dir = callback.parent().map(PathBuf::from);
+        let capabilities = granted(
+            resolve_capabilities(
+                ResolveCapabilitiesArgs {
+                    allow_fs: false,
+                    allow_fetch: false,
+                    allow_child_process: false,
+                },
+                None,
+                script_dir,
+            ),
+            &spec.capabilities,
+        )?;
+        let result = run_callback_case(CallbackCaseRequest {
+            callback,
+            target: spec.target,
+            language,
+            semantic_analysis: spec.semantic_analysis,
+            capabilities,
+        })
+        .await?;
+        println!("{result}");
+        return Ok(());
     }
+    let workflow = spec
+        .workflow
+        .ok_or_else(|| anyhow::anyhow!("the test spec needs a workflow or a callback"))?;
+    let (workflow, workflow_dir) =
+        resolve_workflow_source_with_name(&workflow, spec.workflow_name.as_deref())?;
+    let capabilities = granted(
+        resolve_capabilities(
+            ResolveCapabilitiesArgs {
+                allow_fs: false,
+                allow_fetch: false,
+                allow_child_process: false,
+            },
+            None,
+            Some(workflow_dir),
+        ),
+        &spec.capabilities,
+    )?;
 
     let run = run_case(CaseRequest {
         workflow,
@@ -86,4 +127,18 @@ pub async fn handler(_args: &Command) -> Result<()> {
     .await?;
     println!("{}", run.to_json());
     Ok(())
+}
+
+/// The capabilities codemod.yaml declares, and the ones the test grants.
+fn granted(
+    mut capabilities: HashSet<LlrtSupportedModules>,
+    names: &[String],
+) -> Result<HashSet<LlrtSupportedModules>> {
+    for name in names {
+        let module = name
+            .parse::<LlrtSupportedModules>()
+            .map_err(|_| anyhow::anyhow!("unknown capability '{name}'"))?;
+        capabilities.insert(module);
+    }
+    Ok(capabilities)
 }
