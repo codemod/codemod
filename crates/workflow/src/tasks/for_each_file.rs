@@ -526,7 +526,10 @@ pub(crate) fn select(
 }
 
 /// The globs a selector picks files by: its own, or its language's files.
-fn include_globs(selector: &Selector, default_languages: &[String]) -> Result<Vec<String>, String> {
+pub(crate) fn include_globs(
+    selector: &Selector,
+    default_languages: &[String],
+) -> Result<Vec<String>, String> {
     if !selector.include.is_empty() {
         return Ok(selector.include.clone());
     }

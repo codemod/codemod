@@ -2758,6 +2758,53 @@ fn a_dry_run_lets_later_steps_see_what_earlier_ones_would_change() {
     assert!(diffs[0].1.contains("+var a = 3;"), "{diffs:?}");
 }
 
+/// `shard` reads files through a dry run's overlay too: it shards the files
+/// earlier steps would have renamed at their new paths, not the deleted
+/// ones, and its filter sees their new text.
+#[test]
+fn a_dry_run_shards_what_earlier_steps_would_have_left() {
+    let source = r#"
+import { step, forEachFile, shard } from "codemod/workflow";
+export default async function main() {
+  await step("Move", forEachFile("src/**/*.ts", (file) => {
+    if (file.path === "src/one/gone.ts") return file.delete();
+    if (file.path === "src/one/b.ts") file.write("export const keep = 1;\n");
+    if (file.path === "src/old/a.ts") file.rename("src/new/a.ts");
+  }));
+  const all = await step("All", shard({ method: { type: "directory", maxFilesPerShard: 10 }, target: "src", files: "**/*.ts" }));
+  const kept = await step("Kept", shard({ method: { type: "directory", maxFilesPerShard: 10 }, target: "src", files: "**/*.ts", filter: (file) => file.text.includes("keep") }));
+  return { all, kept };
+}
+"#;
+    let target = |h: &Harness| {
+        h.write("src/one/b.ts", "export const b = 1;\n");
+        h.write("src/one/gone.ts", "export const g = 1;\n");
+        h.write("src/old/a.ts", "export const keep = 1;\n");
+        h.write("src/two/c.ts", "export const c = 1;\n");
+    };
+    let real = Harness::new();
+    target(&real);
+    let real = output(&real.start(source, Value::Null)).unwrap();
+    let dry = Harness::new();
+    target(&dry);
+    let dry = output(&dry.dry_run(source)).unwrap();
+    let files = |result: &Value| {
+        let mut files: Vec<String> = shard_files(result)
+            .into_iter()
+            .flat_map(|(_, files)| files)
+            .collect();
+        files.sort();
+        files
+    };
+    assert_eq!(
+        files(&real["all"]),
+        ["src/new/a.ts", "src/one/b.ts", "src/two/c.ts"]
+    );
+    assert_eq!(files(&real["kept"]), ["src/new/a.ts", "src/one/b.ts"]);
+    assert_eq!(shard_files(&dry["all"]), shard_files(&real["all"]));
+    assert_eq!(shard_files(&dry["kept"]), shard_files(&real["kept"]));
+}
+
 /// A real run reports no run diff: its steps' diffs are in the summary.
 #[test]
 fn only_a_dry_run_reports_its_diff_when_it_ends() {

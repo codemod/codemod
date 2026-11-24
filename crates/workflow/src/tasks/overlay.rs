@@ -4,7 +4,8 @@
 //! as they are on disk and miss what earlier steps changed. Instead, commits
 //! in a dry run go here, and the steps that read files (`forEachFile`
 //! callbacks, `astGrep`, `jssgTransform` in function and `dependencyGraph`
-//! steps, nested codemods) read through it: they see the text earlier steps
+//! steps, `shard`'s file selection and filter, nested codemods) read
+//! through it: they see the text earlier steps
 //! left, files they renamed under their new paths, and not the files they
 //! deleted. Shell steps do not run in a dry run, so they see none of it.
 //! When the run ends, [`Overlay::changes`] is what it would have changed.
@@ -140,12 +141,32 @@ impl Overlay {
     /// and `exclude` select, as the walk would have: relative paths, with
     /// `/`. Without `include`, every file not excluded.
     pub fn created(&self, include: &[String], exclude: &[String]) -> Result<Vec<String>, String> {
-        let overrides = glob_overrides(&self.target, include, exclude)?;
+        self.created_in(None, include, exclude)
+    }
+
+    /// [`Overlay::created`] for a walk of `dir` (relative to the target, with
+    /// `/`) instead of the whole target: the globs are relative to `dir`, and
+    /// so are the paths returned.
+    pub fn created_in(
+        &self,
+        dir: Option<&str>,
+        include: &[String],
+        exclude: &[String],
+    ) -> Result<Vec<String>, String> {
+        let root = match dir {
+            Some(dir) => under(&self.target, dir),
+            None => self.target.clone(),
+        };
+        let prefix = dir.map(|dir| format!("{dir}/"));
+        let overrides = glob_overrides(&root, include, exclude)?;
         let created: Vec<String> = self
             .files()
             .iter()
             .filter(|(path, text)| text.is_some() && !under(&self.target, path).exists())
-            .map(|(path, _)| path.clone())
+            .filter_map(|(path, _)| match &prefix {
+                Some(prefix) => path.strip_prefix(prefix.as_str()).map(String::from),
+                None => Some(path.clone()),
+            })
             .collect();
         let Some(overrides) = overrides else {
             return Ok(created);
@@ -153,12 +174,12 @@ impl Overlay {
         Ok(created
             .into_iter()
             .filter(|path| {
-                let full = under(&self.target, path);
+                let full = under(&root, path);
                 // An excluded directory leaves out what is in it.
                 let excluded_dir = full
                     .ancestors()
                     .skip(1)
-                    .take_while(|dir| dir.starts_with(&self.target) && *dir != self.target)
+                    .take_while(|dir| dir.starts_with(&root) && *dir != root)
                     .any(|dir| matches!(overrides.matched(dir, true), Match::Ignore(_)));
                 if excluded_dir {
                     return false;
