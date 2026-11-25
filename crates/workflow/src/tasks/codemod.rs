@@ -109,7 +109,6 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             workflow.built.callbacks.clone(),
             Arc::new(NestedEvents {
                 parent: Arc::clone(&run.events),
-                position: task.position,
             }),
             identity,
             Arc::clone(&task.cancel),
@@ -130,8 +129,11 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
                     error_message: error.clone(),
                 }
             }
-            Ending::Canceled => NestedCodemodRunOutcome::Failed {
+            Ending::Canceled | Ending::Paused => NestedCodemodRunOutcome::Failed {
                 error_message: "canceled".into(),
+            },
+            Ending::Rejected(message) => NestedCodemodRunOutcome::Failed {
+                error_message: format!("rejected: {message}"),
             },
             Ending::AwaitingApproval(message) => NestedCodemodRunOutcome::Failed {
                 error_message: format!("waiting for approval: {message}"),
@@ -163,7 +165,8 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         Ending::Failed(error) | Ending::FailedWithOutput { error, .. } => Err(TaskError::Failed(
             format!("codemod '{}' failed: {error}", request.source),
         )),
-        Ending::Canceled => Err(TaskError::Canceled),
+        Ending::Canceled | Ending::Paused => Err(TaskError::Canceled),
+        Ending::Rejected(message) => Err(TaskError::Rejected(message)),
         Ending::AwaitingApproval(message) => Err(TaskError::AwaitingApproval(message)),
         // Nested runs have no test plan.
         Ending::Stopped(_) => Ok(TaskOutcome::new(json!({ "output": null }))),
@@ -187,68 +190,23 @@ fn is_local(source: &str) -> bool {
     source.starts_with("./") || source.starts_with("../") || source.starts_with('/')
 }
 
-/// Reports a child workflow's steps as log lines of the parent step.
+/// Passes on a child workflow's step events, which name the step running it
+/// as their parent (see `RunContext::child`); views of the run's own steps
+/// show them as that step's (`Event::top_level`). The child's run events
+/// are the parent's business: a nested run shares its parent's dry run
+/// overlay, so its changes are in the parent's diff.
 struct NestedEvents {
     parent: Arc<dyn EventSink>,
-    position: u64,
 }
 
 impl EventSink for NestedEvents {
     fn emit(&self, event: Event) {
-        let position = self.position;
-        let line = match event {
-            Event::StepStarted { label, .. } => format!("▸ {label}"),
-            Event::StepReplayed { label, .. } => format!("↺ {label}"),
-            Event::StepRetrying {
-                label,
-                attempt,
-                attempts,
-                error,
-                ..
-            } => format!("↻ {label}: attempt {attempt} of {attempts} failed: {error}"),
-            Event::StepFinished {
-                label,
-                status,
-                error,
-                ..
-            } => match (status, error) {
-                (StepStatus::Succeeded, _) => format!("✓ {label}"),
-                (StepStatus::Partial, Some(error)) => format!("◐ {label}: {error}"),
-                (StepStatus::Partial, None) => format!("◐ {label}"),
-                (StepStatus::Failed, Some(error)) => format!("✗ {label}: {error}"),
-                (StepStatus::Failed, None) => format!("✗ {label}"),
-                (StepStatus::Canceled, _) => format!("■ {label}: canceled"),
-                (StepStatus::AwaitingApproval, _) => format!("‖ {label}: waiting for approval"),
-                // Never reported: a step that began to wait has not finished.
-                (StepStatus::Waiting, _) => return,
-            },
-            Event::StepLog { line, .. } => format!("  {line}"),
-            Event::RunLog { line } => line,
-            Event::StepAgent {
-                agent, activity, ..
-            } => {
-                self.parent.emit(Event::StepAgent {
-                    position,
-                    agent,
-                    activity,
-                });
-                return;
-            }
-            Event::StepProgress {
-                processed, total, ..
-            } => {
-                self.parent.emit(Event::StepProgress {
-                    position,
-                    processed,
-                    total,
-                });
-                return;
-            }
-            // A nested run shares its parent's dry run overlay: its changes
-            // are in the parent's diff.
-            Event::RunStarted { .. } | Event::RunDiff { .. } | Event::RunFinished { .. } => return,
-        };
-        self.parent.emit(Event::StepLog { position, line });
+        if !matches!(
+            event,
+            Event::RunStarted { .. } | Event::RunDiff { .. } | Event::RunFinished { .. }
+        ) {
+            self.parent.emit(event);
+        }
     }
 }
 

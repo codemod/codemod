@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
-use crate::interaction::{Approval, Decision, Interaction};
+use crate::interaction::{Approval, Ask, Decision, Interaction};
 
 /// Asks once per run; every later write gets the same answer.
 pub(crate) struct WriteGate {
@@ -49,10 +49,15 @@ impl WriteGate {
             None | Some(TreeState::Clean) => Ok(()),
             Some(state) => {
                 let not_a_repository = state == TreeState::NotARepository;
-                match interaction.approve(&Approval::UncommittedChanges {
+                let approval = Approval::UncommittedChanges {
                     path: path.clone(),
                     not_a_repository,
-                }) {
+                };
+                let ask = Ask {
+                    id: approval.question_id(None),
+                    step: None,
+                };
+                match interaction.ask(&ask, &approval) {
                     Decision::Approved => Ok(()),
                     Decision::Denied | Decision::Deferred if not_a_repository => Err(format!(
                         "The target path '{path}' is not tracked by Git, and this step would change it; nothing was written. Use --allow-dirty to proceed anyway."

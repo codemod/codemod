@@ -97,7 +97,12 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
                 available: can_run(agent, autonomy) && agent.installed().is_some(),
             })
             .collect();
-        if let Some(choice) = run.interaction.choose_agent(&choices) {
+        let step = task.at().step;
+        let ask = crate::interaction::Ask {
+            id: format!("agent:{step}"),
+            step: Some(step),
+        };
+        if let Some(choice) = run.interaction.pick_agent(&ask, &choices) {
             let agent = codemod_agents::find(&choice)
                 .ok_or_else(|| TaskError::Failed(format!("unknown coding agent '{choice}'")))?;
             return launch(task, agent, &request, autonomy);
@@ -150,7 +155,7 @@ fn launch(
     }
     .run(&mut |activity| {
         run.events.emit(Event::StepAgent {
-            position: task.position,
+            at: task.at(),
             agent: agent.id().to_string(),
             activity,
         })

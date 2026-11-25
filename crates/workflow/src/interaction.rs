@@ -25,6 +25,53 @@ pub enum Approval {
 }
 
 impl Approval {
+    /// The id of the question asking for it: stable across resumes, so
+    /// `workflow resume --approve <id>` can name it. `step` is the key of
+    /// the step asking.
+    pub fn question_id(&self, step: Option<&str>) -> String {
+        let step = step.unwrap_or("run");
+        match self {
+            Approval::Manual { .. } => format!("approval:{step}"),
+            Approval::ShellCommand { .. } => format!("shell:{step}"),
+            Approval::Capabilities { .. } => format!("capabilities:{step}"),
+            Approval::PullRequest { .. } => format!("pull-request:{step}"),
+            Approval::UncommittedChanges { .. } => "uncommitted-changes".to_string(),
+        }
+    }
+
+    /// The question to show a person.
+    pub fn prompt(&self) -> String {
+        match self {
+            Approval::Manual { message } => message.clone(),
+            Approval::ShellCommand { command } => format!("Run shell command: {command}?"),
+            Approval::Capabilities { modules } => {
+                format!("Allow the transform to use {}?", modules.join(", "))
+            }
+            Approval::PullRequest { title, branch } => {
+                format!("Push '{branch}' and open pull request '{title}'?")
+            }
+            Approval::UncommittedChanges {
+                path,
+                not_a_repository: false,
+            } => format!("You have uncommitted changes in {path}. Do you want to proceed anyway?"),
+            Approval::UncommittedChanges {
+                path,
+                not_a_repository: true,
+            } => format!(
+                "The target path '{path}' is not tracked by Git. Do you want to proceed anyway?"
+            ),
+        }
+    }
+
+    /// What a question nobody answers gets: a manual approval waits for a
+    /// resume, the rest are refused.
+    pub fn unanswered(&self) -> Decision {
+        match self {
+            Approval::Manual { .. } => Decision::Deferred,
+            _ => Decision::Denied,
+        }
+    }
+
     /// Whether `--approve` gives it. Capabilities are granted up front, and
     /// writing over uncommitted changes takes `--allow-dirty`.
     pub fn given_by_approve_all(&self) -> bool {
@@ -38,6 +85,7 @@ impl Approval {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     Approved,
+    /// No. For a manual approval, the run ends as rejected.
     Denied,
     /// Nobody can answer now: the run stops and waits to be resumed.
     Deferred,
@@ -50,15 +98,36 @@ pub struct AgentChoice {
     pub available: bool,
 }
 
+/// Which question the engine asks, and the step asking it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ask {
+    /// See [`Approval::question_id`]; `agent:<step>` for agent questions.
+    pub id: String,
+    /// The key of the step asking (`"3"`, `"3/0"`).
+    pub step: Option<String>,
+}
+
 pub trait Interaction: Send + Sync {
     fn is_interactive(&self) -> bool;
 
     fn approve(&self, approval: &Approval) -> Decision;
 
+    /// [`Self::approve`], knowing which question it is: the engine asks
+    /// through this. Hosts that track questions by id override it.
+    fn ask(&self, _ask: &Ask, approval: &Approval) -> Decision {
+        self.approve(approval)
+    }
+
     /// Pick a coding agent for an `agent(...)` step; `None` uses the built-in
     /// one.
     fn choose_agent(&self, _choices: &[AgentChoice]) -> Option<String> {
         None
+    }
+
+    /// [`Self::choose_agent`], knowing which question it is: the engine asks
+    /// through this.
+    fn pick_agent(&self, _ask: &Ask, choices: &[AgentChoice]) -> Option<String> {
+        self.choose_agent(choices)
     }
 }
 
@@ -106,6 +175,25 @@ mod tests {
             }),
             Decision::Approved
         );
+    }
+
+    #[test]
+    fn question_ids_name_the_kind_and_the_step() {
+        let manual = Approval::Manual {
+            message: "go?".into(),
+        };
+        assert_eq!(manual.question_id(Some("3/0")), "approval:3/0");
+        assert_eq!(capabilities().question_id(Some("1")), "capabilities:1");
+        assert_eq!(
+            Approval::UncommittedChanges {
+                path: ".".into(),
+                not_a_repository: false
+            }
+            .question_id(Some("2")),
+            "uncommitted-changes"
+        );
+        assert_eq!(manual.unanswered(), Decision::Deferred);
+        assert_eq!(capabilities().unanswered(), Decision::Denied);
     }
 
     #[test]

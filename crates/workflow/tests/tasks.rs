@@ -3,7 +3,7 @@ mod common;
 use std::sync::Arc;
 
 use codemod_workflow::events::{Event, PartialStep};
-use codemod_workflow::interaction::NonInteractive;
+use codemod_workflow::interaction::{Decision, NonInteractive};
 use codemod_workflow::{
     cancel_run, Canceled, Ending, FileCount, MemoryStore, RunStatus, Services, StepStatus,
 };
@@ -164,6 +164,8 @@ fn an_approval_nobody_can_give_pauses_the_run_until_resumed() {
     // The step that waits is on record, so `status` can name it.
     assert_eq!(first.steps.len(), 2);
     assert_eq!(first.steps[1].status, StepStatus::AwaitingApproval);
+    // And the question, so `resume --approve <id>` can name it.
+    assert_eq!(first.run.question.as_deref(), Some("approval:1"));
 
     // Resume with approval, sharing the same store.
     let approver = Harness::with(store, Arc::new(NonInteractive { approve_all: true }));
@@ -188,6 +190,152 @@ fn canceling_a_run_that_waits_for_approval_marks_it_canceled() {
         cancel_run(h.store.as_ref(), &first.run.id).unwrap(),
         Canceled::AlreadyFinished(RunStatus::Canceled)
     );
+}
+
+/// Approves the questions it is given by id, rejects the rest, and keeps
+/// what it was asked.
+struct ById {
+    yes: Vec<&'static str>,
+    asked: std::sync::Mutex<Vec<(String, Option<String>)>>,
+}
+
+impl ById {
+    fn new(yes: &[&'static str]) -> Arc<Self> {
+        Arc::new(Self {
+            yes: yes.to_vec(),
+            asked: Default::default(),
+        })
+    }
+}
+
+impl codemod_workflow::interaction::Interaction for ById {
+    fn is_interactive(&self) -> bool {
+        true
+    }
+
+    fn approve(&self, _approval: &codemod_workflow::interaction::Approval) -> Decision {
+        unreachable!("the engine asks by id")
+    }
+
+    fn ask(
+        &self,
+        ask: &codemod_workflow::interaction::Ask,
+        _approval: &codemod_workflow::interaction::Approval,
+    ) -> Decision {
+        self.asked
+            .lock()
+            .unwrap()
+            .push((ask.id.clone(), ask.step.clone()));
+        if self.yes.contains(&ask.id.as_str()) {
+            Decision::Approved
+        } else {
+            Decision::Denied
+        }
+    }
+}
+
+const TWO_APPROVALS: &str = r#"
+import { step, approval, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step(forEachFile("*.txt", (file) => { file.write(file.text + "1"); }));
+  await step(approval("Go on?"));
+  await step(forEachFile("*.txt", (file) => { file.write(file.text + "2"); }));
+  await step(approval("Finish?"));
+  await step(forEachFile("*.txt", (file) => { file.write(file.text + "3"); }));
+}
+"#;
+
+#[test]
+fn a_rejected_approval_ends_the_run_as_rejected_and_keeps_earlier_changes() {
+    let store = Arc::new(MemoryStore::default());
+    let asker = ById::new(&["approval:1"]);
+    let h = Harness::with(store.clone(), asker.clone());
+    h.write("a.txt", "a");
+
+    let report = h.start(TWO_APPROVALS, Value::Null);
+    assert_eq!(report.ending, Ending::Rejected("Finish?".into()));
+    assert_eq!(report.run.status, RunStatus::Rejected);
+    assert_eq!(report.run.error.as_deref(), Some("rejected: Finish?"));
+    assert_eq!(h.read("a.txt"), "a12");
+    assert_eq!(report.steps[3].status, StepStatus::Rejected);
+    assert_eq!(report.steps.len(), 4, "nothing ran after the rejection");
+    assert_eq!(
+        *asker.asked.lock().unwrap(),
+        [
+            ("approval:1".to_string(), Some("1".to_string())),
+            ("approval:3".to_string(), Some("3".to_string()))
+        ]
+    );
+    let finished = h
+        .events
+        .take()
+        .into_iter()
+        .rfind(|event| matches!(event, Event::RunFinished { .. }))
+        .unwrap();
+    assert!(
+        matches!(
+            &finished,
+            Event::RunFinished {
+                status: RunStatus::Rejected,
+                ..
+            }
+        ),
+        "{finished:?}"
+    );
+
+    // Over, unless forced.
+    let error = h.engine.resume(&report.run.id).unwrap_err().to_string();
+    assert!(
+        error.contains("rejected") && error.contains("--force"),
+        "{error}"
+    );
+    let approver = Harness::with(store, ById::new(&["approval:3"]));
+    let resumed = approver.engine.resume_with(&report.run.id, true).unwrap();
+    assert!(output(&resumed).is_ok(), "{:?}", resumed.ending);
+    assert_eq!(h.read("a.txt"), "a123");
+}
+
+#[test]
+fn a_rejection_stops_steps_running_alongside() {
+    let h = Harness::with(Arc::new(MemoryStore::default()), ById::new(&[]));
+    let report = h.start(
+        r#"
+import { step, approval } from "codemod/workflow";
+export default async function main() {
+  await Promise.all([
+    step("Spin", () => { while (true) {} }),
+    step(approval("Stop it?")),
+  ]);
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(report.ending, Ending::Rejected("Stop it?".into()));
+    assert_eq!(report.run.status, RunStatus::Rejected);
+}
+
+#[test]
+fn a_canceled_run_is_resumed_only_when_forced() {
+    let store = Arc::new(MemoryStore::default());
+    let h = Harness::with(
+        store.clone(),
+        Arc::new(NonInteractive { approve_all: false }),
+    );
+    h.write("a.txt", "a");
+    let first = h.start(NEEDS_APPROVAL, Value::Null);
+    cancel_run(h.store.as_ref(), &first.run.id).unwrap();
+    let approver = Harness::with(store, Arc::new(NonInteractive { approve_all: true }));
+    assert!(matches!(
+        approver.engine.resume(&first.run.id),
+        Err(codemod_workflow::EngineError::Ended {
+            status: RunStatus::Canceled,
+            ..
+        })
+    ));
+    assert_eq!(h.read("a.txt"), "a1");
+    let second = approver.engine.resume_with(&first.run.id, true).unwrap();
+    assert!(output(&second).is_ok(), "{:?}", second.ending);
+    assert_eq!(h.read("a.txt"), "a12");
 }
 
 #[test]

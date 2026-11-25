@@ -220,6 +220,7 @@ fn checked_start(harness: &Harness, source: &str) -> codemod_workflow::RunReport
     harness
         .engine
         .start(StartRequest {
+            run_id: None,
             workflow: harness.workflow(source),
             target: harness.target.path().to_path_buf(),
             params: Value::Null,

@@ -22,6 +22,7 @@ export type StepStatus =
   | "failed"
   | "canceled"
   | "awaiting-approval"
+  | "rejected"
   | "waiting";
 
 /**
@@ -95,7 +96,13 @@ export interface Outcome {
 
 /** `host.event(event)`: `HostEvent` in `crates/workflow/src/run.rs`. */
 export type StepEvent =
-  | { type: "stepStarted" | "stepReplayed"; position: number; label: string }
+  | {
+      type: "stepStarted" | "stepReplayed";
+      position: number;
+      label: string;
+      /** The step's task kind (`forEachFile`, `approval`, ...). */
+      kind?: string;
+    }
   | {
       type: "stepRetrying";
       position: number;
@@ -167,6 +174,14 @@ export class AwaitingApprovalError extends Error {
   constructor(message?: string) {
     super(message);
     this.name = "AwaitingApprovalError";
+  }
+}
+
+/** An approval was rejected: the run ends as rejected. */
+export class RejectedError extends Error {
+  constructor(message?: string) {
+    super(message);
+    this.name = "RejectedError";
   }
 }
 
@@ -1021,7 +1036,7 @@ export function createRuntime(host: Host) {
     }
     if (given.has(name)) {
       const result = given.get(name) ?? null;
-      host.event({ type: "stepReplayed", position, label: name });
+      host.event({ type: "stepReplayed", position, label: name, kind: content.kind });
       host.record(
         { position, label: name, key, status: "succeeded", result, given: true, seq: nextSeq++ },
         0,
@@ -1036,7 +1051,7 @@ export function createRuntime(host: Host) {
           order: prior.seq ?? prior.position,
           settle() {
             settleClock(prior);
-            host.event({ type: "stepReplayed", position, label: name });
+            host.event({ type: "stepReplayed", position, label: name, kind: content.kind });
             resolve(prior.result ?? null);
           },
         });
@@ -1048,7 +1063,7 @@ export function createRuntime(host: Host) {
       closed = true;
       throw new CanceledError();
     }
-    host.event({ type: "stepStarted", position, label: name });
+    host.event({ type: "stepStarted", position, label: name, kind: content.kind });
     const started = host.now();
     // A wait counts from when it first began, also when it was interrupted
     // and goes on now, so that is recorded before it starts. One that failed
@@ -1154,9 +1169,10 @@ export function createRuntime(host: Host) {
     return entry.status === "succeeded" || entry.status === "partial";
   }
 
-  function interruptionOf(error: Error): "canceled" | "awaiting-approval" | null {
+  function interruptionOf(error: Error): "canceled" | "awaiting-approval" | "rejected" | null {
     if (error instanceof CanceledError) return "canceled";
     if (error instanceof AwaitingApprovalError) return "awaiting-approval";
+    if (error instanceof RejectedError) return "rejected";
     return null;
   }
 
@@ -1177,11 +1193,15 @@ export function createRuntime(host: Host) {
       if (cause.name === "AwaitingApprovalError" && !(cause instanceof AwaitingApprovalError)) {
         return new AwaitingApprovalError(cause.message);
       }
+      if (cause.name === "RejectedError" && !(cause instanceof RejectedError)) {
+        return new RejectedError(cause.message);
+      }
       return cause;
     }
     if (isRecord(cause) && typeof cause.message === "string") {
       if (cause.name === "CanceledError") return new CanceledError(cause.message);
       if (cause.name === "AwaitingApprovalError") return new AwaitingApprovalError(cause.message);
+      if (cause.name === "RejectedError") return new RejectedError(cause.message);
       return new Error(cause.message);
     }
     return new Error(String(cause));

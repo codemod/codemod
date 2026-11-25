@@ -76,6 +76,7 @@ fn run_case_blocking(request: CaseRequest) -> Result<CaseRun> {
     );
     let report = engine
         .start(StartRequest {
+            run_id: None,
             workflow,
             target: request.target,
             params: Value::Object(request.params),
@@ -94,16 +95,17 @@ fn run_case_blocking(request: CaseRequest) -> Result<CaseRun> {
 fn logs(events: Vec<Event>) -> Vec<LogLine> {
     let mut labels = HashMap::new();
     let mut lines = Vec::new();
-    for event in events {
+    // A nested codemod's steps log as their parent step's.
+    for event in events.into_iter().filter_map(Event::top_level) {
         match event {
-            Event::StepStarted { position, label } => {
-                labels.insert(position, label);
+            Event::StepStarted { at, label, .. } => {
+                labels.insert(at.position, label);
             }
-            Event::StepLog { position, line } => lines.push(LogLine {
-                step: labels.get(&position).cloned(),
+            Event::StepLog { at, line } => lines.push(LogLine {
+                step: labels.get(&at.position).cloned(),
                 line,
             }),
-            Event::RunLog { line } => lines.push(LogLine { step: None, line }),
+            Event::RunLog { line, .. } => lines.push(LogLine { step: None, line }),
             _ => {}
         }
     }

@@ -34,7 +34,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         task.log("skipped: shell commands do not run in a dry run");
         return Ok(TaskOutcome::new(json!({ "skipped": true })));
     }
-    match run.interaction.approve(&Approval::ShellCommand {
+    match task.approve(&Approval::ShellCommand {
         command: request.command.clone(),
     }) {
         Decision::Approved => {}
@@ -62,14 +62,17 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     let cwd = target_dir.join(request.cwd.as_deref().unwrap_or(""));
 
     let events = Arc::clone(&run.events);
-    let position = task.position;
+    let at = task.at();
     let on_line: butterflow_runners::OutputCallback = Arc::new(move |line: String| {
         // The runner tags each line with its stream; stdout needs no tag in step logs.
         let line = line
             .strip_prefix("[stdout] ")
             .map(str::to_string)
             .unwrap_or(line);
-        events.emit(crate::events::Event::StepLog { position, line });
+        events.emit(crate::events::Event::StepLog {
+            at: at.clone(),
+            line,
+        });
     });
     let runner = DirectRunner::with_quiet(true)
         .with_cancel(Arc::clone(&task.cancel))

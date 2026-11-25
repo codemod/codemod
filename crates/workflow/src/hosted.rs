@@ -54,6 +54,7 @@ impl Engine {
     /// Start a run whose body the caller runs.
     pub fn open(&self, request: OpenRequest) -> Result<HostedRun, EngineError> {
         let execution = self.begin_new(
+            None,
             &request.workflow,
             &request.target,
             request.params,
@@ -78,7 +79,7 @@ impl Engine {
         let callbacks = crate::engine::load_workflow(&record.workflow_path)
             .map(|loaded| loaded.built.callbacks)
             .unwrap_or_default();
-        let execution = self.begin_resumed(record, callbacks, NODE_HOST)?;
+        let execution = self.begin_resumed(record, callbacks, NODE_HOST, false)?;
         let history = execution.context.store.load_steps(run_id)?;
         Ok(HostedRun::new(execution, history))
     }
@@ -182,8 +183,11 @@ impl HostedRun {
     /// A line the body or a step wrote; `position` is the step's.
     pub fn log(&self, position: Option<u64>, line: String) {
         self.context.events.emit(match position {
-            Some(position) => Event::StepLog { position, line },
-            None => Event::RunLog { line },
+            Some(position) => Event::StepLog {
+                at: self.context.at(position),
+                line,
+            },
+            None => Event::RunLog { line, step: None },
         });
     }
 
@@ -198,7 +202,7 @@ impl HostedRun {
 
     /// Cancel this run.
     pub fn cancel(&self) {
-        self.context.cancel.store(true, Ordering::SeqCst);
+        self.context.halt.stop(crate::run::StopReason::Cancel);
     }
 
     /// The test plan's `until` step has started.
@@ -281,7 +285,7 @@ impl HostedRun {
     /// Report a step's progress through its files.
     pub fn progress(&self, position: u64, processed: usize, total: usize) {
         self.context.events.emit(Event::StepProgress {
-            position,
+            at: self.context.at(position),
             processed,
             total,
         });

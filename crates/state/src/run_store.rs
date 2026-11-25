@@ -39,23 +39,56 @@ pub type StoreResult<T> = Result<T, StoreError>;
 pub enum RunStatus {
     Running,
     AwaitingApproval,
+    /// Stopped on request (Ctrl-C, `stop {mode: "pause"}`): resume continues it.
+    Paused,
     Succeeded,
     Failed,
+    /// Canceled (`workflow cancel`, `stop {mode: "cancel"}`): over; resuming
+    /// it takes `--force`.
     Canceled,
+    /// An approval was rejected: over; earlier steps' changes stay, and
+    /// resuming it takes `--force`.
+    Rejected,
+}
+
+/// Whether a run may be continued. Every rule about which statuses can be
+/// resumed lives here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resumable {
+    Yes,
+    /// Only when asked to on purpose (`--force`): the run was ended by a person.
+    WithForce,
+    /// It succeeded: there is nothing left to run.
+    No,
 }
 
 impl RunStatus {
+    /// Whether the run has ended, for good or until it is resumed: it has
+    /// an end time.
     pub fn is_finished(self) -> bool {
-        matches!(self, Self::Succeeded | Self::Failed | Self::Canceled)
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Canceled | Self::Rejected
+        )
+    }
+
+    pub fn resumable(self) -> Resumable {
+        match self {
+            Self::Running | Self::AwaitingApproval | Self::Paused | Self::Failed => Resumable::Yes,
+            Self::Canceled | Self::Rejected => Resumable::WithForce,
+            Self::Succeeded => Resumable::No,
+        }
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Running => "running",
             Self::AwaitingApproval => "awaiting-approval",
+            Self::Paused => "paused",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
             Self::Canceled => "canceled",
+            Self::Rejected => "rejected",
         }
     }
 }
@@ -81,6 +114,10 @@ pub struct RunRecord {
     /// Set while the run waits for a manual approval: what is being approved.
     #[serde(default)]
     pub awaiting: Option<String>,
+    /// With `awaiting`: the id of the question waiting (`approval:3`), which
+    /// `workflow resume --approve <id>` gives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
     /// The workflow's return value once it succeeds, or the output a
@@ -127,20 +164,36 @@ pub enum Outcome {
         exit_code: i32,
     },
     Canceled,
+    /// Stopped on request, to be resumed.
+    Paused,
+    /// An approval was rejected: what it asked.
+    Rejected(String),
     /// Waiting for an approval: what is being approved.
     AwaitingApproval(String),
 }
 
+/// Why a run cannot be continued.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NotResumable {
+    AlreadySucceeded,
+    /// Canceled or rejected, and not forced.
+    Ended(RunStatus),
+}
+
 impl RunRecord {
     /// Mark the run as running again, to continue it. A run that succeeded
-    /// has nothing left to continue.
-    pub fn reopen(&mut self) -> Result<(), AlreadySucceeded> {
-        if self.status == RunStatus::Succeeded {
-            return Err(AlreadySucceeded);
+    /// has nothing left to continue; one that was canceled or rejected is
+    /// continued only when `force`d (see [`RunStatus::resumable`]).
+    pub fn reopen(&mut self, force: bool) -> Result<(), NotResumable> {
+        match self.status.resumable() {
+            Resumable::No => return Err(NotResumable::AlreadySucceeded),
+            Resumable::WithForce if !force => return Err(NotResumable::Ended(self.status)),
+            _ => {}
         }
         self.status = RunStatus::Running;
         self.ended_at = None;
         self.awaiting = None;
+        self.question = None;
         self.error = None;
         Ok(())
     }
@@ -148,6 +201,7 @@ impl RunRecord {
     /// Record how this execution ended.
     pub fn conclude(&mut self, outcome: Outcome) {
         self.awaiting = None;
+        self.question = None;
         self.error = None;
         self.exit_code = None;
         match outcome {
@@ -171,6 +225,11 @@ impl RunRecord {
                 self.exit_code = Some(exit_code);
             }
             Outcome::Canceled => self.status = RunStatus::Canceled,
+            Outcome::Paused => self.status = RunStatus::Paused,
+            Outcome::Rejected(message) => {
+                self.status = RunStatus::Rejected;
+                self.error = Some(format!("rejected: {message}"));
+            }
             Outcome::AwaitingApproval(message) => {
                 self.status = RunStatus::AwaitingApproval;
                 self.awaiting = Some(message);
@@ -179,9 +238,6 @@ impl RunRecord {
         self.ended_at = self.status.is_finished().then(Utc::now);
     }
 }
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct AlreadySucceeded;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -195,6 +251,8 @@ pub enum StepStatus {
     Canceled,
     /// The step waits for an approval; it runs again on resume.
     AwaitingApproval,
+    /// The approval this step asked for was rejected: the run ended there.
+    Rejected,
     /// The step is waiting, for a time or an event (`sleep`, `waitForEvent`).
     /// Recorded when the wait begins, so a resume counts the time already
     /// waited.
@@ -209,6 +267,7 @@ impl StepStatus {
             Self::Failed => "failed",
             Self::Canceled => "canceled",
             Self::AwaitingApproval => "awaiting-approval",
+            Self::Rejected => "rejected",
             Self::Waiting => "waiting",
         }
     }
@@ -314,6 +373,13 @@ pub trait RunStore: Send + Sync {
     fn send_event(&self, run_id: &str, name: &str, data: &Value) -> StoreResult<()>;
     /// Take the oldest event of that name left for the run, if there is one.
     fn take_event(&self, run_id: &str, name: &str) -> StoreResult<Option<Value>>;
+
+    /// Add a line (one JSON event, without its line break) to the run's
+    /// event journal: what `workflow attach` replays.
+    fn append_journal(&self, run_id: &str, line: &str) -> StoreResult<()>;
+    /// The journal's complete lines from `cursor` on (`0`: the start), and
+    /// the cursor to read on from. Nothing when the run has no journal.
+    fn read_journal(&self, run_id: &str, cursor: u64) -> StoreResult<(Vec<String>, u64)>;
 }
 
 /// Whether `name` can name an event: letters, digits, `.`, `_` and `-`, up
@@ -358,6 +424,7 @@ struct MemoryRun {
     cancel: bool,
     held: bool,
     events: Vec<(String, Value)>,
+    journal: Vec<String>,
 }
 
 type MemoryRuns = Arc<Mutex<BTreeMap<String, MemoryRun>>>;
@@ -477,13 +544,29 @@ impl RunStore for MemoryStore {
             Some(events.remove(index).1)
         }))
     }
+
+    fn append_journal(&self, run_id: &str, line: &str) -> StoreResult<()> {
+        self.with_run(run_id, |run| run.journal.push(line.to_string()))
+    }
+
+    fn read_journal(&self, run_id: &str, cursor: u64) -> StoreResult<(Vec<String>, u64)> {
+        Ok(self.with(|runs| match runs.get(run_id) {
+            Some(run) => {
+                let lines: Vec<String> =
+                    run.journal.iter().skip(cursor as usize).cloned().collect();
+                (lines, run.journal.len() as u64)
+            }
+            None => (Vec::new(), cursor),
+        }))
+    }
 }
 
 // ----------------------------------------------------------------- local ---
 
 /// JSON files on disk: `<root>/<run_id>/run.json` and `steps.json`, a
-/// `cancel` marker, a `lock` file its executor keeps locked, and one file
-/// per undelivered event under `events/`.
+/// `cancel` marker, a `lock` file its executor keeps locked, one file per
+/// undelivered event under `events/`, and the event journal,
+/// `journal.jsonl`.
 pub struct LocalStore {
     root: PathBuf,
     write_lock: Mutex<()>,
@@ -688,6 +771,57 @@ impl RunStore for LocalStore {
         Self::write_json(&dir.join("events").join(file), data)
     }
 
+    fn append_journal(&self, run_id: &str, line: &str) -> StoreResult<()> {
+        use std::io::Write as _;
+        let dir = self.run_dir(run_id);
+        if !dir.join("run.json").exists() {
+            return Err(StoreError::NotFound(run_id.to_string()));
+        }
+        let path = dir.join("journal.jsonl");
+        let io = |source| StoreError::Io {
+            path: path.clone(),
+            source,
+        };
+        // One write per line, so a reader never sees half of one followed by
+        // another writer's.
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(io)?;
+        file.write_all(format!("{line}\n").as_bytes()).map_err(io)
+    }
+
+    fn read_journal(&self, run_id: &str, cursor: u64) -> StoreResult<(Vec<String>, u64)> {
+        use std::io::{Read as _, Seek as _};
+        let path = self.run_dir(run_id).join("journal.jsonl");
+        let io = |source| StoreError::Io {
+            path: path.clone(),
+            source,
+        };
+        let mut file = match fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((Vec::new(), cursor))
+            }
+            Err(source) => return Err(io(source)),
+        };
+        file.seek(std::io::SeekFrom::Start(cursor)).map_err(io)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(io)?;
+        // A line still being written is read next time.
+        let complete = bytes
+            .iter()
+            .rposition(|b| *b == b'\n')
+            .map_or(0, |at| at + 1);
+        let lines = String::from_utf8_lossy(&bytes[..complete])
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect();
+        Ok((lines, cursor + complete as u64))
+    }
+
     fn take_event(&self, run_id: &str, name: &str) -> StoreResult<Option<Value>> {
         let dir = self.run_dir(run_id).join("events");
         let entries = match fs::read_dir(&dir) {
@@ -738,6 +872,7 @@ mod tests {
             started_at: DateTime::from_timestamp(minutes * 60, 0).unwrap(),
             ended_at: None,
             awaiting: None,
+            question: None,
             error: None,
             output: None,
             exit_code: None,
@@ -828,6 +963,21 @@ mod tests {
             Err(StoreError::NotFound(_))
         ));
 
+        let (lines, end) = store.read_journal("a", 0).unwrap();
+        assert!(lines.is_empty());
+        store.append_journal("a", r#"{"seq":0}"#).unwrap();
+        store.append_journal("a", r#"{"seq":1}"#).unwrap();
+        let (lines, cursor) = store.read_journal("a", end).unwrap();
+        assert_eq!(lines, [r#"{"seq":0}"#, r#"{"seq":1}"#]);
+        store.append_journal("a", r#"{"seq":2}"#).unwrap();
+        let (lines, _) = store.read_journal("a", cursor).unwrap();
+        assert_eq!(lines, [r#"{"seq":2}"#]);
+        assert!(store.read_journal("b", 0).unwrap().0.is_empty());
+        assert!(matches!(
+            store.append_journal("missing", "{}"),
+            Err(StoreError::NotFound(_))
+        ));
+
         assert!(!store.is_held("a").unwrap());
         let lease = store.acquire("a").unwrap().expect("nothing holds the run");
         assert!(store.is_held("a").unwrap());
@@ -850,7 +1000,7 @@ mod tests {
         assert_eq!(run.awaiting.as_deref(), Some("ship?"));
         assert!(run.ended_at.is_none());
 
-        run.reopen().unwrap();
+        run.reopen(false).unwrap();
         assert_eq!(run.status, RunStatus::Running);
         assert!(run.awaiting.is_none());
 
@@ -858,10 +1008,34 @@ mod tests {
         assert_eq!(run.error.as_deref(), Some("boom"));
         assert!(run.ended_at.is_some());
 
-        run.reopen().unwrap();
+        run.reopen(false).unwrap();
         assert!(run.error.is_none() && run.ended_at.is_none());
+        run.conclude(Outcome::Paused);
+        assert_eq!(run.status, RunStatus::Paused);
+        assert!(run.ended_at.is_none());
+        run.reopen(false).unwrap();
         run.conclude(Outcome::Succeeded(Value::from(1)));
-        assert_eq!(run.reopen(), Err(AlreadySucceeded));
+        assert_eq!(run.reopen(true), Err(NotResumable::AlreadySucceeded));
+    }
+
+    #[test]
+    fn canceled_and_rejected_runs_are_resumed_only_when_forced() {
+        for (outcome, status) in [
+            (Outcome::Canceled, RunStatus::Canceled),
+            (Outcome::Rejected("ship?".into()), RunStatus::Rejected),
+        ] {
+            let mut run = record("a", 1);
+            run.conclude(outcome);
+            assert_eq!(run.status, status);
+            assert!(run.ended_at.is_some());
+            assert_eq!(run.reopen(false), Err(NotResumable::Ended(status)));
+            assert_eq!(run.status, status);
+            run.reopen(true).unwrap();
+            assert_eq!(run.status, RunStatus::Running);
+        }
+        let mut run = record("a", 1);
+        run.conclude(Outcome::Rejected("ship?".into()));
+        assert_eq!(run.error.as_deref(), Some("rejected: ship?"));
     }
 
     #[test]

@@ -1599,6 +1599,20 @@ pub struct Inspection {
     /// callbacks (`./scripts/migrate.ts`), which the modules the build
     /// extracts import, and YAML files (`./rules.yaml`), which are data.
     pub external_imports: Vec<String>,
+    /// The `step(...)` calls in the source, in source order. A step in a
+    /// loop is listed once; one built at run time may be missing.
+    pub steps: Vec<StaticStep>,
+}
+
+/// A `step(...)` call as written.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StaticStep {
+    /// Its label, when it is a string literal.
+    pub label: Option<String>,
+    /// Its task: the `codemod/workflow` function called for it
+    /// (`forEachFile`, `approval`, ...), `function` for an inline function,
+    /// `None` when it is not written in place.
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1670,6 +1684,30 @@ pub fn inspect(file: &str, source: &str) -> Result<Inspection, BuildError> {
             continue;
         };
         inspection.calls.push(name.clone());
+        if name == "step" {
+            let mut arguments = call.arguments.iter().filter_map(|a| a.as_expression());
+            let first = arguments.next();
+            let (label, task) = match first.and_then(string_of) {
+                Some(label) => (Some(label), arguments.next()),
+                None => (None, first),
+            };
+            let kind = match task {
+                Some(Expression::CallExpression(task)) => match &task.callee {
+                    Expression::Identifier(callee) => scoping
+                        .get_reference(callee.reference_id())
+                        .symbol_id()
+                        .and_then(|symbol| imported.get(&symbol))
+                        .cloned(),
+                    _ => None,
+                },
+                Some(
+                    Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_),
+                ) => Some("function".to_string()),
+                _ => None,
+            };
+            inspection.steps.push(StaticStep { label, kind });
+            continue;
+        }
         if name != "installSkill" {
             continue;
         }

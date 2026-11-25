@@ -66,7 +66,7 @@ impl StepIsolates {
     ) -> WorkerOptions<OxcResolver> {
         let run = task.run;
         let events = Arc::clone(&run.events);
-        let position = task.position;
+        let at = task.at();
         WorkerOptions {
             capabilities: self.capabilities.clone(),
             resolver: Arc::clone(&self.resolver),
@@ -76,7 +76,7 @@ impl StepIsolates {
             runtime_event_callback: Some(Arc::new(move |event: RuntimeEvent| {
                 if event.kind != RuntimeEventKind::SetCurrentUnit {
                     events.emit(Event::StepLog {
-                        position,
+                        at: at.clone(),
                         line: butterflow_core::jssg_runner::format_runtime_event(&event),
                     });
                 }
@@ -167,7 +167,7 @@ pub(crate) fn capabilities(
         return Ok(result);
     }
     let names: Vec<String> = missing.iter().map(|(name, _)| name.clone()).collect();
-    match task.run.interaction.approve(&Approval::Capabilities {
+    match task.approve(&Approval::Capabilities {
         modules: names.clone(),
     }) {
         Decision::Approved => result.extend(missing.into_iter().map(|(_, module)| module)),

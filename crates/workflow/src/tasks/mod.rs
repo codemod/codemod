@@ -9,7 +9,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::events::Event;
+use crate::events::{Event, StepAt};
+use crate::interaction::{Approval, Ask, Decision};
 use crate::run::RunContext;
 
 mod agent;
@@ -79,9 +80,29 @@ impl TaskContext<'_> {
         self.cancel.load(Ordering::SeqCst)
     }
 
+    /// Which step this is, for events.
+    pub fn at(&self) -> StepAt {
+        self.run.at(self.position)
+    }
+
+    /// Ask for `approval` as this step. A deferred approval is noted as the
+    /// one the run waits for.
+    pub fn approve(&self, approval: &Approval) -> Decision {
+        let step = self.at().step;
+        let ask = Ask {
+            id: approval.question_id(Some(&step)),
+            step: Some(step),
+        };
+        let decision = self.run.interaction.ask(&ask, approval);
+        if decision == Decision::Deferred {
+            self.run.halt.wait_for(ask.id);
+        }
+        decision
+    }
+
     pub fn progress(&self, processed: usize, total: usize) {
         self.run.events.emit(Event::StepProgress {
-            position: self.position,
+            at: self.at(),
             processed,
             total,
         });
@@ -89,7 +110,7 @@ impl TaskContext<'_> {
 
     pub fn log(&self, line: impl Into<String>) {
         self.run.events.emit(Event::StepLog {
-            position: self.position,
+            at: self.at(),
             line: line.into(),
         });
     }
@@ -149,6 +170,8 @@ pub(crate) enum TaskError {
     Failed(String),
     /// A manual approval nobody could give now.
     AwaitingApproval(String),
+    /// A manual approval was rejected: the run ends.
+    Rejected(String),
     Canceled,
 }
 
@@ -164,6 +187,7 @@ impl TaskError {
         let (name, message) = match self {
             Self::Failed(message) => ("Error", message.as_str()),
             Self::AwaitingApproval(message) => ("AwaitingApprovalError", message.as_str()),
+            Self::Rejected(message) => ("RejectedError", message.as_str()),
             Self::Canceled => ("CanceledError", "the run was canceled"),
         };
         serde_json::json!({ "name": name, "message": message }).to_string()
@@ -207,7 +231,9 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         "pullRequest" => git::pull_request(task, parse(content)?),
         other => Err(TaskError::Failed(format!("unknown task kind '{other}'"))),
     };
-    if task.canceled() && result.is_err() {
+    if task.canceled()
+        && matches!(result, Err(ref error) if !matches!(error, TaskError::Rejected(_)))
+    {
         return Err(TaskError::Canceled);
     }
     result

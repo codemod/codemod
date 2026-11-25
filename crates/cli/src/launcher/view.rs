@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 
 use butterflow_core::diff::FileDiff;
-use codemod_workflow::events::Event;
+use codemod_workflow::events::{Event, StepAt};
 use codemod_workflow::interaction::{AgentChoice, Approval, Decision};
 use codemod_workflow::{RunStatus, StepStatus};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -34,6 +34,7 @@ impl From<StepStatus> for StepState {
             StepStatus::Failed => Self::Failed,
             StepStatus::Canceled => Self::Canceled,
             StepStatus::AwaitingApproval => Self::AwaitingApproval,
+            StepStatus::Rejected => Self::Failed,
             StepStatus::Waiting => Self::Waiting,
         }
     }
@@ -210,6 +211,10 @@ impl RunView {
     }
 
     pub fn apply(&mut self, event: Event) {
+        // A nested codemod's steps show as their parent step's.
+        let Some(event) = event.top_level() else {
+            return;
+        };
         match event {
             Event::RunStarted {
                 run_id, resumed, ..
@@ -218,14 +223,14 @@ impl RunView {
                 self.resumed = resumed;
                 self.phase = Phase::Running;
             }
-            Event::StepStarted { position, label } => {
-                self.start_step(position, label, StepState::Running)
+            Event::StepStarted { at, label, .. } => {
+                self.start_step(at.position, label, StepState::Running)
             }
-            Event::StepReplayed { position, label } => {
-                self.start_step(position, label, StepState::Replayed)
+            Event::StepReplayed { at, label, .. } => {
+                self.start_step(at.position, label, StepState::Replayed)
             }
             Event::StepProgress {
-                position,
+                at: StepAt { position, .. },
                 processed,
                 total,
             } => {
@@ -234,10 +239,10 @@ impl RunView {
                     step.total = total;
                 }
             }
-            Event::StepLog { position, line } => self.log(Some(position), line),
-            Event::RunLog { line } => self.log(None, line),
+            Event::StepLog { at, line } => self.log(Some(at.position), line),
+            Event::RunLog { line, .. } => self.log(None, line),
             Event::StepAgent {
-                position,
+                at: StepAt { position, .. },
                 agent,
                 activity,
             } => {
@@ -272,7 +277,7 @@ impl RunView {
                 }
             }
             Event::StepRetrying {
-                position,
+                at: StepAt { position, .. },
                 label,
                 attempt,
                 attempts,
@@ -287,11 +292,12 @@ impl RunView {
                 );
             }
             Event::StepFinished {
-                position,
+                at: StepAt { position, .. },
                 label,
                 status,
                 error,
                 duration_ms,
+                ..
             } => {
                 self.flush_agent_text(position);
                 if self.step_mut(position).is_none() {
@@ -319,6 +325,12 @@ impl RunView {
                 deletions,
                 step: None,
             }),
+            // A real run's diffs come from the run's summary; questions are
+            // asked through the interaction.
+            Event::StepDiff { .. }
+            | Event::Question { .. }
+            | Event::QuestionClosed { .. }
+            | Event::ControlError { .. } => {}
             Event::RunFinished { status, error, .. } => {
                 for position in self.agent_text.keys().copied().collect::<Vec<_>>() {
                     self.flush_agent_text(position);
@@ -563,10 +575,7 @@ impl RunView {
 /// What a question nobody answers gets: a manual approval waits for a
 /// resume, the rest are refused.
 pub fn unanswered(approval: &Approval) -> Decision {
-    match approval {
-        Approval::Manual { .. } => Decision::Deferred,
-        _ => Decision::Denied,
-    }
+    approval.unanswered()
 }
 
 fn push_line(lines: &mut Vec<String>, line: String) {
@@ -591,6 +600,15 @@ mod tests {
             run_id: "run-1".into(),
             workflow: "workflow.ts".into(),
             resumed: false,
+            target: "target".into(),
+            params: serde_json::Value::Null,
+            dry_run: false,
+            settings: codemod_workflow::events::Settings {
+                capabilities: Vec::new(),
+                managed_git: false,
+                agent: None,
+                host: None,
+            },
         });
     }
 
@@ -599,23 +617,26 @@ mod tests {
         let mut view = RunView::new("demo", false);
         started(&mut view);
         view.apply(Event::StepReplayed {
-            position: 0,
+            at: StepAt::top(0),
+            kind: None,
             label: "Find".into(),
         });
         view.apply(Event::StepStarted {
-            position: 1,
+            at: StepAt::top(1),
+            kind: None,
             label: "Rename".into(),
         });
         view.apply(Event::StepProgress {
-            position: 1,
+            at: StepAt::top(1),
             processed: 3,
             total: 10,
         });
         view.apply(Event::StepLog {
-            position: 1,
+            at: StepAt::top(1),
             line: "renamed 2× in a.ts".into(),
         });
         view.apply(Event::RunLog {
+            step: None,
             line: "hello\n  world\n".into(),
         });
 
@@ -629,7 +650,7 @@ mod tests {
         assert_eq!(view.output, vec!["renamed 2× in a.ts", "hello", "  world"]);
 
         view.apply(Event::StepRetrying {
-            position: 1,
+            at: StepAt::top(1),
             label: "Rename".into(),
             attempt: 1,
             attempts: 3,
@@ -638,7 +659,8 @@ mod tests {
         assert_eq!(view.steps[1].retry, Some((1, 3)));
 
         view.apply(Event::StepFinished {
-            position: 1,
+            at: StepAt::top(1),
+            kind: None,
             label: "Rename".into(),
             status: StepStatus::Partial,
             error: Some("1 of 10 files failed".into()),
@@ -651,6 +673,8 @@ mod tests {
         assert_eq!(step.retry, None);
 
         view.apply(Event::RunFinished {
+            awaiting: None,
+            question: None,
             run_id: "run-1".into(),
             status: RunStatus::Succeeded,
             error: None,
@@ -667,16 +691,18 @@ mod tests {
     fn a_finished_step_counts_all_its_files() {
         let mut view = RunView::new("demo", false);
         view.apply(Event::StepStarted {
-            position: 4,
+            at: StepAt::top(4),
+            kind: None,
             label: "Migrate".into(),
         });
         view.apply(Event::StepProgress {
-            position: 4,
+            at: StepAt::top(4),
             processed: 9,
             total: 10,
         });
         view.apply(Event::StepFinished {
-            position: 4,
+            at: StepAt::top(4),
+            kind: None,
             label: "Migrate".into(),
             status: StepStatus::Succeeded,
             error: None,
@@ -689,11 +715,12 @@ mod tests {
     fn streamed_agent_text_becomes_whole_lines() {
         let mut view = RunView::new("demo", false);
         view.apply(Event::StepStarted {
-            position: 2,
+            at: StepAt::top(2),
+            kind: None,
             label: "Agent".into(),
         });
         let text = |t: &str| Event::StepAgent {
-            position: 2,
+            at: StepAt::top(2),
             agent: "claude-code".into(),
             activity: codemod_agents::AgentEvent::Text {
                 text: t.into(),
@@ -706,7 +733,8 @@ mod tests {
         assert_eq!(view.steps[0].logs.len(), 1);
         assert!(view.steps[0].logs[0].contains("Looking at the files"));
         view.apply(Event::StepFinished {
-            position: 2,
+            at: StepAt::top(2),
+            kind: None,
             label: "Agent".into(),
             status: StepStatus::Succeeded,
             error: None,
@@ -720,7 +748,8 @@ mod tests {
         let mut view = RunView::new("demo", false);
         for (position, label) in [(0, "A"), (1, "B")] {
             view.apply(Event::StepStarted {
-                position,
+                at: StepAt::top(position),
+                kind: None,
                 label: label.into(),
             });
         }
@@ -758,6 +787,8 @@ mod tests {
         });
         assert_eq!(view.key(key(KeyCode::Char('a'))), Action::None);
         view.apply(Event::RunFinished {
+            awaiting: None,
+            question: None,
             run_id: "run-1".into(),
             status: RunStatus::Succeeded,
             error: None,
@@ -775,6 +806,8 @@ mod tests {
     fn a_failed_dry_run_cannot_be_applied() {
         let mut view = RunView::new("demo", true);
         view.apply(Event::RunFinished {
+            awaiting: None,
+            question: None,
             run_id: "run-1".into(),
             status: RunStatus::Failed,
             error: Some("boom".into()),
@@ -865,6 +898,8 @@ mod tests {
         assert_eq!(view.key(key(KeyCode::Char('y'))), Action::Stop);
 
         view.apply(Event::RunFinished {
+            awaiting: None,
+            question: None,
             run_id: "run-1".into(),
             status: RunStatus::Canceled,
             error: None,

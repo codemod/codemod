@@ -43,6 +43,7 @@ pub(crate) fn run_json(
         "endedAt": run.ended_at.map(|ended| ended.to_rfc3339()),
         "durationMs": run.ended_at.map(|ended| (ended - run.started_at).num_milliseconds().max(0)),
         "awaiting": run.awaiting,
+        "question": run.question,
         "error": run.error,
         "output": run.output,
         "exitCode": run.exit_code,
@@ -59,6 +60,7 @@ pub(crate) fn run_json(
                 json!({
                     "position": step.position,
                     "label": step.label,
+                    "kind": codemod_workflow::events::step_kind(&step.key),
                     "status": step.status,
                     "error": step.error,
                     "result": step.result,
@@ -114,6 +116,12 @@ pub async fn handler(args: &Command) -> Result<()> {
     }
     if let Some(awaiting) = &run.awaiting {
         println!("Waiting:   {awaiting}");
+    }
+    if let Some(question) = &run.question {
+        println!(
+            "Question:  {question} (codemod workflow resume --id {} --approve {question})",
+            run.id
+        );
     }
     if let Some(error) = &run.error {
         println!("Error:     {error}");

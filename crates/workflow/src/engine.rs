@@ -1,7 +1,7 @@
 //! The public entry point: start, resume and cancel runs.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use butterflow_state::run_store::{
@@ -13,8 +13,11 @@ use serde_json::{json, Value};
 use crate::build::{build, BuildError, Built};
 use crate::events::{bounded, Event, EventSink, PartialStep, StepResult, OUTPUT_LIMIT};
 use crate::interaction::Interaction;
-use crate::run::{execute, CancelWatch, Ending, RunContext, RunError, TestPlan};
+use crate::run::{
+    execute, CancelWatch, Ending, RunContext, RunError, RunHalt, StopReason, TestPlan,
+};
 use crate::Services;
+use butterflow_state::run_store::NotResumable;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -36,6 +39,10 @@ pub enum EngineError {
     NotFound(String),
     #[error("run '{0}' already finished; start a new run instead")]
     AlreadyFinished(String),
+    #[error("run '{run}' was {}: it is over. Resume it anyway with --force", status.as_str())]
+    Ended { run: String, status: RunStatus },
+    #[error("a run with id '{0}' already exists")]
+    Exists(String),
     #[error("run '{0}' is being executed by another process; wait for it, or stop it with `codemod workflow cancel --id {0}`")]
     Busy(String),
     #[error("'{0}' cannot name an event: use 1 to 100 letters, digits, '.', '_' or '-'")]
@@ -98,6 +105,9 @@ pub fn is_typescript(path: &Path) -> bool {
 }
 
 pub struct StartRequest {
+    /// The new run's id; one is made up when `None`. A host that announces
+    /// the run before it starts (the CLI's control channel) picks it.
+    pub run_id: Option<String>,
     pub workflow: LoadedWorkflow,
     pub target: PathBuf,
     pub params: Value,
@@ -138,7 +148,8 @@ impl RunReport {
             Ending::FailedWithOutput { error, output, .. } => {
                 (output.clone(), Some(error), None, None)
             }
-            Ending::Canceled => (Value::Null, None, None, None),
+            Ending::Canceled | Ending::Paused => (Value::Null, None, None, None),
+            Ending::Rejected(message) => (Value::Null, Some(message), None, None),
             Ending::AwaitingApproval(message) => (Value::Null, None, Some(message), None),
             Ending::Stopped(label) => (Value::Null, None, None, Some(label)),
         };
@@ -172,6 +183,24 @@ impl RunReport {
     }
 }
 
+/// How a run asked to stop ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopMode {
+    /// Paused: resuming it continues where it stopped.
+    Pause,
+    /// Canceled: it is over (resuming it takes `--force`).
+    Cancel,
+}
+
+impl StopMode {
+    fn reason(self) -> StopReason {
+        match self {
+            StopMode::Pause => StopReason::Pause,
+            StopMode::Cancel => StopReason::Cancel,
+        }
+    }
+}
+
 /// Stops the runs an engine executes: the ones in progress, and any it
 /// starts afterwards (a Ctrl-C while a run is still being set up).
 #[derive(Clone, Default)]
@@ -181,31 +210,45 @@ pub struct StopHandle {
 
 #[derive(Default)]
 struct StopState {
-    requested: AtomicBool,
-    runs: Mutex<Vec<Arc<AtomicBool>>>,
+    /// The strongest stop asked for so far (`StopReason` as a number).
+    requested: AtomicU8,
+    runs: Mutex<Vec<Arc<RunHalt>>>,
 }
 
 impl StopHandle {
+    /// Pause the runs (Ctrl-C).
     pub fn stop(&self) {
-        self.inner.requested.store(true, Ordering::SeqCst);
+        self.stop_with(StopMode::Pause);
+    }
+
+    pub fn stop_with(&self, mode: StopMode) {
+        let reason = mode.reason();
+        self.inner
+            .requested
+            .fetch_max(reason as u8, Ordering::SeqCst);
         for run in self.runs().iter() {
-            run.store(true, Ordering::SeqCst);
+            run.stop(reason);
         }
     }
 
-    fn runs(&self) -> std::sync::MutexGuard<'_, Vec<Arc<AtomicBool>>> {
+    fn runs(&self) -> std::sync::MutexGuard<'_, Vec<Arc<RunHalt>>> {
         self.inner.runs.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// A cancel flag for a run that starts now.
-    fn enroll(&self) -> Arc<AtomicBool> {
-        let cancel = Arc::new(AtomicBool::new(self.inner.requested.load(Ordering::SeqCst)));
-        self.runs().push(Arc::clone(&cancel));
-        cancel
+    /// The halt of a run that starts now, stopped already if a stop came.
+    fn enroll(&self) -> Arc<RunHalt> {
+        let halt = Arc::new(RunHalt::new(Arc::new(AtomicBool::new(false))));
+        match self.inner.requested.load(Ordering::SeqCst) {
+            0 => {}
+            1 => halt.stop(StopReason::Pause),
+            _ => halt.stop(StopReason::Cancel),
+        }
+        self.runs().push(Arc::clone(&halt));
+        halt
     }
 
-    fn release(&self, cancel: &Arc<AtomicBool>) {
-        self.runs().retain(|run| !Arc::ptr_eq(run, cancel));
+    fn release(&self, halt: &Arc<RunHalt>) {
+        self.runs().retain(|run| !Arc::ptr_eq(run, halt));
     }
 }
 
@@ -242,9 +285,12 @@ impl Execution {
         let context = &self.context;
         let mut record = self.record.clone();
         record.conclude(ending.outcome());
+        if matches!(ending, Ending::AwaitingApproval(_)) {
+            record.question = context.halt.question();
+        }
         context.store.put_run(&record)?;
         self.record = record;
-        self.stop.release(&context.cancel);
+        self.stop.release(&context.halt);
         if let Some(overlay) = &context.overlay {
             for diff in overlay.diffs() {
                 context.events.emit(Event::RunDiff {
@@ -262,6 +308,8 @@ impl Execution {
             run_id: self.record.id.clone(),
             status: self.record.status,
             error: self.record.error.clone(),
+            awaiting: self.record.awaiting.clone(),
+            question: self.record.question.clone(),
             failed_files: partial_steps.iter().map(|step| step.failed_files).sum(),
             partial_steps,
             output,
@@ -299,6 +347,7 @@ impl Engine {
 
     pub fn start(&self, request: StartRequest) -> Result<RunReport, EngineError> {
         let execution = self.begin_new(
+            request.run_id,
             &request.workflow.path,
             &request.target,
             request.params,
@@ -312,9 +361,15 @@ impl Engine {
         self.drive(execution, &request.workflow.built)
     }
 
-    /// Continue a run that failed, was canceled or interrupted, or waits for
+    /// Continue a run that failed, was paused or interrupted, or waits for
     /// an approval.
     pub fn resume(&self, run_id: &str) -> Result<RunReport, EngineError> {
+        self.resume_with(run_id, false)
+    }
+
+    /// [`Self::resume`]; `force` also continues a run that was canceled or
+    /// rejected.
+    pub fn resume_with(&self, run_id: &str, force: bool) -> Result<RunReport, EngineError> {
         // Load the workflow first: one that no longer builds leaves the run
         // as it was.
         let record = self
@@ -322,8 +377,12 @@ impl Engine {
             .get_run(run_id)?
             .ok_or_else(|| EngineError::NotFound(run_id.to_string()))?;
         let workflow = load_workflow(&record.workflow_path)?;
-        let execution =
-            self.begin_resumed(record, workflow.built.callbacks.clone(), QUICKJS_HOST)?;
+        let execution = self.begin_resumed(
+            record,
+            workflow.built.callbacks.clone(),
+            QUICKJS_HOST,
+            force,
+        )?;
         self.drive(execution, &workflow.built)
     }
 
@@ -338,6 +397,7 @@ impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn begin_new(
         &self,
+        run_id: Option<String>,
         workflow_path: &Path,
         target: &Path,
         params: Value,
@@ -349,7 +409,7 @@ impl Engine {
         host: &str,
     ) -> Result<Execution, EngineError> {
         let record = RunRecord {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             name,
             workflow_path: absolute(workflow_path),
             target: absolute(target),
@@ -358,6 +418,7 @@ impl Engine {
             started_at: Utc::now(),
             ended_at: None,
             awaiting: None,
+            question: None,
             error: None,
             output: None,
             exit_code: None,
@@ -369,6 +430,9 @@ impl Engine {
         } else {
             Arc::clone(&self.store)
         };
+        if store.get_run(&record.id)?.is_some() {
+            return Err(EngineError::Exists(record.id));
+        }
         store.put_run(&record)?;
         let lease = store
             .acquire(&record.id)?
@@ -384,6 +448,7 @@ impl Engine {
         mut record: RunRecord,
         callbacks: std::collections::BTreeMap<String, String>,
         host: &str,
+        force: bool,
     ) -> Result<Execution, EngineError> {
         // Step keys identify callbacks the way the host that ran them does.
         if let Some(started) = record.settings.host.as_deref().filter(|h| *h != host) {
@@ -403,9 +468,13 @@ impl Engine {
             .store
             .acquire(&record.id)?
             .ok_or_else(|| EngineError::Busy(record.id.clone()))?;
-        record
-            .reopen()
-            .map_err(|_| EngineError::AlreadyFinished(record.id.clone()))?;
+        record.reopen(force).map_err(|refused| match refused {
+            NotResumable::AlreadySucceeded => EngineError::AlreadyFinished(record.id.clone()),
+            NotResumable::Ended(status) => EngineError::Ended {
+                run: record.id.clone(),
+                status,
+            },
+        })?;
         self.store.clear_cancel(&record.id)?;
         self.store.put_run(&record)?;
         let store = Arc::clone(&self.store);
@@ -430,9 +499,14 @@ impl Engine {
             run_id: record.id.clone(),
             workflow: record.workflow_path.clone(),
             resumed,
+            target: record.target.clone(),
+            params: record.params.clone(),
+            dry_run,
+            settings: (&record.settings).into(),
         });
         let bundle_dir = crate::run::workflow_dir(&record.workflow_path);
-        let cancel = self.stop.enroll();
+        let halt = self.stop.enroll();
+        let cancel = Arc::clone(halt.cancel());
         let context = Arc::new(RunContext {
             run_id: record.id.clone(),
             target: record.target.clone(),
@@ -447,8 +521,10 @@ impl Engine {
             _cancel_watch: Some(CancelWatch::start(
                 Arc::clone(&store),
                 record.id.clone(),
-                Arc::clone(&cancel),
+                Arc::clone(&halt),
             )),
+            key_prefix: None,
+            halt,
             store,
             events: Arc::clone(&self.events),
             interaction: Arc::clone(&self.interaction),
@@ -497,7 +573,7 @@ pub enum Canceled {
     Requested,
     /// Nothing was executing it: it is marked canceled.
     Marked,
-    /// It had already succeeded or been canceled.
+    /// It had already succeeded, or been canceled or rejected.
     AlreadyFinished(RunStatus),
 }
 
@@ -510,11 +586,11 @@ pub fn cancel_run(store: &dyn RunStore, run_id: &str) -> Result<Canceled, Engine
         store.request_cancel(run_id)?;
         return Ok(Canceled::Requested);
     }
-    if matches!(record.status, RunStatus::Succeeded | RunStatus::Canceled) {
+    if record.status.resumable() != butterflow_state::run_store::Resumable::Yes {
         return Ok(Canceled::AlreadyFinished(record.status));
     }
-    // Failed, waiting for an approval, or interrupted (its record says
-    // running, but its process is gone).
+    // Failed, paused, waiting for an approval, or interrupted (its record
+    // says running, but its process is gone).
     record.conclude(butterflow_state::run_store::Outcome::Canceled);
     store.put_run(&record)?;
     Ok(Canceled::Marked)
@@ -535,8 +611,17 @@ pub fn send_event(
     let record = store
         .get_run(run_id)?
         .ok_or_else(|| EngineError::NotFound(run_id.to_string()))?;
-    if record.status == RunStatus::Succeeded {
-        return Err(EngineError::AlreadyFinished(run_id.to_string()));
+    match record.status.resumable() {
+        butterflow_state::run_store::Resumable::Yes => {}
+        butterflow_state::run_store::Resumable::No => {
+            return Err(EngineError::AlreadyFinished(run_id.to_string()))
+        }
+        butterflow_state::run_store::Resumable::WithForce => {
+            return Err(EngineError::Ended {
+                run: run_id.to_string(),
+                status: record.status,
+            })
+        }
     }
     Ok(store.send_event(run_id, name, data)?)
 }
