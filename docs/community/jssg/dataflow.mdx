@@ -65,8 +65,9 @@ use `semantic_analysis: workspace` on the `js-ast-grep` step; with `codemod jssg
   A query on a node it does not apply to throws a `TypeError` that names the node's kind and what
   to ask instead: `flowsFrom()` / `flowsTo()` on a statement or declaration, `mutations()` on
   anything but a variable or a use of one (for `a.b`, ask about `a`), `callers()` on code outside
-  any function. A part of a value (the `limit` in `req.query.limit`) answers for that value. So an
-  empty answer always means "nothing found", never "wrong node".
+  any function. A part of a value (the `limit` in `req.query.limit`) answers for that value. An
+  expression the analysis does not track, such as `typeof import("./x")` in a type position, answers
+  `[]`, so a loop over pattern matches does not stop on one.
 </Note>
 
 ## Where does a value come from: `flowsFrom()`

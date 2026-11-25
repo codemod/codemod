@@ -211,6 +211,14 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_untracked_expressions_answer_empty,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_untracked_expressions.js",
+    fixture_dir: "typescript/type_positions",
+    target: "a.ts",
+}
+
+jssg_test! {
     name: test_resolve_module_resolve_export_and_specifier_for,
     language: CodemodLang::Static(SupportLang::TypeScript),
     codemod: "ts_module_resolution.js",

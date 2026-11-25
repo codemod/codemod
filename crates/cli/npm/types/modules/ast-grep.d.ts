@@ -154,7 +154,8 @@ declare module "codemod:ast-grep" {
      *   and (a TypeError naming the node's kind) when the query does not apply
      *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
      *   anything but a variable or a use of one for `mutations`, code outside
-     *   any function for `callers`. An empty answer always means "nothing found".
+     *   any function for `callers`. An expression the analysis does not track
+     *   (in a type position: `typeof import("./x")`) answers `[]` instead.
      *
      * @experimental
      * @example
@@ -188,7 +189,8 @@ declare module "codemod:ast-grep" {
      *   and (a TypeError naming the node's kind) when the query does not apply
      *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
      *   anything but a variable or a use of one for `mutations`, code outside
-     *   any function for `callers`. An empty answer always means "nothing found".
+     *   any function for `callers`. An expression the analysis does not track
+     *   (in a type position: `typeof import("./x")`) answers `[]` instead.
      *
      * @experimental
      * @example
@@ -262,7 +264,8 @@ declare module "codemod:ast-grep" {
      *   and (a TypeError naming the node's kind) when the query does not apply
      *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
      *   anything but a variable or a use of one for `mutations`, code outside
-     *   any function for `callers`. An empty answer always means "nothing found".
+     *   any function for `callers`. An expression the analysis does not track
+     *   (in a type position: `typeof import("./x")`) answers `[]` instead.
      *
      * @experimental
      * @example
@@ -309,7 +312,8 @@ declare module "codemod:ast-grep" {
      *   and (a TypeError naming the node's kind) when the query does not apply
      *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
      *   anything but a variable or a use of one for `mutations`, code outside
-     *   any function for `callers`. An empty answer always means "nothing found".
+     *   any function for `callers`. An expression the analysis does not track
+     *   (in a type position: `typeof import("./x")`) answers `[]` instead.
      *
      * @experimental
      * @example
@@ -343,7 +347,8 @@ declare module "codemod:ast-grep" {
      *   and (a TypeError naming the node's kind) when the query does not apply
      *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
      *   anything but a variable or a use of one for `mutations`, code outside
-     *   any function for `callers`. An empty answer always means "nothing found".
+     *   any function for `callers`. An expression the analysis does not track
+     *   (in a type position: `typeof import("./x")`) answers `[]` instead.
      *
      * @experimental
      * @example

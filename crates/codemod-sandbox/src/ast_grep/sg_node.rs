@@ -1882,9 +1882,20 @@ impl<'js> SgNodeRjs<'js> {
                 )?;
             }
 
-            let flow = provider
-                .get_data_flow(&file_path, range, flow_options)
-                .map_err(|e| self.query_error(&ctx, method, "Failed to follow data flow", e))?;
+            let flow = match provider.get_data_flow(&file_path, range, flow_options) {
+                Ok(flow) => flow,
+                // An expression the analysis does not track (in a type
+                // position: `typeof import("./x")`, `x as T`'s type) has no
+                // flow: `[]`, not an error. Statements and declarations throw.
+                Err(language_core::SemanticError::NotApplicable { .. })
+                    if is_expression_kind(&self.inner_node.kind()) =>
+                {
+                    language_core::FlowResult::default()
+                }
+                Err(e) => {
+                    return Err(self.query_error(&ctx, method, "Failed to follow data flow", e))
+                }
+            };
 
             let mut roots = Vec::new();
             let mut steps = Vec::new();
@@ -2382,6 +2393,44 @@ fn any_step<'js>(
         }
     }
     Ok(false)
+}
+
+/// Whether a node kind is an expression in JS/TS or Python syntax: a query
+/// on one the analysis does not track answers `[]` rather than throwing.
+#[cfg(feature = "native")]
+fn is_expression_kind(kind: &str) -> bool {
+    kind.ends_with("_expression")
+        || matches!(
+            kind,
+            "identifier"
+                | "property_identifier"
+                | "shorthand_property_identifier"
+                | "this"
+                | "super"
+                | "string"
+                | "template_string"
+                | "number"
+                | "true"
+                | "false"
+                | "null"
+                | "undefined"
+                | "regex"
+                | "array"
+                | "object"
+                // Python
+                | "call"
+                | "attribute"
+                | "subscript"
+                | "integer"
+                | "float"
+                | "none"
+                | "list"
+                | "dictionary"
+                | "tuple"
+                | "set"
+                | "concatenated_string"
+                | "lambda"
+        )
 }
 
 /// `null`, not `undefined`, for a missing value: the public types say
