@@ -1,0 +1,243 @@
+---
+title: "Data Flow and Call Graph"
+description: "Ask where a value comes from, where it goes, who calls a function, what it calls, and whether a variable changes, in JavaScript and TypeScript JSSG codemods."
+---
+
+<Warning>
+  Experimental. The API can change between releases. JavaScript and TypeScript only (JSX and TSX
+  syntax included; types are not used).
+</Warning>
+
+[`definition()` and `references()`](/community/jssg/semantic-analysis) answer questions about
+names. These methods answer questions about **values and calls**, so a codemod can decide whether
+a rewrite is safe before it makes it:
+
+| Question | Call |
+| --- | --- |
+| What is this value computed from? | `node.flowsFrom()` |
+| Where does this value go? | `node.flowsTo()` |
+| What does this function call? | `node.callees()` |
+| Who calls this function? | `node.callers()` |
+| Is this variable, or the object it holds, changed? | `node.mutations()` |
+
+Each answer is an array of objects that carry `node` and `root`, so you can go straight from an
+answer to an edit. On top of them: `dependsOn()` / `reaches()` booleans, `key()` / `equals()` to
+compare nodes across answers, and module resolution on the root (`resolveModule()`,
+`resolveExport()`, `specifierFor()`) for codemods that rewrite imports.
+
+## Turn it on
+
+The methods use the step's semantic analysis. Set `semanticAnalysis: "file"` (the default) for
+`flowsFrom`, `flowsTo` and `mutations`, which stay inside one file, and `"workspace"` for the call
+graph across files and for module resolution:
+
+```ts workflow.ts
+await step("Parameterize queries", jssg("./scripts/sql.ts", {
+  language: "typescript",
+  semanticAnalysis: "workspace",
+}));
+```
+
+In `workflow.yaml`, use `semantic_analysis: workspace`; with `codemod jssg run`, pass
+`--semantic-workspace <dir>`. Roots that a `forEachFile` callback parses with `parse(file)` get the
+selector's analysis too.
+
+<Note>
+  The queries **throw** instead of answering `[]` when they cannot run: semantic analysis is off,
+  the file is not JavaScript or TypeScript, the root was parsed from a string, or the codemod runs
+  on the Node.js host (`codemod/host`, `codemod/testing`'s default) or in WebAssembly. An empty
+  answer would read as "no callers" or "no sources", and a codemod might act on it. Unknown options
+  throw too, so a typo cannot silently change an answer. On the Node.js host, test with
+  `{ host: "quickjs" }`.
+</Note>
+
+## Where does a value come from: `flowsFrom()`
+
+```ts
+// db.query("select ... " + id) where the text depends on the request:
+// rewrite to a parameterized query.
+for (const call of root.root().findAll({ rule: { pattern: "$DB.query($SQL)" } })) {
+  const sql = call.getMatch("SQL")!;
+  if (!sql.dependsOn((step) => step.kind === "parameter" && step.name === "req")) continue;
+  // ...
+}
+```
+
+Steps come nearest first. Each has:
+
+| Field | Meaning |
+| --- | --- |
+| `node`, `root` | The syntax node of the step, and its root |
+| `kind` | `variable`, `parameter`, `import`, `reference`, `call`, `member`, `literal`, `global`, `this`, `function`, `class`, `object`, `array`, `jsx`, `jsx-attribute`, `expression` |
+| `via` | The edge that reached it: `assign`, `read`, `alias`, `property`, `element`, `argument`, `receiver`, `derive`, `capture`, `store`, `jsx-attribute`, `jsx-child`, `return` |
+| `name` | Always set for parameters, variables, imports, references, globals and calls (a call's name is the callee text, `"db.query"`); `null` when there is none |
+| `index` | The parameter's position; for `via: "argument"`, the argument's position |
+| `depth` | Edges from the queried node; `1` is a direct source |
+| `from` | The step this one was reached from (`null` at depth 1). Walk it to print a path |
+| `boundary` | The trail ends here because the value comes from outside the analyzed code: a parameter, an import, a global, `this`, or a call result |
+
+Options: `throughCalls` (default `true`: a call's result counts as derived from its arguments and
+receiver, and the walk continues into them), `maxDepth`, and `stopAt` (edge kinds to report but not
+walk past).
+
+```ts
+// The value a variable was initialized with: the step after the variable.
+const init = sql.flowsFrom().find((s) => s.via === "assign" && s.from?.kind === "variable");
+```
+
+## Where does a value go: `flowsTo()`
+
+The same steps, forward. A step with `via: "argument"` is a call that receives the value; a
+`return` or `store` (`o.p = x`) step is reported and not followed further.
+
+```ts
+// Every call that receives a value derived from req.body
+const calls = root.root().findAll({ rule: { pattern: "req.body" } })
+  .flatMap((body) => body.flowsTo())
+  .filter((step) => step.via === "argument")
+  .map((step) => step.node);
+
+// Where is this string first used? Stop at the first JSX sink.
+const sinks = literal.flowsTo({ stopAt: ["jsx-attribute", "jsx-child", "return"] });
+```
+
+`node.reaches(target)` is `true` when a step is `target` (a node) or matches a predicate:
+`body.reaches((s) => s.via === "argument" && s.name === "db.query")`.
+
+## Who calls this: `callers()`
+
+One entry per call. `node` is the calling function (or the call, for module top-level code,
+`name: "<module>"`), `callSite.node` is the call to edit, and `callee` is the function that call
+reaches. Needs workspace scope to see other files.
+
+```ts
+// loadConfig() becomes async: await every call and make every caller async, across files.
+// A function handed to unknown code (names.map(getSetting)) gets a TODO and is not followed.
+const callers = loadConfig.callers({ transitive: true, stopAt: ["callback"] });
+if (callers.truncated || callers.unparsed.length > 0) {
+  throw new Error("call graph incomplete: not propagating async");
+}
+const seen = new Set<string>();
+for (const caller of callers) {
+  if (seen.has(caller.callSite.node.key())) continue;
+  seen.add(caller.callSite.node.key());
+  if (caller.via === "callback") {
+    // TODO: `${caller.callee?.name}` is async now
+    continue;
+  }
+  // await caller.callSite.node; make caller.node async (once per function: key())
+}
+```
+
+<Warning>
+  **No callers does not mean unused.** A function stored as a value (`{ round: fn }`,
+  `export default fn`) or called dynamically has no callers the graph can see. Before deleting,
+  also check that `references()` finds nothing but the declaration, and that the answer is
+  complete (`!truncated && unparsed.length === 0`).
+</Warning>
+
+## What does this call: `callees()`
+
+Ask on a function, its name, a call, a JSX element (its component), or the program (calls made
+while the module is evaluated). Each entry is a resolved function (`resolved: true`, `node` is the
+function, possibly in another file, `callSite` is the call) or a call the analysis could not
+resolve (`resolved: false`, `name` is the callee text: `"Number"`, `"res.json"`).
+
+```ts
+const component = element.callees().find((c) => c.resolved && c.via === "jsx");
+const sideEffects = root.root().callees(); // does importing this module run code?
+```
+
+`via` says why the edge exists: `direct`, `method`, `constructor`, `jsx`, or `callback` (the
+function is passed to code the analysis cannot see, `items.map(f)`, and is assumed to be called).
+
+## Is it changed: `mutations()`
+
+Places that change the variable at the node, or the object it holds: reassignments, `++`, property
+writes, `delete`, method calls, and calls it is passed to. Changes through another variable holding
+the same value come back with `viaAlias: true`; changes inside a nested function with
+`deferred: true`. `confidence` is `definite` (a write in the syntax), `likely` (a method known to
+mutate, like `push`) or `maybe` (a call with no summary).
+
+```ts
+// moment's d.add(...) mutates d. With the result unused, rewrite to d = d.add(...);
+// flag changes through aliases or callbacks for review.
+for (const m of due.mutations()) {
+  if (m.kind !== "method-call" || !MUTATORS.includes(m.name!)) continue;
+  if (m.viaAlias || m.deferred) {
+    // TODO comment: cannot rewrite in place
+  }
+}
+// Is `items` changed after audit()? `after` takes a node of the same file.
+const changed = items.mutations({ after: auditCall }).some((m) => m.confidence !== "maybe");
+```
+
+## Compare nodes: `key()` and `equals()`
+
+Each query wraps nodes in new objects, and other files in new roots, so `===` and `id()` do not
+match across answers. `node.key()` is a string (file, range, kind) that does; `a.equals(b)` compares
+keys. Use keys in a `Set` to edit each function once.
+
+## Rewrite imports: module resolution
+
+On the root, in workspace scope:
+
+| Call | Answer |
+| --- | --- |
+| `root.resolveModule("@/ui")` | The file an import in this file resolves to (tsconfig `paths` with `extends`, workspace packages, index files), or `null` |
+| `root.resolveExport("@/ui", "Modal")` | What the export lands on through barrels and `export *`: a `definition()` result with `exportName` (`"default"` or the name) and `nameNode` |
+| `root.specifierFor(modal.root, { like: "@/ui" })` | A specifier that reaches the file, in the style of `like` (relative or alias, `.js` or not), checked by resolving it: `"@/ui/modal"` |
+
+`definition({ follow: true })` goes from a use of an imported name to its declaration in one call.
+`@jssg/utils` builds a debarrel rewrite on these:
+[`importFromDeclarations`](/community/jssg/utils/javascript#importfromdeclarations).
+
+## Soundness: what "may" means
+
+The analysis is **not sound**: JavaScript makes that unaffordable. It over-approximates inside what
+it models and says where it stops. Build automatic rewrites only on complete answers; flag the rest.
+
+| What it gives up | How you see it |
+| --- | --- |
+| Values from outside the module: parameters, imports, globals, `this` | `boundary: true` on the step |
+| Calls it cannot resolve (libraries, builtins, dynamic calls) | `resolved: false` in `callees()`. Flow treats the result as derived from the arguments (`throughCalls`), so taint is not lost |
+| Order of execution | Flow-insensitive: both values of a `let` assigned twice are sources. `mutations({ after })` uses text order plus "same loop" |
+| Heap: `o.p = x`, then `o.p` read elsewhere | `flowsTo` reports the write (`via: "store"`) and stops |
+| Closures: a callback that reads `x` | Not a flow edge. A mutation inside a nested function is `deferred` and always counts as "after" |
+| Control dependence: `c ? a : b` | `a` and `b` are sources, `c` is not |
+| Whether an unknown method mutates | `confidence: "maybe"` |
+| Callbacks handed to unknown code | Assumed called: `via: "callback"`. Can be a false edge |
+| Namespace members (`ns.fn` stored or passed as a value) | Not seen by `callers()` or `references()` yet |
+| Files that do not parse | Listed in `unparsed` on call-graph answers; asking about one throws |
+| Result limits (50,000 steps or entries) | `truncated: true` on the array |
+| Edits during a run | `flowsFrom`, `flowsTo`, `mutations` use current content. `callers()` uses a table built on the first `callers()` query: a snapshot |
+
+### When the answer is "can't tell"
+
+- **Rewrite** when the answer is complete and has no boundary or `maybe` on the path that matters.
+- **Flag** (a TODO comment, a report entry, an agent step) when a `boundary`, `resolved: false`,
+  `maybe`, `callback`, `truncated` or `unparsed` touches the decision.
+- **Never delete on an empty answer alone.** Check completeness and `references()`.
+
+## Performance
+
+- `flowsFrom`, `flowsTo` and `mutations` touch one file: facts are built the first time a query
+  touches it and cached by content.
+- `callees({ transitive: true })` builds facts only for the files it reaches.
+- The first `callers()` query (and `references()` in workspace scope) walks the whole workspace
+  once, in parallel, and keeps a table for the rest of the run. Measured on a 2,500-file, 13 MB
+  workspace: about a second for that first query, then well under a millisecond per query. At
+  24,000 files (132 MB of source) the first query takes about 13 seconds and the run peaks at about
+  3.5 GB of memory: in very large repositories, prefer file-local queries or narrow the target.
+- Prefer `maxDepth` and `stopAt` to filtering a long answer.
+
+## Next steps
+
+<CardGroup cols={2}>
+<Card title="Semantic Analysis" icon="magnifying-glass" href="/community/jssg/semantic-analysis">
+  `definition()`, `references()`, and analysis modes.
+</Card>
+<Card title="JavaScript utils" icon="wrench" href="/community/jssg/utils/javascript">
+  Import helpers, including `importFromDeclarations`.
+</Card>
+</CardGroup>

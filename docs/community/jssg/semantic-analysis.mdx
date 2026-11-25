@@ -16,6 +16,9 @@ Pattern matching alone is not enough when **symbol origin** matters. Use the `js
 | Aliased or re-exported symbols | `import { createX as cx }` | Follow the binding; do not match only the original export spelling |
 | Cross-file move or rename | Update call sites in other modules | Use `workspace` scope |
 
+To ask where a value comes from or goes, who calls a function, or whether a variable changes, see
+[Data Flow and Call Graph](/community/jssg/dataflow) (JavaScript and TypeScript, experimental).
+
 Also prefer [`@jssg/utils` binding helpers](/community/jssg/utils/javascript) (`importBindingOf`, `resolveDefinition`, `renameReferences`) instead of reinventing resolution. If you skip semantic analysis, document why in the package README (for example: pure string API shape with no shared method names).
 
 ## Supported Languages

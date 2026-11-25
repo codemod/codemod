@@ -60,6 +60,7 @@
                   "community/jssg/reference",
                   "community/jssg/security",
                   "community/jssg/semantic-analysis",
+                  "community/jssg/dataflow",
                   {
                     "group": "Utilities",
                     "root": "community/jssg/utils",
