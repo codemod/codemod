@@ -17,9 +17,6 @@ pub struct Symbol {
     pub range: ByteRange,
     /// Unique symbol ID (from oxc)
     pub symbol_id: u32,
-    /// Scope ID this symbol belongs to
-    #[allow(dead_code)]
-    pub scope_id: u32,
 }
 
 /// Information about an imported symbol.
@@ -72,9 +69,6 @@ pub struct SymbolReference {
     pub symbol_id: u32,
     /// Byte range of the reference
     pub range: ByteRange,
-    /// Whether this is a write reference
-    #[allow(dead_code)]
-    pub is_write: bool,
 }
 
 /// Cached symbols for a single file.
@@ -288,7 +282,6 @@ mod tests {
                 kind: SymbolKind::Function,
                 range: ByteRange::new(0, 10),
                 symbol_id: 1,
-                scope_id: 0,
             }],
             ..Default::default()
         };
@@ -311,14 +304,12 @@ mod tests {
                     kind: SymbolKind::Function,
                     range: ByteRange::new(0, 100),
                     symbol_id: 1,
-                    scope_id: 0,
                 },
                 Symbol {
                     name: "inner".to_string(),
                     kind: SymbolKind::Variable,
                     range: ByteRange::new(20, 40),
                     symbol_id: 2,
-                    scope_id: 1,
                 },
             ],
             ..Default::default()
