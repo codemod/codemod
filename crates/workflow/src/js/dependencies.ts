@@ -202,9 +202,12 @@ interface DeclarationRecord {
   catalog: { name: string; file: string } | null;
   local: string | null;
   readable: boolean;
+  /** Python: the optional-dependency, dependency or Poetry group. */
+  group?: string | null;
 }
 
 interface PackageRecord {
+  ecosystem?: Ecosystem;
   dir: string;
   manifest: string;
   name: string | null;
@@ -273,6 +276,14 @@ function allOf(options: unknown, what: string): boolean {
     throw new TypeError(`${what}: all must be a boolean`);
   }
   return all === true;
+}
+
+/** PEP 503 normalized name, for matching Python declarations. */
+const pyName = (value: string) => value.toLowerCase().replace(/[-_.]+/g, "-");
+
+/** Whether a declaration in a package of `ecosystem` is of `wanted`. */
+function sameName(ecosystem: string, declared: string, wanted: string): boolean {
+  return ecosystem === "pypi" ? pyName(declared) === pyName(wanted) : declared === wanted;
 }
 
 /** One object per isolate and options: later calls in the step get it back. */
@@ -395,6 +406,8 @@ function createDependencies(only: string[]) {
     readonly resolved: string | null;
     readonly catalog: { readonly name: string; readonly file: string } | null;
     readonly readable: boolean;
+    /** Python: the optional-dependency, dependency or Poetry group. */
+    readonly group: string | null;
     readonly #local: string | null;
 
     constructor(owner: Package, record: DeclarationRecord) {
@@ -406,6 +419,7 @@ function createDependencies(only: string[]) {
       this.resolved = record.resolved;
       this.catalog = record.catalog ? Object.freeze({ ...record.catalog }) : null;
       this.readable = record.readable;
+      this.group = record.group ?? null;
       this.#local = record.local;
       Object.freeze(this);
     }
@@ -418,13 +432,13 @@ function createDependencies(only: string[]) {
     /** Whether `resolved` accepts `version`: true, false, or null when it cannot tell. */
     accepts(version: string): boolean | null {
       if (this.resolved === null || !this.readable) return null;
-      return semver.satisfies(version, this.resolved);
+      return semver.satisfies(version, this.resolved, { ecosystem: this.package.ecosystem });
     }
 
     /** The lowest version `resolved` accepts; null when unreadable. */
     minVersion(): string | null {
       if (this.resolved === null || !this.readable) return null;
-      return semver.minVersion(this.resolved);
+      return semver.minVersion(this.resolved, { ecosystem: this.package.ecosystem });
     }
 
     /** What the lockfile installs for this declaration; null when it does not resolve it. */
@@ -449,7 +463,7 @@ function createDependencies(only: string[]) {
   }
 
   class Package {
-    readonly ecosystem = "npm";
+    readonly ecosystem: Ecosystem;
     readonly name: string | null;
     readonly version: string | null;
     readonly dir: string;
@@ -459,6 +473,7 @@ function createDependencies(only: string[]) {
     readonly #declarations: Declaration[];
 
     constructor(record: PackageRecord) {
+      this.ecosystem = record.ecosystem ?? "npm";
       this.name = record.name;
       this.version = record.version;
       this.dir = record.dir;
@@ -476,7 +491,9 @@ function createDependencies(only: string[]) {
 
     /** The declaration of `name`, runtime kinds before dev. */
     declaration(dependency: string, options?: KindOptions): Declaration | undefined {
-      const found = this.declarations(options).filter((d) => d.name === dependency);
+      const found = this.declarations(options).filter((d) =>
+        sameName(this.ecosystem, d.name, dependency),
+      );
       found.sort((a, b) => PREFERRED.indexOf(a.kind) - PREFERRED.indexOf(b.kind));
       return found[0];
     }
@@ -561,7 +578,7 @@ function createDependencies(only: string[]) {
     declarations: (dependency: string, options?: Scope): Declaration[] => {
       name(dependency);
       return scoped(options).flatMap((pkg) =>
-        pkg.declarations(options).filter((d) => d.name === dependency),
+        pkg.declarations(options).filter((d) => sameName(pkg.ecosystem, d.name, dependency)),
       );
     },
 
@@ -577,7 +594,14 @@ function createDependencies(only: string[]) {
           typeof range === "function" ? (range as (d: Declaration) => unknown)(d) : range;
         if (next === undefined) return [];
         return [
-          { op: "set", dir: d.package.dir, kind: d.kind, name: d.name, range: rangeText(next) },
+          {
+            op: "set",
+            dir: d.package.dir,
+            manifest: d.package.manifest,
+            kind: d.kind,
+            name: d.name,
+            range: rangeText(next),
+          },
         ];
       });
       return apply(changes, skipped);
@@ -589,7 +613,14 @@ function createDependencies(only: string[]) {
       kindList({ kinds: kind });
       const target = options?.to === undefined ? root() : packageRef(options.to);
       return apply([
-        { op: "add", dir: target.dir, kind, name: name(dependency), range: rangeText(range) },
+        {
+          op: "add",
+          dir: target.dir,
+          manifest: target.manifest,
+          kind,
+          name: name(dependency),
+          range: rangeText(range),
+        },
       ]);
     },
 
@@ -597,7 +628,13 @@ function createDependencies(only: string[]) {
     remove: (dependency: string, options?: Scope) => {
       const { kept, skipped } = editable(dependency, options);
       return apply(
-        kept.map((d) => ({ op: "remove", dir: d.package.dir, kind: d.kind, name: d.name })),
+        kept.map((d) => ({
+          op: "remove",
+          dir: d.package.dir,
+          manifest: d.package.manifest,
+          kind: d.kind,
+          name: d.name,
+        })),
         skipped,
       );
     },
@@ -608,7 +645,15 @@ function createDependencies(only: string[]) {
       const range = options?.range === undefined ? undefined : rangeText(options.range);
       const { kept, skipped } = editable(from, options);
       return apply(
-        kept.map((d) => ({ op: "rename", dir: d.package.dir, kind: d.kind, from, to, range })),
+        kept.map((d) => ({
+          op: "rename",
+          dir: d.package.dir,
+          manifest: d.package.manifest,
+          kind: d.kind,
+          from,
+          to,
+          range,
+        })),
         skipped,
       );
     },
