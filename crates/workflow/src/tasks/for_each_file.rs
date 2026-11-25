@@ -253,7 +253,7 @@ fn run_callback(
     isolates.semantic_provider = butterflow_core::jssg_runner::semantic_provider(&mode, &paths);
     // A dry run: the workspace index sees what earlier steps left, not the
     // disk (a removed file has no references left in it).
-    if let (SemanticMode::Workspace(_), Some(provider), Some(overlay)) =
+    if let (SemanticMode::Workspace(..), Some(provider), Some(overlay)) =
         (&mode, &isolates.semantic_provider, &run.overlay)
     {
         for (path, text) in overlay.snapshot() {
