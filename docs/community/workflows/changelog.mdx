@@ -40,9 +40,15 @@ Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://
 - Edits: `bump`, `add`, `remove` and `rename` change `package.json` files and catalogs where a dependency is declared, keeping their formatting. They leave peer dependencies alone unless `kinds` names `"peer"`, and `workspace:` refs always, and list what they left in `skipped`.
 - The repository's packages are the root and the workspaces it declares; without a workspace declaration, only the root. `packages({ all: true })` lists every `package.json`.
 - `install()`, a step that runs the repository's package manager to refresh the lockfile. In cloud runs, a failed install names the registry it needed that the run can't reach.
+- Python manifests: `pyproject.toml` (PEP 621, dependency groups, uv, Poetry) and `requirements*.txt` answer the same questions and take the same edits, and `install()` runs uv, Poetry or pip when there is no `package.json`.
 - `semver`: `gte`, `lte`, `minVersion`, `major`, `coerce`, `maxSatisfying` and `validRange`.
 - `chains({ to })` takes package names. A node's `local` narrows `dir` to a string.
 - Step results record objects with `toJSON()` as their JSON, and the step's type says so.
+
+**Fixes**
+
+- A step that doesn't import `fs` or `child_process` (or import a local file that does) runs on a dirty tree with `--allow-fs`, since it can't write.
+- Dry runs with `fs` granted read the target and keep writes in memory.
 
 See [Dependencies](/community/workflows/dependencies).
 </Update>

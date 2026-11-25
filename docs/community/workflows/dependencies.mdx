@@ -65,9 +65,19 @@ Each edit returns what it changed, `{ file, package, name, kind, from, to }`, an
 
 With `--dry-run`, the edits show in the diff and later steps see them, and nothing is written.
 
+## Python projects
+
+The same calls read and edit Python manifests: `pyproject.toml` (PEP 621 `[project]`, `[dependency-groups]`, uv's `[tool.uv] dev-dependencies` and Poetry's `[tool.poetry.*dependencies]`) and `requirements*.txt`. Their packages have `ecosystem: "pypi"`, names match as PyPI normalizes them (`"Django"` is `"django"`), and `group` names the optional-dependency, dependency or Poetry group.
+
+```ts
+await step("Django 5", () => dependencies().bump("django", ">=5.0,<6"));
+```
+
+`bump` and `add` take PEP 440 specifiers; `^4.2`, `~4.2` and a bare version are turned into one in PEP 508 strings, and Poetry tables keep them as given. Edits keep extras, markers and comments. `[project] dependencies`, Poetry's main group and a plain requirements file are `prod`; dependency groups, Poetry groups, uv dev dependencies, optional groups named like dev, test, lint or docs, and requirements files named like dev or test are `dev`; other extras are `optional`.
+
 ## Refresh the lockfile
 
-Edits change the `package.json` files, not the lockfile. `install()` is a step that runs the repository's package manager (npm, pnpm, Yarn or bun, from `packageManager` or the lockfile):
+Edits change the `package.json` files, not the lockfile. `install()` is a step that runs the repository's package manager (npm, pnpm, Yarn or bun, from `packageManager` or the lockfile; in a Python repository without a `package.json`, uv, Poetry or pip):
 
 ```ts
 import { dependencies, install } from "codemod/deps";
