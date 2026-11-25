@@ -19,7 +19,7 @@
 use crate::accurate::AccurateAnalyzer;
 use crate::dataflow::build_file_flow;
 use crate::flow_query::FlowHost;
-use crate::oxc_adapter::parse_and_analyze;
+use crate::oxc_adapter::{analyze, parse_and_analyze};
 use language_core::{
     ByteRange, CallGraphDirection, CallGraphOptions, CallGraphResult, FlowDirection, FlowOptions,
     FlowResult,
@@ -140,15 +140,23 @@ fn micro() {
             })
             .count()
     });
+    let (shared, _) = best(&|| {
+        files
+            .iter()
+            .filter(|(path, content)| analyze(path, content, true).is_ok())
+            .count()
+    });
 
     println!(
-        "BENCH micro files={} mb={:.1} symbols_ms={:.0} symbol_files={symbol_files} facts_ms={:.0} fact_files={fact_files} symbols_plus_facts_ms={:.0} ratio={:.2}",
+        "BENCH micro files={} mb={:.1} symbols_ms={:.0} symbol_files={symbol_files} facts_ms={:.0} fact_files={fact_files} symbols_plus_facts_ms={:.0} ratio={:.2} one_parse_ms={:.0} one_parse_ratio={:.2}",
         files.len(),
         bytes as f64 / 1e6,
         ms(symbols),
         ms(facts),
         ms(both),
         ms(both) / ms(symbols),
+        ms(shared),
+        ms(shared) / ms(symbols),
     );
 }
 
@@ -241,12 +249,9 @@ fn pick_sites(analyzer: &AccurateAnalyzer, files: &[PathBuf]) -> Sites {
     sites
 }
 
-#[test]
-#[ignore]
-fn workspace() {
-    let Ok(dir) = std::env::var("DATAFLOW_BENCH_DIR") else {
-        return;
-    };
+/// The tree to run on: `DATAFLOW_BENCH_DIR`, or copies of it at `DATAFLOW_BENCH_SCALE`.
+fn bench_root() -> Option<(PathBuf, usize)> {
+    let dir = std::env::var("DATAFLOW_BENCH_DIR").ok()?;
     let scale: usize = std::env::var("DATAFLOW_BENCH_SCALE")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -261,12 +266,63 @@ fn workspace() {
     } else {
         PathBuf::from(&dir)
     };
-    let root = root.canonicalize().unwrap();
-    let rss_start = rss_mb();
+    Some((root.canonicalize().unwrap(), scale))
+}
 
+/// What a codemod pays for its first `callers()` query on a fresh analyzer:
+/// symbols, facts and the table together. Its own test (process), so peak
+/// RSS is this scenario's alone.
+#[test]
+#[ignore]
+fn cold() {
+    let Some((root, scale)) = bench_root() else {
+        return;
+    };
+    let files = walk(&root, is_source);
+    let analyzer = AccurateAnalyzer::new(root.clone());
+    // The first named function of the first file that has one.
+    let site = files.iter().find_map(|path| {
+        let content = std::fs::read_to_string(path).ok()?;
+        let flow = build_file_flow(path, &content).ok()?;
+        let function = flow.functions.iter().find(|f| f.name.is_some())?;
+        Some((path.clone(), content, function.range))
+    });
+    let (path, content, range) = site.unwrap();
+    let started = Instant::now();
+    let result = analyzer
+        .call_graph(
+            &path,
+            &content,
+            range,
+            CallGraphOptions {
+                direction: CallGraphDirection::Callers,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let elapsed = started.elapsed();
+    let mut hasher = DefaultHasher::new();
+    digest_call_graph(&result, &mut hasher);
+    println!(
+        "BENCH cold scale={scale} first_callers_ms={:.0} rss_mb={:.0} peak_rss_mb={:.0} digest={:016x}",
+        ms(elapsed),
+        rss_mb(),
+        peak_rss_mb(),
+        hasher.finish()
+    );
+}
+
+#[test]
+#[ignore]
+fn workspace() {
+    let Some((root, scale)) = bench_root() else {
+        return;
+    };
+    let rss_start = rss_mb();
     let analyzer = AccurateAnalyzer::new(root.clone());
 
-    // 1. Index every file's symbols (what the first workspace query does).
+    // 1. Index every file (what the first workspace query does). Once a
+    //    callers query is coming, this builds the facts in the same parse.
     let started = Instant::now();
     let mut files = analyzer.workspace_files();
     files.sort();
