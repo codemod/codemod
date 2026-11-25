@@ -72,6 +72,8 @@ impl ModuleDef for AstGrepModule {
         declare.declare("parseFile")?;
         #[cfg(feature = "native")]
         declare.declare("jssgTransform")?;
+        #[cfg(feature = "native")]
+        declare.declare("createFile")?;
         Ok(())
     }
 
@@ -88,6 +90,8 @@ impl ModuleDef for AstGrepModule {
             exports.export("parseFile", Func::from(parse_file_rjs))?;
             default.set("jssgTransform", Func::from(jssg_transform_rjs))?;
             exports.export("jssgTransform", Func::from(jssg_transform_rjs))?;
+            default.set("createFile", Func::from(create_file_rjs))?;
+            exports.export("createFile", Func::from(create_file_rjs))?;
         }
         exports.export("default", default)?;
         exports.export("parse", Func::from(parse_rjs))?;
@@ -377,6 +381,48 @@ fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
 /// Execute a transform function on a file, writing back the result.
 ///
 /// `jssgTransform(transformFn, pathToFile, language)` reads the file,
+/// `createFile(path, text)`: a new file (or new text for one), relative to
+/// the target, kept with the step's other changes: a dry run shows it, a
+/// real run writes it when the step commits.
+#[cfg(feature = "native")]
+fn create_file_rjs<'js>(ctx: Ctx<'js>, path: String, text: String) -> Result<()> {
+    let file_changes = ctx
+        .userdata::<JssgFileChanges>()
+        .map(|guard| guard.clone())
+        .ok_or_else(|| Exception::throw_message(&ctx, "createFile() works inside a step"))?;
+    let Some(pending) = file_changes.pending else {
+        return Err(Exception::throw_message(
+            &ctx,
+            "createFile() works inside a function step or a forEachFile callback",
+        ));
+    };
+    let target = ctx
+        .userdata::<crate::sandbox::engine::execution_engine::TargetDirectory>()
+        .map(|guard| guard.0.clone())
+        .ok_or_else(|| Exception::throw_message(&ctx, "TargetDirectory not found in userdata"))?;
+    let relative = std::path::Path::new(&path);
+    if relative
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(Exception::throw_message(
+            &ctx,
+            &format!("createFile(): '{path}' must stay inside the target"),
+        ));
+    }
+    let file = if relative.is_absolute() {
+        relative.to_path_buf()
+    } else {
+        target.join(relative)
+    };
+    validate_path_within_target(&ctx, &file, "createFile()")?;
+    let (_, taken) = pending
+        .take_creating(&file)
+        .map_err(|e| Exception::throw_message(&ctx, &format!("createFile('{path}'): {e}")))?;
+    taken.set(text);
+    Ok(())
+}
+
 /// parses it, calls the transform, and writes back content + handles rename.
 ///
 /// Returns a promise that resolves when the transform is complete.

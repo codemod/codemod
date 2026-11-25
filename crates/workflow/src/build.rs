@@ -1130,6 +1130,11 @@ impl Analysis<'_> {
             let imported = import.imported.as_deref().unwrap_or_default();
             // Other imports are copied as written: in an isolate,
             // `codemod/deps` gives `registry` and `semver` that run there.
+            // `createFile` is the exception: it only works inside steps.
+            if is_flow_module(&import.source) && imported == "createFile" {
+                parts.imports.insert((import.at, import.line.clone()));
+                return Ok(());
+            }
             if is_flow_module(&import.source)
                 || is_git_module(&import.source)
                 || is_deps_module(&import.source) && imported == "dependencyGraph"

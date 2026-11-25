@@ -176,12 +176,17 @@ pub(crate) fn commit(
             .collect();
         overlay.check_destinations(&destinations)?;
     }
+    // A file created by the step (`createFile`) started empty and does not
+    // exist yet: unchanged too.
     let unchanged = parallel_map(&planned, |plan| match overlay {
-        Some(overlay) => overlay
-            .read(&plan.path, &target.join(&plan.path))
-            .is_ok_and(|now| now == plan.original),
-        None => fs::read(target.join(&plan.path))
-            .is_ok_and(|on_disk| on_disk == plan.original.as_bytes()),
+        Some(overlay) => match overlay.read(&plan.path, &target.join(&plan.path)) {
+            Ok(now) => now == plan.original,
+            Err(_) => plan.original.is_empty() && !overlay.exists(&plan.path),
+        },
+        None => match fs::read(target.join(&plan.path)) {
+            Ok(on_disk) => on_disk == plan.original.as_bytes(),
+            Err(e) => e.kind() == std::io::ErrorKind::NotFound && plan.original.is_empty(),
+        },
     });
     if let Some((plan, _)) = planned.iter().zip(unchanged).find(|(_, same)| !same) {
         return Err(format!(

@@ -37,6 +37,11 @@ export const {
   choose,
 } = createTasks({ callbackId });
 
+/** Not on the Node.js host yet: run with the CLI (QuickJS) for createFile(). */
+export function createFile(_path: string, _text: string): never {
+  throw new Error("createFile() runs in the CLI's QuickJS host only for now");
+}
+
 /** The run's orchestrator, for what only the workflow body may call. */
 function body(what: string): Runtime {
   const scope = current(what);
