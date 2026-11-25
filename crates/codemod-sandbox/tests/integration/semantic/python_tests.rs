@@ -114,3 +114,12 @@ jssg_test! {
     target: "app/repository.py",
     scope: workspace,
 }
+
+jssg_test! {
+    name: test_py_drf_views_and_celery_tasks,
+    language: CodemodLang::Static(SupportLang::Python),
+    codemod: "py_drf_celery.js",
+    fixture_dir: "python/django_flow",
+    target: "shop/api.py",
+    scope: workspace,
+}
