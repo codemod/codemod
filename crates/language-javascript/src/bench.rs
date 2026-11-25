@@ -29,6 +29,70 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// Counts live heap bytes when `DATAFLOW_BENCH_HEAP=1`, so the bench can
+/// report what the analyzer holds apart from what the allocator keeps (RSS).
+/// Off by default: the shared counters slow down parallel phases.
+struct CountingAllocator;
+
+static COUNTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LIVE_BYTES: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+static PEAK_BYTES: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+fn count(delta: isize) {
+    let live = LIVE_BYTES.fetch_add(delta, std::sync::atomic::Ordering::Relaxed) + delta;
+    if delta > 0 {
+        PEAK_BYTES.fetch_max(live, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Start counting if `DATAFLOW_BENCH_HEAP=1`.
+fn start_heap_count() {
+    if std::env::var("DATAFLOW_BENCH_HEAP").is_ok_and(|v| v == "1") {
+        COUNTING.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        let pointer = unsafe { std::alloc::System.alloc(layout) };
+        if !pointer.is_null() && COUNTING.load(std::sync::atomic::Ordering::Relaxed) {
+            count(layout.size() as isize);
+        }
+        pointer
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(pointer, layout) };
+        if COUNTING.load(std::sync::atomic::Ordering::Relaxed) {
+            count(-(layout.size() as isize));
+        }
+    }
+
+    unsafe fn realloc(
+        &self,
+        pointer: *mut u8,
+        layout: std::alloc::Layout,
+        new_size: usize,
+    ) -> *mut u8 {
+        let moved = unsafe { std::alloc::System.realloc(pointer, layout, new_size) };
+        if !moved.is_null() && COUNTING.load(std::sync::atomic::Ordering::Relaxed) {
+            count(new_size as isize - layout.size() as isize);
+        }
+        moved
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+/// Live heap now and at its peak, in MB (0 unless counting).
+fn heap_mb() -> (f64, f64) {
+    (
+        LIVE_BYTES.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6,
+        PEAK_BYTES.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6,
+    )
+}
+
 const EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
 /// Files sampled for queries, spread evenly over the sorted file list.
 const SAMPLE_FILES: usize = 60;
@@ -278,6 +342,7 @@ fn cold() {
     let Some((root, scale)) = bench_root() else {
         return;
     };
+    start_heap_count();
     let files = walk(&root, is_source);
     let analyzer = AccurateAnalyzer::new(root.clone());
     // The first named function of the first file that has one.
@@ -304,11 +369,13 @@ fn cold() {
     let mut hasher = DefaultHasher::new();
     digest_call_graph(&result, &mut hasher);
     println!(
-        "BENCH cold scale={scale} threads={} first_callers_ms={:.0} rss_mb={:.0} peak_rss_mb={:.0} digest={:016x}",
+        "BENCH cold scale={scale} threads={} first_callers_ms={:.0} rss_mb={:.0} peak_rss_mb={:.0} heap_mb={:.0} peak_heap_mb={:.0} digest={:016x}",
         rayon::current_num_threads(),
         ms(elapsed),
         rss_mb(),
         peak_rss_mb(),
+        heap_mb().0,
+        heap_mb().1,
         hasher.finish()
     );
 }
@@ -363,10 +430,7 @@ fn flow_bytes(flow: &crate::dataflow::FileFlow) -> Vec<(&'static str, usize)> {
     vec![
         ("nodes", flow.nodes.capacity() * size_of::<FlowNode>()),
         ("names", name_bytes),
-        (
-            "edges",
-            flow.out_edges.heap_bytes() + flow.in_edges.heap_bytes(),
-        ),
+        ("edges", flow.out_edges.bytes() + flow.in_edges.bytes()),
         (
             "span index + id maps",
             flow.span_index_bytes()
@@ -395,6 +459,7 @@ fn workspace() {
     let Some((root, scale)) = bench_root() else {
         return;
     };
+    start_heap_count();
     let rss_start = rss_mb();
     let analyzer = AccurateAnalyzer::new(root.clone());
 
@@ -405,6 +470,7 @@ fn workspace() {
     files.sort();
     let index_time = started.elapsed();
     let rss_index = rss_mb();
+    let heap_index = heap_mb().0;
 
     // 2. Facts for every file.
     let started = Instant::now();
@@ -426,6 +492,7 @@ fn workspace() {
     }
     let facts_time = started.elapsed();
     let rss_facts = rss_mb();
+    let heap_facts = heap_mb().0;
 
     let sites = pick_sites(&analyzer, &files);
     let content_of = |path: &Path| std::fs::read_to_string(path).unwrap();
@@ -446,6 +513,7 @@ fn workspace() {
         .unwrap();
     let callers_table_time = started.elapsed();
     let rss_table = rss_mb();
+    let heap_table = heap_mb().0;
 
     // 4. Queries. Each reads its file first, as the provider does.
     let mut hasher = DefaultHasher::new();
@@ -502,6 +570,7 @@ fn workspace() {
     let (callers, caller_entries, caller_truncated) =
         call_query(CallGraphDirection::Callers, false);
     let rss_end = rss_mb();
+    let heap_end = heap_mb().0;
 
     let row = |name: &str, times: Vec<Duration>| {
         let n = times.len();
@@ -532,6 +601,10 @@ fn workspace() {
     println!(
         "BENCH rss_mb start={rss_start:.0} after_index={rss_index:.0} after_facts={rss_facts:.0} after_table={rss_table:.0} end={rss_end:.0} peak={:.0}",
         peak_rss_mb()
+    );
+    println!(
+        "BENCH heap_mb after_index={heap_index:.0} after_facts={heap_facts:.0} after_table={heap_table:.0} end={heap_end:.0} peak={:.0}",
+        heap_mb().1
     );
     let total: usize = parts.iter().map(|(_, bytes)| bytes).sum();
     let parts: Vec<String> = parts

@@ -23,6 +23,7 @@ use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// Array, Map and Set methods that change their receiver.
@@ -206,6 +207,8 @@ pub struct FileFlow {
     /// pass through it are not connected to where they go. Used to measure
     /// coverage; queries do not read it.
     pub skipped: HashMap<String, u32>,
+    /// Approximate heap bytes held, set when the facts are built.
+    pub bytes: usize,
 }
 
 impl FileFlow {
@@ -248,6 +251,35 @@ impl FileFlow {
     #[cfg(test)]
     pub(crate) fn span_index_bytes(&self) -> usize {
         self.by_span.capacity() * 4
+    }
+
+    /// Approximate heap bytes: the arrays, the maps by capacity, the names.
+    fn estimate_bytes(&self, names: &FxHashSet<Name>) -> usize {
+        use std::mem::size_of;
+        let map = |capacity: usize, entry: usize| capacity * (entry + 1);
+        let lists = |lists: &FxHashMap<u32, Vec<(Name, u32)>>| {
+            map(lists.capacity(), 32)
+                + lists
+                    .values()
+                    .map(|list| list.capacity() * size_of::<(Name, u32)>())
+                    .sum::<usize>()
+        };
+        self.nodes.capacity() * size_of::<FlowNode>()
+            + self.out_edges.bytes()
+            + self.in_edges.bytes()
+            + self.by_span.capacity() * 4
+            + self.functions.capacity() * size_of::<FunctionFact>()
+            + self.calls.capacity() * size_of::<CallFact>()
+            + self.calls.iter().map(|c| c.args.len() * 4).sum::<usize>()
+            + self.mutations.capacity() * size_of::<MutationFact>()
+            + map(self.fn_by_node.capacity(), 8)
+            + map(self.call_by_node.capacity(), 8)
+            + map(self.imports.capacity(), 4 + size_of::<ImportFact>())
+            + lists(&self.object_members)
+            + lists(&self.class_methods)
+            + lists(&self.class_fields)
+            + map(self.model_edges.capacity(), 8)
+            + names.iter().map(|name| name.len() + 16).sum::<usize>()
     }
 
     /// The innermost function around a range.
@@ -303,8 +335,7 @@ impl Adjacency {
     }
 
     /// Heap bytes held.
-    #[cfg(test)]
-    pub(crate) fn heap_bytes(&self) -> usize {
+    pub(crate) fn bytes(&self) -> usize {
         self.offsets.capacity() * 4 + self.edges.capacity() * 8
     }
 }
@@ -317,13 +348,71 @@ impl std::ops::Index<usize> for Adjacency {
     }
 }
 
+/// How much memory, by [`FileFlow::bytes`], the facts cache keeps by default.
+/// At 13 MB of source the facts take ~100 MB, so most repositories never
+/// reach it; past it, memory stays flat and dropped facts cost a re-parse.
+/// `CODEMOD_FLOW_CACHE_MB` overrides it.
+const DEFAULT_FLOW_CACHE_BYTES: usize = 256 << 20;
+
+struct CachedFlow {
+    hash: u64,
+    flow: Arc<FileFlow>,
+    /// Value of the cache's clock when last handed out.
+    used: AtomicU64,
+}
+
 /// Facts per file, rebuilt when the file's content changes.
-#[derive(Debug, Default)]
+///
+/// Holds up to a byte budget; past it, the facts used longest ago are
+/// dropped. Facts are a pure function of the file's content, so dropped facts
+/// come back identical when asked for again: only the parse is repeated.
 pub struct FlowCache {
-    files: RwLock<HashMap<PathBuf, (u64, Arc<FileFlow>)>>,
+    files: RwLock<HashMap<PathBuf, CachedFlow>>,
+    budget: usize,
+    bytes: AtomicUsize,
+    clock: AtomicU64,
+}
+
+impl Default for FlowCache {
+    fn default() -> Self {
+        let budget = std::env::var("CODEMOD_FLOW_CACHE_MB")
+            .ok()
+            .and_then(|mb| mb.parse::<usize>().ok())
+            .map_or(DEFAULT_FLOW_CACHE_BYTES, |mb| mb << 20);
+        FlowCache::with_budget(budget)
+    }
+}
+
+impl std::fmt::Debug for FlowCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlowCache")
+            .field("files", &self.files.read().len())
+            .field("bytes", &self.bytes.load(Ordering::Relaxed))
+            .field("budget", &self.budget)
+            .finish()
+    }
 }
 
 impl FlowCache {
+    /// A cache that keeps facts up to `budget` bytes.
+    pub fn with_budget(budget: usize) -> Self {
+        FlowCache {
+            files: RwLock::default(),
+            budget,
+            bytes: AtomicUsize::new(0),
+            clock: AtomicU64::new(0),
+        }
+    }
+
+    /// Mark facts as used now. The clock moves only when facts are stored,
+    /// so a hit is a load and, at most, one store to the entry.
+    fn touch(&self, cached: &CachedFlow) {
+        let now = self.clock.load(Ordering::Relaxed);
+        if cached.used.load(Ordering::Relaxed) != now {
+            cached.used.store(now, Ordering::Relaxed);
+        }
+    }
+
     /// Facts for `path` at `content_hash`, building them from `content` when
     /// they are missing or stale. `None` when the file does not parse.
     pub fn get_or_build(
@@ -332,22 +421,14 @@ impl FlowCache {
         content_hash: u64,
         content: impl FnOnce() -> Option<Arc<str>>,
     ) -> Option<Arc<FileFlow>> {
-        if let Some((hash, flow)) = self.files.read().get(path) {
-            if *hash == content_hash {
-                return Some(Arc::clone(flow));
+        if let Some(cached) = self.files.read().get(path) {
+            if cached.hash == content_hash {
+                self.touch(cached);
+                return Some(Arc::clone(&cached.flow));
             }
         }
         let flow = Arc::new(build_file_flow(path, &content()?).ok()?);
-        let mut files = self.files.write();
-        // Another thread may have built them meanwhile: keep one copy, so
-        // every caller holds the same facts.
-        if let Some((hash, built)) = files.get(path) {
-            if *hash == content_hash {
-                return Some(Arc::clone(built));
-            }
-        }
-        files.insert(path.to_path_buf(), (content_hash, Arc::clone(&flow)));
-        Some(flow)
+        Some(self.keep(path.to_path_buf(), content_hash, flow))
     }
 
     /// Whether facts for `path` at `content_hash` are cached.
@@ -355,18 +436,62 @@ impl FlowCache {
         self.files
             .read()
             .get(path)
-            .is_some_and(|(hash, _)| *hash == content_hash)
+            .is_some_and(|cached| cached.hash == content_hash)
     }
 
     /// Keep facts built elsewhere (in the symbol pass's parse).
     pub fn insert(&self, path: PathBuf, content_hash: u64, flow: FileFlow) {
-        self.files
-            .write()
-            .insert(path, (content_hash, Arc::new(flow)));
+        self.keep(path, content_hash, Arc::new(flow));
+    }
+
+    /// Store `flow` unless another thread stored facts for the same content
+    /// meanwhile (then hand those out, so every caller holds the same copy),
+    /// and keep the cache within its budget.
+    fn keep(&self, path: PathBuf, content_hash: u64, flow: Arc<FileFlow>) -> Arc<FileFlow> {
+        let mut files = self.files.write();
+        if let Some(cached) = files.get(&path) {
+            if cached.hash == content_hash {
+                self.touch(cached);
+                return Arc::clone(&cached.flow);
+            }
+        }
+        self.bytes.fetch_add(flow.bytes, Ordering::Relaxed);
+        let replaced = files.insert(
+            path.clone(),
+            CachedFlow {
+                hash: content_hash,
+                flow: Arc::clone(&flow),
+                used: AtomicU64::new(self.clock.fetch_add(1, Ordering::Relaxed) + 1),
+            },
+        );
+        if let Some(replaced) = replaced {
+            self.bytes.fetch_sub(replaced.flow.bytes, Ordering::Relaxed);
+        }
+        if self.bytes.load(Ordering::Relaxed) > self.budget {
+            // Drop the least recently used down to 90% of the budget, so
+            // evictions come in batches. The facts just stored stay.
+            let target = self.budget / 10 * 9;
+            let mut by_age: Vec<(u64, PathBuf)> = files
+                .iter()
+                .filter(|(other, _)| **other != path)
+                .map(|(other, cached)| (cached.used.load(Ordering::Relaxed), other.clone()))
+                .collect();
+            by_age.sort_unstable();
+            for (_, old) in by_age {
+                if self.bytes.load(Ordering::Relaxed) <= target {
+                    break;
+                }
+                if let Some(evicted) = files.remove(&old) {
+                    self.bytes.fetch_sub(evicted.flow.bytes, Ordering::Relaxed);
+                }
+            }
+        }
+        flow
     }
 
     pub fn clear(&self) {
         self.files.write().clear();
+        self.bytes.store(0, Ordering::Relaxed);
     }
 }
 
@@ -552,6 +677,7 @@ impl<'s, 'a> Builder<'s, 'a> {
         flow.loops.shrink_to_fit();
         flow.fn_by_node.shrink_to_fit();
         flow.call_by_node.shrink_to_fit();
+        flow.bytes = flow.estimate_bytes(&self.names);
         flow
     }
 
@@ -1936,6 +2062,34 @@ mod tests {
         assert!(flow.in_edges[function.node as usize]
             .iter()
             .any(|(_, kind)| *kind == FlowEdgeKind::Return));
+    }
+
+    #[test]
+    fn dropped_facts_come_back_the_same() {
+        let first = "const a = input.value;\nsend(a);\nfunction f(x) { return x + 1; }";
+        let second = "export const g = (y) => y.map((z) => z * 2);";
+        let cache = FlowCache::with_budget(1);
+        let content = |text: &str| -> Arc<str> { text.into() };
+        let a = cache
+            .get_or_build(Path::new("a.js"), 1, || Some(content(first)))
+            .unwrap();
+        // Over budget: storing b drops a, never the facts just stored.
+        cache
+            .get_or_build(Path::new("b.js"), 2, || Some(content(second)))
+            .unwrap();
+        assert!(!cache.has(Path::new("a.js"), 1));
+        assert!(cache.has(Path::new("b.js"), 2));
+        let again = cache
+            .get_or_build(Path::new("a.js"), 1, || Some(content(first)))
+            .unwrap();
+        assert!(!Arc::ptr_eq(&a, &again));
+        assert_eq!(format!("{:?}", a.nodes), format!("{:?}", again.nodes));
+        assert_eq!(format!("{:?}", a.calls), format!("{:?}", again.calls));
+        assert_eq!(a.in_edges.edge_count(), again.in_edges.edge_count());
+        for node in 0..a.nodes.len() {
+            assert_eq!(a.in_edges[node], again.in_edges[node]);
+            assert_eq!(a.out_edges[node], again.out_edges[node]);
+        }
     }
 
     #[test]
