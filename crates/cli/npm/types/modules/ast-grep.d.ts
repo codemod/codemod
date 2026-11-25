@@ -1532,4 +1532,12 @@ declare module "codemod:ast-grep" {
     pathToFile: string,
     language: string,
   ): Promise<string | null>;
+
+  /**
+   * Create a file (relative to the target) with the step's other changes.
+   * Also exported from `codemod/workflow`; see there.
+   *
+   * @experimental
+   */
+  export function createFile(path: string, text: string): void;
 }
