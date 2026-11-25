@@ -3,6 +3,7 @@
 use crate::cache::{
     hash_content, ExportedSymbol, FileSymbols, ImportedSymbol, Symbol, SymbolReference,
 };
+use crate::dataflow::{facts_from_semantic, FileFlow};
 use crate::error::JsSemanticError;
 use language_core::{ByteRange, SymbolKind};
 use oxc::allocator::Allocator;
@@ -17,6 +18,16 @@ use std::path::Path;
 
 /// Parse a JavaScript/TypeScript file and extract semantic information.
 pub fn parse_and_analyze(file_path: &Path, content: &str) -> Result<FileSymbols, JsSemanticError> {
+    analyze(file_path, content, false).map(|(symbols, _)| symbols)
+}
+
+/// Parse a file once for its symbols and, when `with_flow` is set, its
+/// value-flow facts from the same semantic model.
+pub fn analyze(
+    file_path: &Path,
+    content: &str,
+    with_flow: bool,
+) -> Result<(FileSymbols, Option<FileFlow>), JsSemanticError> {
     let allocator = Allocator::default();
 
     // Determine source type from file extension
@@ -149,7 +160,8 @@ pub fn parse_and_analyze(file_path: &Path, content: &str) -> Result<FileSymbols,
         }
     }
 
-    Ok(file_symbols)
+    let flow = with_flow.then(|| facts_from_semantic(&semantic, content));
+    Ok((file_symbols, flow))
 }
 
 /// Convert OXC Span to ByteRange.

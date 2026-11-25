@@ -4,7 +4,7 @@ use crate::cache::{ExportedSymbol, FileSymbols, ImportedSymbol, Symbol, SymbolCa
 use crate::dataflow::{FileFlow, FlowCache};
 use crate::error::JsSemanticError;
 use crate::flow_query::{self, CallerIndexSlot, FlowHost};
-use crate::oxc_adapter::{find_symbol_at_range, parse_and_analyze};
+use crate::oxc_adapter::{analyze, find_symbol_at_range};
 use crate::vfs_fs::VfsFileSystem;
 use language_core::{
     filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionKind, DefinitionOptions,
@@ -18,6 +18,7 @@ use oxc_resolver::{
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use vfs::{VfsFileType, VfsPath};
 
@@ -125,6 +126,9 @@ pub struct AccurateAnalyzer {
     /// Files that failed to parse, with the parser's message. A file here is
     /// not parsed again until new content for it arrives through `process_file`.
     parse_errors: RwLock<HashMap<PathBuf, String>>,
+    /// Set once a query needs facts for every workspace file (the callers
+    /// table): from then on, indexing a file builds its facts in the same parse.
+    flow_everywhere: AtomicBool,
 }
 
 impl AccurateAnalyzer {
@@ -179,6 +183,7 @@ impl AccurateAnalyzer {
             flows: FlowCache::default(),
             callers: CallerIndexSlot::default(),
             parse_errors: RwLock::new(HashMap::new()),
+            flow_everywhere: AtomicBool::new(false),
         }
     }
 
@@ -292,6 +297,13 @@ impl AccurateAnalyzer {
 
     /// Index a file and its dependencies lazily.
     fn ensure_indexed(&self, file_path: &Path) -> SemanticResult<()> {
+        self.ensure_indexed_with(file_path, false)
+    }
+
+    /// Index a file and its dependencies lazily. `with_flow` also builds the
+    /// file's value-flow facts from the same parse (its dependencies get
+    /// theirs only when every file needs them, see `flow_everywhere`).
+    fn ensure_indexed_with(&self, file_path: &Path, with_flow: bool) -> SemanticResult<()> {
         let canonical = file_path
             .canonicalize()
             .unwrap_or_else(|_| file_path.to_path_buf());
@@ -321,8 +333,9 @@ impl AccurateAnalyzer {
         // Read and parse the file using the virtual filesystem
         let content = self.read_file(&canonical)?;
 
-        let file_symbols = match parse_and_analyze(&canonical, &content) {
-            Ok(symbols) => symbols,
+        let with_flow = with_flow || self.flow_everywhere.load(Ordering::Relaxed);
+        let (file_symbols, flow) = match analyze(&canonical, &content, with_flow) {
+            Ok(analyzed) => analyzed,
             Err(error) => {
                 if let JsSemanticError::ParseError { message, .. } = &error {
                     self.parse_errors
@@ -343,6 +356,10 @@ impl AccurateAnalyzer {
         }
 
         // Store in cache
+        if let Some(flow) = flow {
+            self.flows
+                .insert(canonical.clone(), file_symbols.content_hash, flow);
+        }
         self.cache.insert(canonical.clone(), file_symbols, content);
 
         // Mark as indexed
@@ -409,6 +426,17 @@ impl AccurateAnalyzer {
     /// notification is authoritative" contract for callers that
     /// legitimately hand new content in (e.g. editor-driven LSP use).
     pub fn process_file(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
+        self.process_file_with(file_path, content, false)
+    }
+
+    /// [`Self::process_file`] for a data-flow or call-graph query: new
+    /// content gets its value-flow facts from the same parse.
+    fn process_file_with(
+        &self,
+        file_path: &Path,
+        content: &str,
+        with_flow: bool,
+    ) -> SemanticResult<()> {
         let canonical = file_path
             .canonicalize()
             .unwrap_or_else(|_| file_path.to_path_buf());
@@ -419,8 +447,12 @@ impl AccurateAnalyzer {
             return Ok(());
         }
 
-        let file_symbols = parse_and_analyze(file_path, content)?;
+        let (file_symbols, flow) = analyze(file_path, content, with_flow)?;
         self.parse_errors.write().remove(&canonical);
+        if let Some(flow) = flow {
+            self.flows
+                .insert(canonical.clone(), file_symbols.content_hash, flow);
+        }
         self.cache
             .insert(canonical.clone(), file_symbols, content.to_string());
         self.indexed_files.write().insert(canonical);
@@ -951,6 +983,7 @@ impl AccurateAnalyzer {
         self.flows.clear();
         self.callers.clear();
         self.parse_errors.write().clear();
+        self.flow_everywhere.store(false, Ordering::Relaxed);
     }
 
     /// Gets the type of a symbol at the given byte range.
@@ -976,7 +1009,7 @@ impl AccurateAnalyzer {
         range: ByteRange,
         options: FlowOptions,
     ) -> SemanticResult<FlowResult> {
-        self.process_file(file_path, content)?;
+        self.process_file_with(file_path, content, true)?;
         Ok(flow_query::data_flow(self, file_path, range, options))
     }
 
@@ -988,7 +1021,7 @@ impl AccurateAnalyzer {
         range: ByteRange,
         options: CallGraphOptions,
     ) -> SemanticResult<CallGraphResult> {
-        self.process_file(file_path, content)?;
+        self.process_file_with(file_path, content, true)?;
         Ok(flow_query::call_graph(self, file_path, range, options))
     }
 
@@ -1000,7 +1033,7 @@ impl AccurateAnalyzer {
         range: ByteRange,
         options: MutationOptions,
     ) -> SemanticResult<MutationsResult> {
-        self.process_file(file_path, content)?;
+        self.process_file_with(file_path, content, true)?;
         Ok(flow_query::mutations(self, file_path, range, options))
     }
 }
@@ -1011,7 +1044,7 @@ impl FlowHost for AccurateAnalyzer {
     }
 
     fn flow(&self, path: &Path) -> Option<Arc<FileFlow>> {
-        let _ = self.ensure_indexed(path);
+        let _ = self.ensure_indexed_with(path, true);
         let hash = self.cache.content_hash(path)?;
         self.flows
             .get_or_build(path, hash, || self.cache.content(path))
@@ -1037,6 +1070,9 @@ impl FlowHost for AccurateAnalyzer {
     }
 
     fn workspace_files(&self) -> Vec<PathBuf> {
+        // Every file's facts are about to be needed: build them in the
+        // indexing parse.
+        self.flow_everywhere.store(true, Ordering::Relaxed);
         let _ = self.index_workspace_files();
         self.cache.files()
     }

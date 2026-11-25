@@ -256,6 +256,21 @@ impl FlowCache {
         Some(flow)
     }
 
+    /// Whether facts for `path` at `content_hash` are cached.
+    pub fn has(&self, path: &Path, content_hash: u64) -> bool {
+        self.files
+            .read()
+            .get(path)
+            .is_some_and(|(hash, _)| *hash == content_hash)
+    }
+
+    /// Keep facts built elsewhere (in the symbol pass's parse).
+    pub fn insert(&self, path: PathBuf, content_hash: u64, flow: FileFlow) {
+        self.files
+            .write()
+            .insert(path, (content_hash, Arc::new(flow)));
+    }
+
     pub fn clear(&self) {
         self.files.write().clear();
     }

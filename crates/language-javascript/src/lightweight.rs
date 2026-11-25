@@ -4,7 +4,7 @@ use crate::cache::SymbolCache;
 use crate::dataflow::{FileFlow, FlowCache};
 use crate::error::JsSemanticError;
 use crate::flow_query::{self, CallerIndexSlot, FlowHost};
-use crate::oxc_adapter::{find_symbol_at_range, parse_and_analyze};
+use crate::oxc_adapter::{analyze, find_symbol_at_range, parse_and_analyze};
 use language_core::{
     ByteRange, CallGraphOptions, CallGraphResult, DefinitionKind, DefinitionOptions,
     DefinitionResult, FileReferences, FlowOptions, FlowResult, MutationOptions, MutationsResult,
@@ -35,6 +35,22 @@ impl LightweightAnalyzer {
     /// Process a file and add its symbols to the cache.
     pub fn process_file(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
         let file_symbols = parse_and_analyze(file_path, content)?;
+        self.cache
+            .insert(file_path.to_path_buf(), file_symbols, content.to_string());
+        Ok(())
+    }
+
+    /// [`Self::process_file`] for a data-flow or call-graph query: the
+    /// value-flow facts come from the same parse, unless they are cached.
+    fn process_file_with_flow(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
+        let with_flow = !self
+            .flows
+            .has(file_path, crate::cache::hash_content(content));
+        let (file_symbols, flow) = analyze(file_path, content, with_flow)?;
+        if let Some(flow) = flow {
+            self.flows
+                .insert(file_path.to_path_buf(), file_symbols.content_hash, flow);
+        }
         self.cache
             .insert(file_path.to_path_buf(), file_symbols, content.to_string());
         Ok(())
@@ -339,7 +355,7 @@ impl LightweightAnalyzer {
         range: ByteRange,
         options: FlowOptions,
     ) -> SemanticResult<FlowResult> {
-        self.process_file(file_path, content)?;
+        self.process_file_with_flow(file_path, content)?;
         Ok(flow_query::data_flow(self, file_path, range, options))
     }
 
@@ -352,7 +368,7 @@ impl LightweightAnalyzer {
         range: ByteRange,
         options: CallGraphOptions,
     ) -> SemanticResult<CallGraphResult> {
-        self.process_file(file_path, content)?;
+        self.process_file_with_flow(file_path, content)?;
         Ok(flow_query::call_graph(self, file_path, range, options))
     }
 
@@ -364,7 +380,7 @@ impl LightweightAnalyzer {
         range: ByteRange,
         options: MutationOptions,
     ) -> SemanticResult<MutationsResult> {
-        self.process_file(file_path, content)?;
+        self.process_file_with_flow(file_path, content)?;
         Ok(flow_query::mutations(self, file_path, range, options))
     }
 }
