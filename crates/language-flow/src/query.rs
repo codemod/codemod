@@ -8,9 +8,9 @@ use crate::facts::{Accessor, CallFact, CalleeFact, FileFlow, Name};
 use crate::once::BuildOnce;
 use language_core::{
     ByteRange, CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
-    CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
-    FlowResult, FlowStep, FunctionRef, Mutation, MutationKind, MutationOptions, MutationsResult,
-    SemanticError, UnparsedFile,
+    CallGraphResult, EntryPoint, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind,
+    FlowOptions, FlowResult, FlowStep, FunctionRef, Mutation, MutationKind, MutationOptions,
+    MutationsResult, Reachability, ReachedVia, SemanticError, UnparsedFile,
 };
 use parking_lot::RwLock;
 use rayon::prelude::*;
@@ -79,6 +79,16 @@ pub trait FlowHost: Sync {
         _call: &CallFact,
     ) -> Option<FunctionRef> {
         None
+    }
+    /// Why the function at index `function` of `path` is called from outside
+    /// the workspace's code: its package exports it, or a rule on the
+    /// selector declares it. Empty without either.
+    fn entry_points_of(&self, _path: &Path, _flow: &FileFlow, _function: u32) -> Vec<EntryPoint> {
+        Vec::new()
+    }
+    /// `path` as answers show it: relative to the workspace root, with `/`.
+    fn relative_path(&self, path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
     }
 }
 
@@ -1376,19 +1386,174 @@ pub fn call_graph(
             )
         }
         CallGraphDirection::Callers => {
-            let mut start = functions_at(host, &path, range, true);
-            if start.is_empty() {
-                start = host
-                    .flow(&path)
-                    .and_then(|flow| flow.function_at(range))
-                    .map(|function| vec![(path.clone(), Some(function))])
-                    .unwrap_or_default();
-            }
+            let start = target_functions(host, &path, range);
             if start.is_empty() {
                 return CallGraphResult::default();
             }
             callers(host, start, options)
         }
+    }
+}
+
+/// The functions a callers question about `range` is about: the function
+/// it names or is, else the one it is in.
+fn target_functions(host: &dyn FlowHost, path: &Path, range: ByteRange) -> Vec<FunctionKey> {
+    let start = functions_at(host, path, range, true);
+    if !start.is_empty() {
+        return start;
+    }
+    host.flow(path)
+        .and_then(|flow| flow.function_at(range))
+        .map(|function| vec![(path.to_path_buf(), Some(function))])
+        .unwrap_or_default()
+}
+
+/// Entry points of `key`, with its name.
+fn entry_points_of_key(host: &dyn FlowHost, key: &FunctionKey) -> (String, Vec<EntryPoint>) {
+    let Some(function) = key.1 else {
+        return ("<module>".to_string(), Vec::new());
+    };
+    let Some(flow) = host.flow(&key.0) else {
+        return ("<anonymous>".to_string(), Vec::new());
+    };
+    let name = flow
+        .functions
+        .get(function as usize)
+        .and_then(|f| f.name.as_deref())
+        .unwrap_or("<anonymous>")
+        .to_string();
+    (name, host.entry_points_of(&key.0, &flow, function))
+}
+
+/// Why the function at `range` is called from outside the workspace's
+/// code. `callers()` never includes these: an entry point is not a call site.
+pub fn entry_points(host: &dyn FlowHost, path: &Path, range: ByteRange) -> Vec<EntryPoint> {
+    let path = host.canonical(path);
+    let mut found: Vec<EntryPoint> = target_functions(host, &path, range)
+        .iter()
+        .flat_map(|key| entry_points_of_key(host, key).1)
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// Whether an entry point reaches the function at `range` through at most
+/// `max_depth` calls: the function itself, then its transitive callers,
+/// nearest first. Module top-level code that calls it counts as an entry
+/// point of kind `"module"` (it runs when the module is loaded).
+pub fn reachability(
+    host: &dyn FlowHost,
+    path: &Path,
+    range: ByteRange,
+    max_depth: u32,
+) -> Reachability {
+    let path = host.canonical(path);
+    let start = target_functions(host, &path, range);
+    let mut via: Vec<ReachedVia> = Vec::new();
+    let push = |via: &mut Vec<ReachedVia>, found: Vec<EntryPoint>, path: &[String]| {
+        for entry in found {
+            if !via
+                .iter()
+                .any(|v| v.kind == entry.kind && v.label == entry.label)
+            {
+                via.push(ReachedVia {
+                    kind: entry.kind,
+                    label: entry.label,
+                    path: path.to_vec(),
+                });
+            }
+        }
+    };
+    for key in &start {
+        let (name, found) = entry_points_of_key(host, key);
+        push(&mut via, found, &[name]);
+    }
+    if !via.is_empty() || start.is_empty() {
+        return Reachability {
+            via,
+            ..Default::default()
+        };
+    }
+
+    // One level past the limit, to tell whether the limit cut the walk.
+    let graph = callers(
+        host,
+        start.clone(),
+        CallGraphOptions {
+            direction: CallGraphDirection::Callers,
+            transitive: true,
+            max_depth: Some(max_depth.saturating_add(1)),
+            ..Default::default()
+        },
+    );
+    let mut entries: Vec<(&Path, &CallGraphEntry)> = graph
+        .files
+        .iter()
+        .flat_map(|file| file.entries.iter().map(|e| (file.file_path.as_path(), e)))
+        .collect();
+    entries.sort_by_key(|(_, entry)| entry.depth);
+    // Each caller function by where it is, with the function its call
+    // reaches: the first (nearest) entry wins.
+    let mut found_at: HashMap<(&Path, ByteRange), &CallGraphEntry> = HashMap::new();
+    for (file, entry) in &entries {
+        found_at.entry((*file, entry.range)).or_insert(entry);
+    }
+    let name_of = |entry: &CallGraphEntry| entry.name.clone().unwrap_or_default();
+    // Each step goes one depth nearer the queried function, so this ends.
+    let path_from = |entry: &CallGraphEntry| {
+        let mut names = vec![name_of(entry)];
+        let mut depth = entry.depth;
+        let mut callee = entry.callee.clone();
+        while let Some(next) = callee {
+            match found_at.get(&(next.file_path.as_path(), next.range)) {
+                Some(caller) if caller.depth < depth => {
+                    names.push(name_of(caller));
+                    depth = caller.depth;
+                    callee = caller.callee.clone();
+                }
+                _ => {
+                    names.push(next.name.unwrap_or_else(|| "<anonymous>".to_string()));
+                    break;
+                }
+            }
+        }
+        names
+    };
+
+    let mut truncated = graph.truncated;
+    for (file, entry) in &entries {
+        if entry.depth > max_depth {
+            truncated = true;
+            continue;
+        }
+        let is_function = entry.name.as_deref() != Some("<module>");
+        let found = if is_function {
+            let Some(flow) = host.flow(file) else {
+                continue;
+            };
+            match flow.functions.iter().position(|f| f.range == entry.range) {
+                Some(index) => host.entry_points_of(file, &flow, index as u32),
+                None => continue,
+            }
+        } else {
+            vec![EntryPoint {
+                kind: "module".to_string(),
+                label: host.relative_path(file),
+            }]
+        };
+        if !found.is_empty() {
+            push(&mut via, found, &path_from(entry));
+        }
+    }
+    Reachability {
+        truncated: via.is_empty() && truncated,
+        unparsed: if via.is_empty() {
+            graph.unparsed
+        } else {
+            Vec::new()
+        },
+        via,
     }
 }
 

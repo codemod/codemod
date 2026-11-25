@@ -250,6 +250,10 @@ fn run_callback(
         _ => Vec::new(),
     };
     isolates.semantic_provider = butterflow_core::jssg_runner::semantic_provider(&mode, &paths);
+    let rules = isolate::entry_point_rules(selector.semantic_analysis.as_ref())?;
+    if let (Some(provider), false) = (&isolates.semantic_provider, rules.is_empty()) {
+        provider.set_entry_point_rules(rules);
+    }
     // A dry run: answers describe what earlier steps left, not the disk (a
     // removed file has no references left in it). The workspace index takes
     // every changed file; a file-scope provider only reads the files this
