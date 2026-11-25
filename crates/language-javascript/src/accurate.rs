@@ -158,7 +158,9 @@ pub struct AccurateAnalyzer {
     /// Every call in the workspace, built on the first callers query.
     callers: CallerIndexSlot,
     /// Facts framework models stated, merged into flow and call-graph answers.
-    models: crate::model_facts::ModelStore,
+    /// Shared with every provider of this workspace, whatever its language.
+    models: Arc<language_core::ModelStore>,
+    model_graph: language_core::ModelGraphCache,
     /// Files that failed to parse, with the parser's message. A file here is
     /// not parsed again until new content for it arrives through `process_file`.
     parse_errors: RwLock<HashMap<PathBuf, String>>,
@@ -217,6 +219,7 @@ impl AccurateAnalyzer {
             WorkspaceWalker::Vfs => Self::build_vfs_resolver(&workspace_root, &fs_root),
         };
 
+        let models = language_core::ModelStore::for_workspace(&workspace_root);
         Self {
             cache: SymbolCache::new(),
             workspace_root,
@@ -227,7 +230,8 @@ impl AccurateAnalyzer {
             walker,
             flows: FlowCache::default(),
             callers: CallerIndexSlot::default(),
-            models: Default::default(),
+            models,
+            model_graph: Default::default(),
             parse_errors: RwLock::new(HashMap::new()),
             flow_everywhere: AtomicBool::new(false),
             canonical_paths: RwLock::new(HashMap::new()),
@@ -1579,8 +1583,9 @@ impl FlowHost for AccurateAnalyzer {
         Some(&self.callers)
     }
 
-    fn models(&self) -> Option<Arc<crate::model_facts::ModelGraph>> {
-        self.models.graph(self)
+    fn models(&self) -> Option<Arc<language_core::ModelGraph>> {
+        self.model_graph
+            .get(&self.models, &crate::model_facts::JsResolver(self))
     }
 }
 
@@ -1600,15 +1605,14 @@ impl AccurateAnalyzer {
     }
 
     pub fn channels(&self) -> Vec<language_core::ChannelReport> {
-        self.models
-            .graph(self)
+        FlowHost::models(self)
             .map(|graph| graph.channels.clone())
             .unwrap_or_default()
     }
 
     /// (label, model) pairs models put on the node at `range`.
     pub fn node_tags(&self, file: &Path, range: ByteRange) -> Vec<(String, String)> {
-        let Some(graph) = self.models.graph(self) else {
+        let Some(graph) = FlowHost::models(self) else {
             return Vec::new();
         };
         let path = self.canonical_path(file);

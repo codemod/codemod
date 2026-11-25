@@ -13,7 +13,6 @@ use codemod_sandbox::sandbox::engine::execution_engine::{
 use codemod_sandbox::sandbox::resolvers::oxc_resolver::OxcResolver;
 use codemod_sandbox::CodemodLang;
 use language_core::SemanticProvider;
-use language_javascript::OxcSemanticProvider;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -29,19 +28,44 @@ fn examples() -> PathBuf {
         .expect("examples/models")
 }
 
-/// Run the questions on the fixture, with the models or without.
-async fn ask(models: &str) -> Value {
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+/// Run a script on a file of a fixture and return its JSON answer.
+///
+/// Model facts belong to a workspace (every provider of a root shares
+/// them), so each run gets its own copy of the fixture.
+async fn run(
+    fixture: &str,
+    script: &str,
+    target: &str,
+    language: SupportLang,
+    models: &str,
+) -> Value {
     let examples = examples();
-    let workspace = examples.join("fixtures/two-apps");
-    let script = examples.join("e2e/two-apps.ts");
-    let target = workspace.join(ROUTE);
-    let content = std::fs::read_to_string(&target).expect("route.ts");
-    let provider: Arc<dyn SemanticProvider> =
-        Arc::new(OxcSemanticProvider::workspace_scope(workspace.clone()));
+    let temp = tempfile::TempDir::new().unwrap();
+    copy_dir(&examples.join("fixtures").join(fixture), temp.path());
+    let workspace = temp.path().canonicalize().unwrap();
+    let script = examples.join("e2e").join(script);
+    let target = workspace.join(target);
+    let content = std::fs::read_to_string(&target).expect("the target file");
+    // The provider the CLI uses: one per language, made on first use.
+    let provider: Arc<dyn SemanticProvider> = Arc::new(
+        semantic_factory::LazySemanticProvider::workspace_scope(workspace.clone()),
+    );
     let options = JssgExecutionOptions {
         script_path: &script,
         resolver: Arc::new(OxcResolver::new(examples.join("e2e"), None).unwrap()),
-        language: CodemodLang::Static(SupportLang::TypeScript),
+        language: CodemodLang::Static(language),
         file_path: &target,
         content: &content,
         selector_config: None,
@@ -67,6 +91,18 @@ async fn ask(models: &str) -> Value {
         }) => serde_json::from_str(&modified.content).expect("the script answers in JSON"),
         other => panic!("the script did not answer: {other:?}"),
     }
+}
+
+/// The two-app questions, with the models or without.
+async fn ask(models: &str) -> Value {
+    run(
+        "two-apps",
+        "two-apps.ts",
+        ROUTE,
+        SupportLang::TypeScript,
+        models,
+    )
+    .await
 }
 
 fn list<'a>(answers: &'a Value, name: &str) -> &'a Vec<Value> {
@@ -96,6 +132,7 @@ fn show(title: &str, items: &[Value], fields: &[&str]) {
 
 const CALLER: &[&str] = &["depth", "via", "name", "file", "site", "models", "channel"];
 const STEP: &[&str] = &["depth", "via", "kind", "file", "text", "models", "tags"];
+const STEP_TEXT: &[&str] = &["depth", "via", "file", "text", "models", "tags"];
 
 #[tokio::test]
 async fn models_join_a_frontend_to_its_next_backend() {
@@ -112,7 +149,7 @@ async fn models_join_a_frontend_to_its_next_backend() {
     );
     let entry = callers
         .iter()
-        .find(|c| c["via"] == "entry")
+        .find(|c| c["via"] == "entry-point")
         .expect("the handler is an entry point");
     assert_eq!(entry["models"], serde_json::json!(["next-app-routes"]));
     assert_eq!(entry["channel"], "GET /api/users/[id]");
@@ -275,4 +312,173 @@ async fn without_models_the_two_apps_are_not_joined() {
         .iter()
         .all(|s| s["file"] == PAGE));
     assert!(answers["handlerTags"].as_array().unwrap().is_empty());
+}
+
+const VIEWS: &str = "api/controllers/apps.py";
+const BUTTON: &str = "web/app/apps/[id]/run-button.tsx";
+
+/// A TypeScript frontend, a Flask API and Celery tasks: the same models
+/// API, facts about files of two languages, channels joined across them.
+#[tokio::test]
+async fn models_join_typescript_to_python() {
+    let answers = run(
+        "dify-like",
+        "dify-like.ts",
+        VIEWS,
+        SupportLang::Python,
+        "on",
+    )
+    .await;
+    println!("models applied: {}", answers["applied"]);
+    let both = serde_json::json!(["http-client", "flask-routes"]);
+
+    // Python asked: the Flask view is called by Flask, and by the fetch in
+    // the TypeScript frontend.
+    let callers = list(&answers, "viewCallers");
+    show(
+        "callers() of run_app in api/controllers/apps.py (Python)",
+        callers,
+        CALLER,
+    );
+    let entry = callers.iter().find(|c| c["via"] == "entry-point").unwrap();
+    assert_eq!(entry["models"], serde_json::json!(["flask-routes"]));
+    assert_eq!(entry["channel"], "POST /console/api/apps/<uuid:app_id>/run");
+    let request = callers.iter().find(|c| c["via"] == "channel").unwrap();
+    assert_eq!(request["name"], "run");
+    assert_eq!(request["file"], BUTTON);
+    assert_eq!(request["models"], both);
+
+    // … and it calls the Celery task, through `.delay()`.
+    let callees = list(&answers, "viewCallees");
+    show(
+        "callees() of run_app (Python)",
+        callees,
+        &["via", "name", "file", "models", "channel"],
+    );
+    assert!(callees.iter().any(|c| c["via"] == "channel"
+        && c["name"] == "run_app_task"
+        && c["file"] == "api/tasks/run_app.py"
+        && c["models"] == serde_json::json!(["celery-tasks"])));
+
+    // The task, transitively: the worker, the view, and the frontend.
+    let callers = list(&answers, "taskCallers");
+    show(
+        "callers({ transitive: true }) of run_app_task (Python)",
+        callers,
+        CALLER,
+    );
+    assert!(callers
+        .iter()
+        .any(|c| c["via"] == "entry-point" && c["depth"] == 1));
+    assert!(callers
+        .iter()
+        .any(|c| c["via"] == "channel" && c["name"] == "run_app" && c["depth"] == 1));
+    assert!(callers.iter().any(|c| c["via"] == "channel"
+        && c["name"] == "run"
+        && c["file"] == BUTTON
+        && c["depth"] == 2));
+
+    // A task sent by name; a task nothing sends.
+    let callers = list(&answers, "mailCallers");
+    show("callers() of send_invite (sent by name)", callers, CALLER);
+    assert!(callers.iter().any(|c| c["via"] == "channel"
+        && c["name"] == "invite_member"
+        && c["file"] == "api/services/invite.py"));
+    let callers = list(&answers, "digestCallers");
+    assert_eq!(callers.len(), 1);
+    assert_eq!(callers[0]["via"], "entry-point");
+
+    // TypeScript asked: the frontend's `run` calls the Python view.
+    let callees = list(&answers, "runCallees");
+    show(
+        "callees() of run in the frontend (TypeScript)",
+        callees,
+        &["via", "name", "file", "models", "channel"],
+    );
+    assert!(callees.iter().any(|c| c["via"] == "channel"
+        && c["name"] == "run_app"
+        && c["file"] == VIEWS
+        && c["models"] == both));
+
+    // TypeScript → Python: the app id in the URL lands in the view's
+    // parameter; the body in `request.get_json()`.
+    let steps = list(&answers, "appIdFlowsTo");
+    show("flowsTo() from `appId` in the frontend", steps, STEP_TEXT);
+    let landed = steps.iter().find(|s| s["via"] == "channel").unwrap();
+    assert_eq!(landed["file"], VIEWS);
+    assert_eq!(landed["text"], "app_id");
+    assert!(landed["tags"]
+        .as_array()
+        .unwrap()
+        .contains(&Value::String("source:user-input".to_string())));
+    let steps = list(&answers, "bodyFlowsTo");
+    show(
+        "flowsTo() from the request body in the frontend",
+        steps,
+        STEP_TEXT,
+    );
+    assert!(steps
+        .iter()
+        .any(|s| s["via"] == "channel" && s["file"] == VIEWS && s["text"] == "request.get_json()"));
+
+    // Python → Python across the queue: the task's parameter is the view's argument.
+    let steps = list(&answers, "taskParameterFlowsFrom");
+    show(
+        "flowsFrom() of the task's `app_id` parameter (Python)",
+        steps,
+        STEP_TEXT,
+    );
+    assert!(steps
+        .iter()
+        .any(|s| s["via"] == "channel" && s["file"] == VIEWS && s["text"] == "app_id"));
+
+    let channels = list(&answers, "channels");
+    show(
+        "channels",
+        channels,
+        &["side", "key", "file", "matches", "open"],
+    );
+    let end = |key: &str, file: &str| {
+        channels
+            .iter()
+            .find(|c| c["key"] == key && c["file"].as_str().unwrap().ends_with(file))
+            .unwrap_or_else(|| panic!("no channel {key} in {file}"))
+    };
+    assert_eq!(
+        end("http POST /console/api/apps/{p0}/run", "run-button.tsx")["matches"],
+        1
+    );
+    assert_eq!(
+        end("http POST /console/api/apps/{p0}/invite", "invite.ts")["matches"],
+        1
+    );
+    assert_eq!(
+        end("http GET /console/api/apps/{app_id}", "apps.py")["matches"],
+        0
+    );
+    assert_eq!(end("celery mail.send_invite", "invite.py")["matches"], 1);
+}
+
+#[tokio::test]
+async fn without_models_python_has_no_answers() {
+    let answers = run(
+        "dify-like",
+        "dify-like.ts",
+        VIEWS,
+        SupportLang::Python,
+        "off",
+    )
+    .await;
+    for name in [
+        "viewCallers",
+        "viewCallees",
+        "taskCallers",
+        "mailCallers",
+        "runCallees",
+    ] {
+        assert!(list(&answers, name).is_empty(), "{name}: {}", answers[name]);
+    }
+    assert!(list(&answers, "appIdFlowsTo")
+        .iter()
+        .all(|s| s["file"] == BUTTON));
 }

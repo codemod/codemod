@@ -38,6 +38,10 @@ use crate::factory::SemanticFactory;
 /// ```
 pub struct LazySemanticProvider {
     inner: OnceLock<Option<Arc<dyn SemanticProvider>>>,
+    /// The provider for the other language family, when a run touches both
+    /// JavaScript/TypeScript and Python (a model joining a frontend to its
+    /// Python backend). `inner` stays the first one used.
+    second: OnceLock<Option<Arc<dyn SemanticProvider>>>,
     config: SemanticConfig,
 }
 
@@ -46,6 +50,7 @@ impl LazySemanticProvider {
     pub fn new(config: SemanticConfig) -> Self {
         Self {
             inner: OnceLock::new(),
+            second: OnceLock::new(),
             config,
         }
     }
@@ -114,9 +119,25 @@ impl LazySemanticProvider {
         if !SemanticFactory::supports_language(language) {
             return None;
         }
-        self.inner
+        let first = self
+            .inner
+            .get_or_init(|| SemanticFactory::create(language, self.config.clone()))
+            .as_ref()?;
+        if first.supports_language(language) {
+            return Some(first);
+        }
+        self.second
             .get_or_init(|| SemanticFactory::create(language, self.config.clone()))
             .as_ref()
+    }
+
+    /// The providers of both language families (for what is about the
+    /// workspace, not one file).
+    fn every(&self) -> Vec<&Arc<dyn SemanticProvider>> {
+        ["typescript", "python"]
+            .into_iter()
+            .filter_map(|language| self.get_or_init(language))
+            .collect()
     }
 
     /// Detect language from file extension.
@@ -300,10 +321,13 @@ impl SemanticProvider for LazySemanticProvider {
     }
 
     fn workspace_files(&self) -> SemanticResult<Vec<std::path::PathBuf>> {
-        match self.get_or_init("typescript") {
-            Some(provider) => provider.workspace_files(),
-            None => Ok(Vec::new()),
+        let mut files = Vec::new();
+        for provider in self.every() {
+            files.extend(provider.workspace_files()?);
         }
+        files.sort();
+        files.dedup();
+        Ok(files)
     }
 
     fn node_tags(&self, file: &Path, range: ByteRange) -> SemanticResult<Vec<(String, String)>> {

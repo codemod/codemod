@@ -5,12 +5,11 @@
 //! import/re-export resolution that answers go-to-definition.
 
 use crate::dataflow::{CallFact, CalleeFact, FileFlow, Name};
-use crate::model_facts::ModelGraph;
 use language_core::{
     ByteRange, CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
     CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
-    FlowResult, FlowStep, FunctionRef, Mutation, MutationKind, MutationOptions, MutationsResult,
-    SemanticError, UnparsedFile,
+    FlowResult, FlowStep, FunctionRef, ModelGraph, Mutation, MutationKind, MutationOptions,
+    MutationsResult, SemanticError, UnparsedFile,
 };
 use parking_lot::RwLock;
 use rayon::prelude::*;
@@ -52,10 +51,20 @@ pub(crate) trait FlowHost: Sync {
     /// Where the callers table is kept between queries. None rebuilds it on
     /// every callers query.
     fn caller_index(&self) -> Option<&CallerIndexSlot>;
-    /// What models added (see [`crate::model_facts`]). None: nothing.
+    /// What models added (see `language_core::ModelGraph`). None: nothing.
     fn models(&self) -> Option<Arc<ModelGraph>> {
         None
     }
+}
+
+/// Whether this analyzer reads the file. A model's edge can point into a
+/// file of another language (a Python route a `fetch` reaches): asking for
+/// its facts would only record a parse failure.
+pub(crate) fn analyzable(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "mts" | "cts")
+    )
 }
 
 /// Which query [`applicable`] checks the node for.
@@ -121,7 +130,9 @@ pub(crate) fn applicable(
 /// A file a data-flow walk has reached, with the steps found in it.
 struct FlowFile {
     path: PathBuf,
-    flow: Arc<FileFlow>,
+    /// None for a file of another language: a model's edge can end there,
+    /// and this analyzer cannot walk on from it.
+    flow: Option<Arc<FileFlow>>,
     content: Arc<str>,
     steps: Vec<FlowStep>,
 }
@@ -131,7 +142,13 @@ fn flow_file(host: &dyn FlowHost, files: &mut Vec<FlowFile>, path: &Path) -> Opt
     if let Some(index) = files.iter().position(|file| file.path == path) {
         return Some(index as u32);
     }
-    let (flow, content) = (host.flow(path)?, host.content(path)?);
+    let own = analyzable(path)
+        .then(|| Some((host.flow(path)?, host.content(path)?)))
+        .flatten();
+    let (flow, content) = match own {
+        Some((flow, content)) => (Some(flow), content),
+        None => (None, Arc::from(std::fs::read_to_string(path).ok()?)),
+    };
     files.push(FlowFile {
         path: path.to_path_buf(),
         flow,
@@ -152,7 +169,7 @@ pub(crate) fn data_flow(
     if flow_file(host, &mut files, &path).is_none() {
         return FlowResult::default();
     }
-    let Some(start) = files[0].flow.locate(range) else {
+    let Some(start) = files[0].flow.as_ref().and_then(|flow| flow.locate(range)) else {
         return FlowResult::default();
     };
     // Edges models added. They are the only ones that leave the file.
@@ -178,6 +195,7 @@ pub(crate) fn data_flow(
     let mut count = 0usize;
     let mut truncated = false;
     let mut seen_nodes = HashSet::from([(0u32, start)]);
+    let mut seen_foreign: HashSet<(u32, ByteRange)> = HashSet::new();
     // Each step's index, so a node reached later can point back at it.
     let mut seen_steps: HashMap<(u32, u32, FlowEdgeKind, Option<u32>), u32> = HashMap::new();
     // File, node, depth, and the step (file, index) that reached it.
@@ -187,7 +205,9 @@ pub(crate) fn data_flow(
         if options.max_depth.is_some_and(|max| depth >= max) {
             continue;
         }
-        let flow = Arc::clone(&files[file as usize].flow);
+        let Some(flow) = files[file as usize].flow.clone() else {
+            continue;
+        };
         let from = reached_by.map(|(_, step)| step);
         let edges = if backward {
             &flow.in_edges[current as usize]
@@ -291,7 +311,34 @@ pub(crate) fn data_flow(
             let Some(other_file) = flow_file(host, &mut files, other_path) else {
                 continue;
             };
-            let other_flow = Arc::clone(&files[other_file as usize].flow);
+            let Some(other_flow) = files[other_file as usize].flow.clone() else {
+                // Another language's file: say where the value lands. Ask
+                // that node to follow it further.
+                if !seen_foreign.insert((other_file, *other_range)) {
+                    continue;
+                }
+                if count >= RESULT_LIMIT {
+                    truncated = true;
+                    break 'walk;
+                }
+                count += 1;
+                let tags = tags_of(other_path, *other_range);
+                files[other_file as usize].steps.push(FlowStep {
+                    range: *other_range,
+                    kind: FlowNodeKind::Expression,
+                    via: edge.via,
+                    name: None,
+                    index: None,
+                    depth: depth + 1,
+                    boundary: true,
+                    from,
+                    from_file: reached_by.map(|(f, _)| f).filter(|f| *f != other_file),
+                    models: edge.models.clone(),
+                    channel: edge.channel.clone(),
+                    tags,
+                });
+                continue;
+            };
             let Some(other) = other_flow.locate(*other_range) else {
                 continue;
             };
@@ -331,11 +378,10 @@ pub(crate) fn data_flow(
     }
 
     FlowResult {
+        // Every file stays, in order: steps point at files by index.
         files: files
             .into_iter()
-            .enumerate()
-            .filter(|(index, file)| *index == 0 || !file.steps.is_empty())
-            .map(|(_, file)| FileFlowSteps {
+            .map(|file| FileFlowSteps {
                 file_path: file.path,
                 content: file.content.to_string(),
                 steps: file.steps,
@@ -1122,6 +1168,15 @@ fn outermost_functions(flow: &FileFlow, path: &Path, range: ByteRange) -> Vec<Fu
         .collect()
 }
 
+/// A file's content: the analyzer's, or, for a file of another language a
+/// model's edge points into, what is on disk.
+fn content_of(host: &dyn FlowHost, file: &Path) -> Option<Arc<str>> {
+    analyzable(file)
+        .then(|| host.content(file))
+        .flatten()
+        .or_else(|| std::fs::read_to_string(file).ok().map(Arc::from))
+}
+
 /// Call-graph entries, grouped by file as they are found.
 #[derive(Default)]
 struct Entries {
@@ -1292,6 +1347,7 @@ fn callees(
         start.iter().cloned().collect()
     };
     let mut reported: HashSet<FunctionKey> = HashSet::new();
+    let mut reported_models: HashSet<u32> = HashSet::new();
     let mut files_seen: HashSet<PathBuf> = HashSet::new();
     let mut unparsed: Vec<UnparsedFile> = Vec::new();
     let mut queue: VecDeque<(FunctionKey, u32)> = start.into_iter().map(|key| (key, 0)).collect();
@@ -1385,23 +1441,38 @@ fn callees(
         }
         // Calls models added from this function: the other end of a
         // channel, a function the framework calls on its behalf.
-        for edge in models.iter().flat_map(|models| models.calls_from(&path)) {
+        let function_range = function.map(|index| flow.functions[index as usize].range);
+        for (edge_index, edge) in models.iter().flat_map(|models| models.calls_from(&path)) {
             let wanted = match first_step {
                 None => true,
                 Some(FirstStep::Call(only)) => flow.calls[only as usize].range == edge.site.1,
                 Some(FirstStep::Within(range)) => edge.site.1.is_within(&range),
             };
-            let key = (edge.to.0.clone(), Some(edge.to.1));
-            if edge.from != function || !wanted || !reported.insert(key.clone()) {
+            if edge.from.as_ref().map(|from| from.range) != function_range || !wanted {
                 continue;
             }
-            let Some(target_flow) = host.flow(&edge.to.0) else {
-                continue;
+            // The target as this analyzer knows it. None: a function in
+            // another language's file, reported and not walked into.
+            let target = analyzable(&edge.to.file)
+                .then(|| host.flow(&edge.to.file))
+                .flatten();
+            let key = target.and_then(|target| {
+                let index = target
+                    .functions
+                    .iter()
+                    .position(|f| f.range == edge.to.range)?;
+                Some((edge.to.file.clone(), Some(index as u32)))
+            });
+            let first_report = match &key {
+                Some(key) => reported.insert(key.clone()),
+                None => reported_models.insert(edge_index),
             };
-            let fact = &target_flow.functions[edge.to.1 as usize];
+            if !first_report {
+                continue;
+            }
             let entry = CallGraphEntry {
-                range: fact.range,
-                name: fact.name.as_deref().map(str::to_string),
+                range: edge.to.range,
+                name: edge.to.name.clone(),
                 resolved: true,
                 via: edge.via,
                 depth: depth + 1,
@@ -1410,19 +1481,21 @@ fn callees(
                 models: edge.models.clone(),
                 channel: edge.channel.clone(),
             };
-            if !entries.push(&edge.to.0, entry) {
+            if !entries.push(&edge.to.file, entry) {
                 truncated = true;
                 break 'walk;
             }
-            if options.transitive
-                && !options.stop_at.contains(edge.via)
-                && visited.insert(key.clone())
-            {
-                queue.push_back((key, depth + 1));
+            if let Some(key) = key {
+                if options.transitive
+                    && !options.stop_at.contains(edge.via)
+                    && visited.insert(key.clone())
+                {
+                    queue.push_back((key, depth + 1));
+                }
             }
         }
     }
-    entries.finish(|file| host.content(file), truncated, unparsed)
+    entries.finish(|file| content_of(host, file), truncated, unparsed)
 }
 
 /// Every call in the workspace, by the function it may call, with the facts
@@ -1622,7 +1695,6 @@ fn callers(
         }
         // What models say calls this function.
         if let (Some(models), (path, Some(function))) = (&models, &key) {
-            let function_key = (path.clone(), *function);
             let callee = callee_ref(&index, &key).or_else(|| {
                 let flow = host.flow(path)?;
                 let fact = flow.functions.get(*function as usize)?;
@@ -1632,21 +1704,22 @@ fn callers(
                     name: fact.name.as_deref().map(str::to_string),
                 })
             });
+            let function_key = (
+                path.clone(),
+                callee.as_ref().map_or(ByteRange::new(0, 0), |c| c.range),
+            );
             // Code outside the workspace: the entry stands in for the caller.
-            for entry in models.entries_of(&function_key) {
-                let Some(callee) = &callee else {
-                    continue;
-                };
+            for entry_point in models.entry_points(&function_key) {
                 let entry = CallGraphEntry {
-                    range: callee.range,
-                    name: Some(format!("<entry:{}>", entry.kind)),
+                    range: function_key.1,
+                    name: Some(format!("<entry-point:{}>", entry_point.kind)),
                     resolved: true,
-                    via: CallEdgeKind::Entry,
+                    via: CallEdgeKind::EntryPoint,
                     depth: depth + 1,
-                    call_site: Some((path.clone(), callee.range)),
-                    callee: Some(callee.clone()),
-                    models: vec![entry.model.clone()],
-                    channel: entry.label.clone(),
+                    call_site: Some(function_key.clone()),
+                    callee: callee.clone(),
+                    models: vec![entry_point.model.clone()],
+                    channel: entry_point.label.clone(),
                 };
                 if !entries.push(path, entry) {
                     truncated = true;
@@ -1657,18 +1730,11 @@ fn callers(
                 if !reported_models.insert(edge_index) {
                     continue;
                 }
-                let site_flow = host.flow(&edge.site.0);
-                let caller = edge
-                    .from
-                    .and_then(|from| site_flow.as_ref()?.functions.get(from as usize));
                 let entry = CallGraphEntry {
-                    range: caller.map_or(edge.site.1, |fact| fact.range),
-                    name: Some(match (edge.from, caller) {
-                        (None, _) => "<module>".to_string(),
-                        (_, Some(fact)) => {
-                            fact.name.as_deref().unwrap_or("<anonymous>").to_string()
-                        }
-                        _ => "<anonymous>".to_string(),
+                    range: edge.from.as_ref().map_or(edge.site.1, |from| from.range),
+                    name: Some(match &edge.from {
+                        None => "<module>".to_string(),
+                        Some(from) => from.name.clone().unwrap_or("<anonymous>".to_string()),
                     }),
                     resolved: true,
                     via: edge.via,
@@ -1682,13 +1748,20 @@ fn callers(
                     truncated = true;
                     break 'walk;
                 }
-                let caller_key = (edge.site.0.clone(), edge.from);
-                if options.transitive
-                    && edge.from.is_some()
-                    && !options.stop_at.contains(edge.via)
-                    && visited.insert(caller_key.clone())
-                {
-                    queue.push_back((caller_key, depth + 1));
+                // Walk on from the caller when it is a function this
+                // analyzer knows (not one in another language's file).
+                let caller_key = edge.from.as_ref().and_then(|from| {
+                    let flow = analyzable(&from.file).then(|| host.flow(&from.file))??;
+                    let index = flow.functions.iter().position(|f| f.range == from.range)?;
+                    Some((from.file.clone(), Some(index as u32)))
+                });
+                if let Some(caller_key) = caller_key {
+                    if options.transitive
+                        && !options.stop_at.contains(edge.via)
+                        && visited.insert(caller_key.clone())
+                    {
+                        queue.push_back((caller_key, depth + 1));
+                    }
                 }
             }
         }
@@ -1737,7 +1810,7 @@ fn callers(
                 .contents
                 .get(file)
                 .cloned()
-                .or_else(|| host.content(file))
+                .or_else(|| content_of(host, file))
         },
         truncated,
         index.unparsed.clone(),

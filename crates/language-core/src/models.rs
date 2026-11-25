@@ -19,6 +19,23 @@ pub struct ModelNode {
     pub file: PathBuf,
     pub start: u32,
     pub end: u32,
+    /// The node's name when it is a function, as the toolkit read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The function around the node (the node itself when it is one), as
+    /// the toolkit read it. Providers that analyze the file work this out
+    /// themselves; for other files it is all there is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub within: Option<ModelSpan>,
+}
+
+/// A function around a node.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ModelSpan {
+    pub start: u32,
+    pub end: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl ModelNode {
@@ -179,7 +196,8 @@ pub struct ChannelFact {
 pub enum ModelFact {
     /// Code outside the workspace calls this function: a route handler, a
     /// CLI command, a test, a lifecycle hook.
-    Entry {
+    #[serde(rename = "entry-point")]
+    EntryPoint {
         node: ModelNode,
         /// `http`, `cli`, `test`, `event`, …
         #[serde(rename = "entryKind")]
@@ -292,7 +310,7 @@ mod tests {
     #[test]
     fn facts_round_trip_as_json() {
         let json = r#"[
-            {"kind":"entry","node":{"file":"a.ts","start":1,"end":9},"entryKind":"http","label":"GET /x"},
+            {"kind":"entry-point","node":{"file":"a.ts","start":1,"end":9},"entryKind":"http","label":"GET /x"},
             {"kind":"channel","side":"consumer","key":{"protocol":"http","parts":["GET","x",{"hole":"id"},{"rest":"r"},{"unknown":true}]},
              "node":{"file":"a.ts","start":1,"end":9},"receives":[{"name":"id","node":{"file":"a.ts","start":2,"end":3}}]},
             {"kind":"tag","node":{"file":"a.ts","start":2,"end":3},"labels":["source:user-input"]}

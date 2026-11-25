@@ -97,13 +97,14 @@ export default function transform(root) {
     .root()
     .find({ rule: { pattern: "b" } });
   expectThrow(() => loose.flowsFrom(), "parsed from a string", "string root");
-  const python = parse("python", "a = b")
+  // Python files answer from model facts; other languages do not answer.
+  const css = parse("css", "a { color: red }")
     .root()
-    .find({ rule: { kind: "identifier" } });
+    .find({ rule: { kind: "tag_name" } });
   expectThrow(
-    () => python.callers(),
-    "JavaScript and TypeScript only, and this file is parsed as Python",
-    "python",
+    () => css.callers(),
+    "JavaScript, TypeScript and Python only, and this file is parsed as",
+    "css",
   );
 
   return null;

@@ -396,7 +396,9 @@ fn measure_callers_known(
             let key = (file.clone(), index as u32);
             // A model that names the function's caller (the framework, the
             // other end of a channel) accounts for where its value went.
-            let model_called = models.as_ref().is_some_and(|models| models.explains(&key));
+            let model_called = models
+                .as_ref()
+                .is_some_and(|models| models.explains(&(file.clone(), function.range)));
             let why = if function.name.as_deref().is_some_and(|n| names.contains(n)) {
                 *totals
                     .blocking_names

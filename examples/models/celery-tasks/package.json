@@ -1,0 +1,11 @@
+{
+  "name": "@codemod-models/celery-tasks",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Model: Celery tasks are entry points; delay, apply_async and send_task are their producers",
+  "type": "module",
+  "exports": "./model.ts",
+  "peerDependencies": {
+    "@jssg/models": "*"
+  }
+}

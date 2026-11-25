@@ -57,6 +57,7 @@ ast-grep-dynamic = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+semantic-factory = { workspace = true }
 
 [features]
 default = ["native", "real-fs"]

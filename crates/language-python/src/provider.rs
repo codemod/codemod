@@ -253,6 +253,89 @@ impl SemanticProvider for RuffSemanticProvider {
         }
     }
 
+    // Model facts. This provider has no call graph or data flow of its own
+    // yet: it answers with what models stated (entry points, channels,
+    // invokes, flows), joined with the facts of every other language in the
+    // workspace.
+
+    fn get_call_graph(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+        options: language_core::CallGraphOptions,
+    ) -> SemanticResult<language_core::CallGraphResult> {
+        let graph = (!options.without_models)
+            .then(|| self.model_store().ok()?.fact_graph())
+            .flatten();
+        Ok(match graph {
+            Some(graph) => {
+                language_core::model_call_graph(&graph, &canonical(file_path), range, options)
+            }
+            None => Default::default(),
+        })
+    }
+
+    fn get_data_flow(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+        options: language_core::FlowOptions,
+    ) -> SemanticResult<language_core::FlowResult> {
+        let graph = (!options.without_models)
+            .then(|| self.model_store().ok()?.fact_graph())
+            .flatten();
+        Ok(match graph {
+            Some(graph) => {
+                language_core::model_data_flow(&graph, &canonical(file_path), range, options)
+            }
+            None => Default::default(),
+        })
+    }
+
+    fn set_model_facts(
+        &self,
+        model: &str,
+        file: &Path,
+        facts: Vec<language_core::ModelFact>,
+    ) -> SemanticResult<()> {
+        self.model_store()?.set(model, canonical(file), facts);
+        Ok(())
+    }
+
+    fn model_facts(&self) -> SemanticResult<Vec<language_core::ModelFileFacts>> {
+        Ok(self.model_store()?.all())
+    }
+
+    fn clear_model_facts(&self, model: Option<&str>) -> SemanticResult<()> {
+        self.model_store()?.clear(model);
+        Ok(())
+    }
+
+    fn channels(&self) -> SemanticResult<Vec<language_core::ChannelReport>> {
+        Ok(self
+            .model_store()?
+            .fact_graph()
+            .map(|graph| graph.channels.clone())
+            .unwrap_or_default())
+    }
+
+    fn node_tags(&self, file: &Path, range: ByteRange) -> SemanticResult<Vec<(String, String)>> {
+        let Some(graph) = self.model_store().ok().and_then(|store| store.fact_graph()) else {
+            return Ok(Vec::new());
+        };
+        Ok(graph.tags_at(&(canonical(file), range)).to_vec())
+    }
+
+    fn workspace_files(&self) -> SemanticResult<Vec<PathBuf>> {
+        let AnalyzerKind::WorkspaceScope(analyzer) = &self.analyzer else {
+            return Err(no_workspace("workspaceFiles"));
+        };
+        let mut files = Vec::new();
+        python_files(analyzer.workspace_root(), &mut files);
+        files.sort();
+        Ok(files)
+    }
+
     fn supports_language(&self, lang: &str) -> bool {
         matches!(lang.to_lowercase().as_str(), "python" | "py")
     }
@@ -261,6 +344,61 @@ impl SemanticProvider for RuffSemanticProvider {
         match &self.analyzer {
             AnalyzerKind::FileScope(_) => ProviderMode::FileScope,
             AnalyzerKind::WorkspaceScope(_) => ProviderMode::WorkspaceScope,
+        }
+    }
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn no_workspace(operation: &str) -> language_core::SemanticError {
+    language_core::SemanticError::Unsupported {
+        operation: operation.to_string(),
+        reason: "this needs workspace scope".to_string(),
+    }
+}
+
+/// The `.py` files under `dir`, leaving out hidden directories, virtual
+/// environments, caches and `node_modules`.
+fn python_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if path.is_dir() {
+            let skipped = name.starts_with('.')
+                || matches!(
+                    name.as_ref(),
+                    "node_modules"
+                        | "venv"
+                        | "env"
+                        | "__pycache__"
+                        | "site-packages"
+                        | "dist"
+                        | "build"
+                );
+            if !skipped {
+                python_files(&path, out);
+            }
+        } else if path.extension().is_some_and(|ext| ext == "py") {
+            out.push(canonical(&path));
+        }
+    }
+}
+
+impl RuffSemanticProvider {
+    /// The workspace's model facts, shared with the providers of its other
+    /// languages.
+    fn model_store(&self) -> SemanticResult<std::sync::Arc<language_core::ModelStore>> {
+        match &self.analyzer {
+            AnalyzerKind::WorkspaceScope(analyzer) => Ok(language_core::ModelStore::for_workspace(
+                analyzer.workspace_root(),
+            )),
+            AnalyzerKind::FileScope(_) => Err(no_workspace("model facts")),
         }
     }
 }

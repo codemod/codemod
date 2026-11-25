@@ -304,7 +304,7 @@ str_enum! {
         Channel => "channel",
         /// A model says code outside the workspace calls the function. The
         /// entry stands for that caller; its node is the function itself.
-        Entry => "entry",
+        EntryPoint => "entry-point",
     }
 }
 

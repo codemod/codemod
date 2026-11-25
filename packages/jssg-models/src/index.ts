@@ -9,10 +9,13 @@
  *
  * Nothing in the engine knows a framework. A model uses the same API a
  * codemod uses (`find`, `definition()`, `flowsFrom()`, …) plus the six
- * functions on its context.
+ * functions on its context. Models are language-neutral: the same six
+ * functions state facts about TypeScript and Python files, and a channel
+ * joins a producer in one language to a consumer in another.
  */
 
 export { http } from "./http.ts";
+export { python } from "./python.ts";
 export { stringParts, constantString } from "./values.ts";
 export type { StringPart } from "./values.ts";
 export { describeFacts } from "./testing.ts";
@@ -62,8 +65,8 @@ export interface ModelFile {
 export interface ModelContext {
   root: SgRoot;
   file: ModelFile;
-  /** Code outside the workspace calls this function. */
-  entry(fn: SgNode, meta: { kind: string; label?: string }): void;
+  /** Code outside the workspace calls this function: a route handler, a task, a CLI command. */
+  entryPoint(fn: SgNode, meta: { kind: string; label?: string }): void;
   /** `from` (a call, or a function) calls the function `to`. */
   invokes(from: SgNode, to: SgNode): void;
   /** The value of `from` becomes the value of `to`. */
@@ -95,14 +98,63 @@ export function defineModel(model: Model): Model {
   return model;
 }
 
-type NodeRef = { file: string; start: number; end: number };
+type Span = { start: number; end: number; name?: string };
+type NodeRef = { file: string; start: number; end: number; name?: string; within?: Span };
 
+/** Syntax kinds that are a function, in the languages models are written for. */
+const FUNCTION_KINDS = new Set([
+  // JavaScript, TypeScript
+  "function_declaration",
+  "function_expression",
+  "arrow_function",
+  "method_definition",
+  "generator_function_declaration",
+  "generator_function",
+  // Python
+  "function_definition",
+  "lambda",
+]);
+
+/** A function's name: its own, or the variable or property it is assigned to. */
+function functionName(fn: SgNode): string | undefined {
+  const own = fn.field("name")?.text();
+  if (own) return own;
+  const parent = fn.parent();
+  if (parent?.kind() === "variable_declarator") return parent.field("name")?.text();
+  if (parent?.kind() === "pair") return parent.field("key")?.text();
+  return undefined;
+}
+
+/** The function a node is, or is in. A Python `@decorator def f` counts as `f`. */
+function functionAround(node: SgNode): SgNode | null {
+  if (node.kind() === "decorated_definition") return node.field("definition") ?? null;
+  for (let current = node; current; current = current.parent()) {
+    if (FUNCTION_KINDS.has(current.kind())) return current;
+  }
+  return null;
+}
+
+/**
+ * A node as a fact names it: its file and byte range, and the function
+ * around it. Providers that analyze the file work the function out
+ * themselves; for other languages this is what the call graph uses.
+ */
 function ref(node: SgNode, what: string): NodeRef {
   if (!node || typeof node.range !== "function") {
     throw new TypeError(`${what}: expected a node, got ${node === null ? "null" : typeof node}`);
   }
-  const range = node.range();
-  return { file: node.getRoot().filename(), start: range.start.index, end: range.end.index };
+  // A decorated Python function is named by its `def`.
+  const target = node.kind() === "decorated_definition" ? (node.field("definition") ?? node) : node;
+  const range = target.range();
+  const out: NodeRef = { file: node.getRoot().filename(), start: range.start.index, end: range.end.index };
+  const fn = functionAround(target);
+  if (fn) {
+    const span = fn.range();
+    const name = functionName(fn);
+    out.within = { start: span.start.index, end: span.end.index, ...(name ? { name } : {}) };
+    if (span.start.index === out.start && span.end.index === out.end && name) out.name = name;
+  }
+  return out;
 }
 
 function ports(value: Ports | undefined, what: string) {
@@ -131,8 +183,13 @@ export function runModel(model: Model, root: SgRoot, file: ModelFile): unknown[]
   model.model({
     root,
     file,
-    entry: (fn, meta) =>
-      facts.push({ kind: "entry", node: ref(fn, "entry(fn)"), entryKind: meta.kind, label: meta.label ?? null }),
+    entryPoint: (fn, meta) =>
+      facts.push({
+        kind: "entry-point",
+        node: ref(fn, "entryPoint(fn)"),
+        entryKind: meta.kind,
+        label: meta.label ?? null,
+      }),
     invokes: (from, to) =>
       facts.push({ kind: "invokes", from: ref(from, "invokes(from)"), to: ref(to, "invokes(, to)") }),
     flows: (from, to) => facts.push({ kind: "flows", from: ref(from, "flows(from)"), to: ref(to, "flows(, to)") }),

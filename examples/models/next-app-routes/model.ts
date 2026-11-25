@@ -72,13 +72,13 @@ export default defineModel({
   name: "next-app-routes",
   version: "0.1.0",
   files: ["**/app/**/route.{ts,tsx,js,jsx,mjs}", "app/**/route.{ts,tsx,js,jsx,mjs}"],
-  model({ root, file, entry, consume, tag }) {
+  model({ root, file, entryPoint, consume, tag }) {
     const route = routeOf(file.relative);
     if (route === null) return;
 
     for (const [method, fn] of handlers(root.root())) {
       const key = http.key(method, route);
-      entry(fn, { kind: "http", label: `${method} ${route}` });
+      entryPoint(fn, { kind: "http", label: `${method} ${route}` });
 
       const [request, context] = parameters(fn);
       const params = paramsNodes(fn, context);

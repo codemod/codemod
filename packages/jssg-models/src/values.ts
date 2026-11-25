@@ -27,7 +27,17 @@ export function stringParts(node: SgNode, depth = 0): StringPart[] {
   if (!node) return [];
   const kind: string = node.kind();
   if (kind === "string") {
-    return [{ text: node.children().filter((c: SgNode) => c.kind() === "string_fragment" || c.kind() === "escape_sequence").map((c: SgNode) => c.text()).join("") }];
+    // JavaScript: fragments. Python: content, and `{value}` in an f-string.
+    const parts: StringPart[] = [{ text: "" }];
+    for (const child of node.children()) {
+      const childKind = child.kind();
+      if (childKind === "string_fragment" || childKind === "string_content" || childKind === "escape_sequence") {
+        parts.push({ text: child.text() });
+      } else if (childKind === "interpolation") {
+        parts.push(...substituted(child.children().find((c: SgNode) => c.isNamed()), depth));
+      }
+    }
+    return merge(parts);
   }
   if (kind === "template_string") {
     const parts: StringPart[] = [];
@@ -40,7 +50,7 @@ export function stringParts(node: SgNode, depth = 0): StringPart[] {
     }
     return merge(parts);
   }
-  if (kind === "binary_expression" && node.field("operator")?.text() === "+") {
+  if ((kind === "binary_expression" || kind === "binary_operator") && node.field("operator")?.text() === "+") {
     return merge([...substituted(node.field("left"), depth), ...substituted(node.field("right"), depth)]);
   }
   if (kind === "parenthesized_expression" || kind === "as_expression" || kind === "non_null_expression") {
@@ -85,6 +95,9 @@ export function constantValue(name: SgNode): SgNode | null {
   } catch {
     return null;
   }
+  // Python: `NAME = value` at module level, written once.
+  const assigned = definition?.node?.kind() === "assignment" ? definition.node : definition?.node?.parent();
+  if (assigned?.kind() === "assignment") return assigned.field("right") ?? null;
   const declarator = definition?.node?.kind() === "variable_declarator" ? definition.node : definition?.nameNode?.parent();
   if (!declarator || declarator.kind() !== "variable_declarator") return null;
   const value = declarator.field("value");

@@ -1,0 +1,11 @@
+{
+  "name": "@codemod-models/flask-routes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Model: Flask routes are entry points and HTTP consumers",
+  "type": "module",
+  "exports": "./model.ts",
+  "peerDependencies": {
+    "@jssg/models": "*"
+  }
+}

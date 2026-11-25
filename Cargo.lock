@@ -1286,6 +1286,7 @@ dependencies = [
  "oxc_resolver",
  "regex",
  "rquickjs",
+ "semantic-factory",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
@@ -3613,6 +3614,7 @@ name = "language-core"
 version = "1.18.7"
 dependencies = [
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.16",
  "vfs",

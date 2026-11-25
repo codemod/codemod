@@ -21,7 +21,7 @@ function keyText(key: any): string {
  * One line per fact, with the line and the first line of text of each node
  * instead of offsets, so the expected file survives reformatting:
  *
- *     entry http "GET /api/users/[id]" route.ts:5 `export async function GET(`
+ *     entry-point http "GET /api/users/[id]" route.ts:5 `export async function GET(`
  *     consume http GET /api/users/{id} route.ts:5 ... receives id=route.ts:5 `params`
  *     tag source:user-input route.ts:5 `request`
  */
@@ -32,8 +32,8 @@ export function describeFacts(facts: Fact[], sources: Map<string, string> | Reco
   return facts
     .map((fact) => {
       switch (fact.kind) {
-        case "entry":
-          return `entry ${fact.entryKind} ${JSON.stringify(fact.label ?? "")} ${at(fact.node, map)}`;
+        case "entry-point":
+          return `entry-point ${fact.entryKind} ${JSON.stringify(fact.label ?? "")} ${at(fact.node, map)}`;
         case "invokes":
           return `invokes ${at(fact.from, map)} -> ${at(fact.to, map)}`;
         case "flows":
