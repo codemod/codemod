@@ -1448,7 +1448,8 @@ fn callees(
     } else {
         start.iter().cloned().collect()
     };
-    let mut reported: HashSet<FunctionKey> = HashSet::new();
+    // One entry per call site and callee (as callers() answers per call).
+    let mut reported: HashSet<(FunctionKey, PathBuf, u32)> = HashSet::new();
     let mut files_seen: HashSet<PathBuf> = HashSet::new();
     let mut unparsed: Vec<UnparsedFile> = Vec::new();
     let mut queue: VecDeque<(FunctionKey, u32)> = start.into_iter().map(|key| (key, 0)).collect();
@@ -1504,7 +1505,13 @@ fn callees(
             targets.extend(callbacks);
             for (target_path, target, via) in targets {
                 let key = (target_path.clone(), Some(target));
-                if !reported.insert(key.clone()) {
+                // Direct callees: one entry per call site. Deeper: per function.
+                let site = if depth == 0 {
+                    (path.clone(), call.range.start)
+                } else {
+                    (PathBuf::new(), 0)
+                };
+                if !reported.insert((key.clone(), site.0, site.1)) {
                     continue;
                 }
                 let Some(target_flow) = host.flow(&target_path) else {
