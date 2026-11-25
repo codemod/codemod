@@ -1272,27 +1272,47 @@ impl<'js> SgNodeRjs<'js> {
         #[cfg(not(feature = "native"))]
         {
             let _ = options;
-            return rquickjs::Array::new(ctx.clone())?.into_js(&ctx);
+            return Err(Exception::throw_message(&ctx, &not_in_wasm("mutations")));
         }
         #[cfg(feature = "native")]
         {
             let result = rquickjs::Array::new(ctx.clone())?;
-            let Some((provider, file_path, range)) = self.semantic_query() else {
-                return result.into_js(&ctx);
-            };
+            let (provider, file_path, range) = self
+                .semantic_query("mutations")
+                .map_err(|message| Exception::throw_message(&ctx, &message))?;
 
             let mut after = None;
-            if let Some(opts) = options.0.and_then(|value| value.into_object()) {
+            if let Some(opts) = query_options(&ctx, options, "mutations", &["after"])? {
                 let value: Value = opts.get("after")?;
-                if let Ok(node) = rquickjs::Class::<SgNodeRjs>::from_value(&value) {
+                if !value.is_undefined() && !value.is_null() {
+                    let Ok(node) = rquickjs::Class::<SgNodeRjs>::from_value(&value) else {
+                        return Err(Exception::throw_type(
+                            &ctx,
+                            "mutations({ after }): `after` must be an SgNode. For a flow step or \
+                             a call-graph entry, pass its `.node`.",
+                        ));
+                    };
                     let node = node.borrow();
-                    if Arc::ptr_eq(&node.root, &self.root) {
-                        let node_range = node.inner_node.range();
-                        after = Some(language_core::ByteRange::new(
-                            node_range.start as u32,
-                            node_range.end as u32,
+                    let same_file = Arc::ptr_eq(&node.root, &self.root)
+                        || (node.root.filename.is_some()
+                            && node.root.filename == self.root.filename
+                            && node.root.grep.root().text() == self.root.grep.root().text());
+                    if !same_file {
+                        return Err(Exception::throw_range(
+                            &ctx,
+                            &format!(
+                                "mutations({{ after }}): `after` is in {}, not in this node's \
+                                 file ({}). Mutations are found within one file.",
+                                node.root.filename.as_deref().unwrap_or("a string"),
+                                self.root.filename.as_deref().unwrap_or("?"),
+                            ),
                         ));
                     }
+                    let node_range = node.inner_node.range();
+                    after = Some(language_core::ByteRange::new(
+                        node_range.start as u32,
+                        node_range.end as u32,
+                    ));
                 }
             }
 
@@ -1379,15 +1399,16 @@ impl<'js> SgNodeRjs<'js> {
     ) -> Result<Value<'js>> {
         #[cfg(not(feature = "native"))]
         {
-            let _ = (options, backward);
-            return rquickjs::Array::new(ctx.clone())?.into_js(&ctx);
+            let _ = options;
+            let method = if backward { "flowsFrom" } else { "flowsTo" };
+            return Err(Exception::throw_message(&ctx, &not_in_wasm(method)));
         }
         #[cfg(feature = "native")]
         {
             let result = rquickjs::Array::new(ctx.clone())?;
-            let Some((provider, file_path, range)) = self.semantic_query() else {
-                return result.into_js(&ctx);
-            };
+            let (provider, file_path, range) = self
+                .semantic_query(if backward { "flowsFrom" } else { "flowsTo" })
+                .map_err(|message| Exception::throw_message(&ctx, &message))?;
 
             let mut flow_options = language_core::FlowOptions {
                 direction: if backward {
@@ -1397,11 +1418,13 @@ impl<'js> SgNodeRjs<'js> {
                 },
                 ..Default::default()
             };
-            if let Some(opts) = options.0.and_then(|value| value.into_object()) {
+            let method = if backward { "flowsFrom" } else { "flowsTo" };
+            if let Some(opts) = query_options(&ctx, options, method, &["throughCalls", "maxDepth"])?
+            {
                 if let Some(through_calls) = opts.get::<_, Option<bool>>("throughCalls")? {
                     flow_options.through_calls = through_calls;
                 }
-                flow_options.max_depth = opts.get::<_, Option<u32>>("maxDepth")?;
+                flow_options.max_depth = max_depth(&ctx, &opts, method)?;
             }
 
             let flow = provider
@@ -1455,15 +1478,16 @@ impl<'js> SgNodeRjs<'js> {
     ) -> Result<Value<'js>> {
         #[cfg(not(feature = "native"))]
         {
-            let _ = (options, callees);
-            return rquickjs::Array::new(ctx.clone())?.into_js(&ctx);
+            let _ = options;
+            let method = if callees { "callees" } else { "callers" };
+            return Err(Exception::throw_message(&ctx, &not_in_wasm(method)));
         }
         #[cfg(feature = "native")]
         {
             let result = rquickjs::Array::new(ctx.clone())?;
-            let Some((provider, file_path, range)) = self.semantic_query() else {
-                return result.into_js(&ctx);
-            };
+            let (provider, file_path, range) = self
+                .semantic_query(if callees { "callees" } else { "callers" })
+                .map_err(|message| Exception::throw_message(&ctx, &message))?;
 
             let mut graph_options = language_core::CallGraphOptions {
                 direction: if callees {
@@ -1473,10 +1497,11 @@ impl<'js> SgNodeRjs<'js> {
                 },
                 ..Default::default()
             };
-            if let Some(opts) = options.0.and_then(|value| value.into_object()) {
+            let method = if callees { "callees" } else { "callers" };
+            if let Some(opts) = query_options(&ctx, options, method, &["transitive", "maxDepth"])? {
                 graph_options.transitive =
                     opts.get::<_, Option<bool>>("transitive")?.unwrap_or(false);
-                graph_options.max_depth = opts.get::<_, Option<u32>>("maxDepth")?;
+                graph_options.max_depth = max_depth(&ctx, &opts, method)?;
             }
 
             let graph = provider
@@ -1579,20 +1604,56 @@ impl<'js> SgNodeRjs<'js> {
 
 #[cfg(feature = "native")]
 impl<'js> SgNodeRjs<'js> {
-    /// The provider, file and byte range a semantic query about this node needs.
+    /// The provider, file and byte range a data-flow or call-graph query
+    /// about this node needs, or why the query cannot run here and what to do.
+    ///
+    /// These queries throw rather than answer `[]`: an empty answer reads as
+    /// "no callers" or "no sources", which a codemod may act on.
     fn semantic_query(
         &self,
-    ) -> Option<(
-        Arc<dyn SemanticProvider>,
-        std::path::PathBuf,
-        language_core::ByteRange,
-    )> {
-        let provider = self.root.semantic_provider.clone()?;
-        let file_path = std::path::PathBuf::from(self.root.filename.as_ref()?);
+        method: &str,
+    ) -> std::result::Result<
+        (
+            Arc<dyn SemanticProvider>,
+            std::path::PathBuf,
+            language_core::ByteRange,
+        ),
+        String,
+    > {
+        let lang = get_language(&self.root.grep);
+        let supported = matches!(
+            lang,
+            Lang::Static(
+                ast_grep_language::SupportLang::JavaScript
+                    | ast_grep_language::SupportLang::TypeScript
+                    | ast_grep_language::SupportLang::Tsx
+            )
+        );
+        if !supported {
+            return Err(format!(
+                "{method}() supports JavaScript and TypeScript only, and this file is parsed as {lang}."
+            ));
+        }
+        let Some(filename) = self.root.filename.as_ref() else {
+            return Err(format!(
+                "{method}() needs the file this node is in, and its root has no path: it was \
+                 parsed from a string. Query a root the step parsed from a file (in forEachFile, \
+                 `parse(file)`)."
+            ));
+        };
+        let Some(provider) = self.root.semantic_provider.clone() else {
+            return Err(format!(
+                "{method}() needs semantic analysis, and it is off for this code. Set \
+                 `semanticAnalysis: \"file\"` on the jssg step or the forEachFile selector \
+                 (`\"workspace\"` to follow calls across files), or `semantic_analysis: file` \
+                 in workflow.yaml. With `codemod jssg run`, pass `--semantic-workspace <dir>` \
+                 for workspace scope."
+            ));
+        };
         let range = self.inner_node.range();
-        Some((
+        Ok((
             provider,
-            file_path,
+            std::path::PathBuf::from(filename),
             language_core::ByteRange::new(range.start as u32, range.end as u32),
         ))
     }
@@ -1656,6 +1717,76 @@ impl<'js> SgNodeRjs<'js> {
             _phantom: PhantomData,
         })
     }
+}
+
+/// The options object of a data-flow, call-graph or mutation query. Throws on
+/// something that is not an object, and on a key the query does not know
+/// (a typo there would otherwise silently change the answer).
+#[cfg(feature = "native")]
+fn query_options<'js>(
+    ctx: &Ctx<'js>,
+    options: Opt<Value<'js>>,
+    method: &str,
+    known: &[&str],
+) -> Result<Option<rquickjs::Object<'js>>> {
+    let Some(value) = options.0 else {
+        return Ok(None);
+    };
+    if value.is_undefined() || value.is_null() {
+        return Ok(None);
+    }
+    let Some(object) = value.into_object() else {
+        return Err(Exception::throw_type(
+            ctx,
+            &format!("{method}(options): options must be an object"),
+        ));
+    };
+    for key in object.keys::<String>() {
+        let key = key?;
+        if !known.contains(&key.as_str()) {
+            return Err(Exception::throw_type(
+                ctx,
+                &format!(
+                    "{method}(options): unknown option `{key}`; expected {}",
+                    known
+                        .iter()
+                        .map(|k| format!("`{k}`"))
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                ),
+            ));
+        }
+    }
+    Ok(Some(object))
+}
+
+/// `maxDepth`: a positive whole number, or absent.
+#[cfg(feature = "native")]
+fn max_depth<'js>(
+    ctx: &Ctx<'js>,
+    options: &rquickjs::Object<'js>,
+    method: &str,
+) -> Result<Option<u32>> {
+    let value: Value = options.get("maxDepth")?;
+    if value.is_undefined() || value.is_null() {
+        return Ok(None);
+    }
+    match value.as_number() {
+        Some(n) if n >= 1.0 && n.fract() == 0.0 && n <= u32::MAX as f64 => Ok(Some(n as u32)),
+        _ => Err(Exception::throw_range(
+            ctx,
+            &format!("{method}(options): maxDepth must be a whole number of at least 1"),
+        )),
+    }
+}
+
+/// Why a data-flow or call-graph query cannot run in the WebAssembly build.
+#[cfg(not(feature = "native"))]
+fn not_in_wasm(method: &str) -> String {
+    format!(
+        "{method}() is not available in the WebAssembly build of JSSG: it needs the native \
+         semantic provider. Run the codemod with the codemod CLI."
+    )
 }
 
 /// Detect language from file path extension.

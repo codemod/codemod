@@ -410,38 +410,48 @@ impl SgNode {
         Vec::new()
     }
 
-    /// Always empty: roots parsed in Node have no semantic provider.
+    /// Throws: roots parsed in Node have no semantic provider, and an empty
+    /// answer would read as "no sources".
     #[napi]
-    pub fn flows_from(&self, _options: Option<Value>) -> Vec<Value> {
-        Vec::new()
+    pub fn flows_from(&self, _options: Option<Value>) -> Result<Vec<Value>> {
+        Err(no_semantic_provider("flowsFrom"))
     }
 
-    /// Always empty: roots parsed in Node have no semantic provider.
+    /// Throws, as `flowsFrom()` does.
     #[napi]
-    pub fn flows_to(&self, _options: Option<Value>) -> Vec<Value> {
-        Vec::new()
+    pub fn flows_to(&self, _options: Option<Value>) -> Result<Vec<Value>> {
+        Err(no_semantic_provider("flowsTo"))
     }
 
-    /// Always empty: roots parsed in Node have no semantic provider.
+    /// Throws, as `flowsFrom()` does: an empty answer would read as "calls nothing".
     #[napi]
-    pub fn callees(&self, _options: Option<Value>) -> Vec<Value> {
-        Vec::new()
+    pub fn callees(&self, _options: Option<Value>) -> Result<Vec<Value>> {
+        Err(no_semantic_provider("callees"))
     }
 
-    /// Always empty: roots parsed in Node have no semantic provider.
+    /// Throws, as `flowsFrom()` does: an empty answer would read as "unused".
     #[napi]
-    pub fn callers(&self, _options: Option<Value>) -> Vec<Value> {
-        Vec::new()
+    pub fn callers(&self, _options: Option<Value>) -> Result<Vec<Value>> {
+        Err(no_semantic_provider("callers"))
     }
 
-    /// Always empty: roots parsed in Node have no semantic provider.
+    /// Throws, as `flowsFrom()` does: an empty answer would read as "never changed".
     #[napi]
-    pub fn mutations(&self, _options: Option<Value>) -> Vec<Value> {
-        Vec::new()
+    pub fn mutations(&self, _options: Option<Value>) -> Result<Vec<Value>> {
+        Err(no_semantic_provider("mutations"))
     }
 
     #[napi]
     pub fn type_info(&self) -> Option<String> {
         None
     }
+}
+
+/// Why a data-flow or call-graph query cannot run on this host, and what to do.
+fn no_semantic_provider(method: &str) -> Error {
+    Error::from_reason(format!(
+        "{method}() is not available on the Node.js host yet: roots parsed here have no \
+         semantic provider. Run the workflow with the codemod CLI (`npx codemod workflow run`), \
+         or test it with `{{ host: \"quickjs\" }}`."
+    ))
 }

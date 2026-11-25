@@ -111,7 +111,10 @@ declare module "codemod:ast-grep" {
      *   from its arguments and receiver, so the trail continues into them.
      * - `truncated` on the result: a limit was hit and steps are missing.
      *
-     * Returns an empty array when no semantic provider is configured.
+     * @throws when the query cannot run, rather than answering `[]` (which
+     *   would read as "nothing found"): semantic analysis is off for the step,
+     *   the file is not JavaScript or TypeScript, the root was parsed from a
+     *   string, the host is Node.js or WebAssembly, or an option is unknown.
      *
      * @experimental
      * @example
@@ -138,7 +141,10 @@ declare module "codemod:ast-grep" {
      * Soundness: as for `flowsFrom()`; `boundary` is always `false` on
      * forward steps.
      *
-     * Returns an empty array when no semantic provider is configured.
+     * @throws when the query cannot run, rather than answering `[]` (which
+     *   would read as "nothing found"): semantic analysis is off for the step,
+     *   the file is not JavaScript or TypeScript, the root was parsed from a
+     *   string, the host is Node.js or WebAssembly, or an option is unknown.
      *
      * @experimental
      * @example
@@ -168,7 +174,10 @@ declare module "codemod:ast-grep" {
      * - `unparsed`: imports of visited files that failed to parse; calls
      *   into them are missing. `truncated`: a limit was hit.
      *
-     * Returns an empty array when no semantic provider is configured.
+     * @throws when the query cannot run, rather than answering `[]` (which
+     *   would read as "nothing found"): semantic analysis is off for the step,
+     *   the file is not JavaScript or TypeScript, the root was parsed from a
+     *   string, the host is Node.js or WebAssembly, or an option is unknown.
      *
      * @experimental
      * @example
@@ -205,7 +214,10 @@ declare module "codemod:ast-grep" {
      * - `unparsed`: workspace files that failed to parse; calls in them are
      *   missing. `truncated`: a limit was hit.
      *
-     * Returns an empty array when no semantic provider is configured.
+     * @throws when the query cannot run, rather than answering `[]` (which
+     *   would read as "nothing found"): semantic analysis is off for the step,
+     *   the file is not JavaScript or TypeScript, the root was parsed from a
+     *   string, the host is Node.js or WebAssembly, or an option is unknown.
      *
      * @experimental
      * @example
@@ -232,7 +244,10 @@ declare module "codemod:ast-grep" {
      * - `after` uses text order plus "same loop", and counts every deferred
      *   mutation as "after": a closure can run at any time.
      *
-     * Returns an empty array when no semantic provider is configured.
+     * @throws when the query cannot run, rather than answering `[]` (which
+     *   would read as "nothing found"): semantic analysis is off for the step,
+     *   the file is not JavaScript or TypeScript, the root was parsed from a
+     *   string, the host is Node.js or WebAssembly, or an option is unknown.
      *
      * @experimental
      * @example

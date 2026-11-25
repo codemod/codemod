@@ -73,6 +73,14 @@ jssg_test! {
     target: "view.jsx",
 }
 
+jssg_test! {
+    name: test_dataflow_mistakes_throw_with_a_reason,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "js_dataflow_errors.js",
+    fixture_dir: "javascript/dataflow",
+    target: "cart.js",
+}
+
 // Realistic codemods built on data flow and the call graph. They are the
 // yardstick for the API's ergonomics: each rewrites its fixture and the
 // result must match the expected directory.

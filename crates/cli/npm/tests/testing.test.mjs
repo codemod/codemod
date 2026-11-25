@@ -1141,6 +1141,68 @@ export default (file: any) => {
   assert.deepEqual(none.outputs, [{ file: "a.ts", data: null }]);
 });
 
+test("runCallback answers data-flow and call-graph queries", HOSTS.quickjs, async () => {
+  const dir = scratch({
+    "flow.ts": `
+import { parse } from "codemod/ast-grep";
+export default (file: any) => {
+  const root = parse(file).root();
+  const arg = root.find({ rule: { pattern: "save($X)" } }).getMatch("X");
+  const sources = arg.flowsFrom().map((s: any) => s.kind + ":" + s.name);
+  const fn = root.find({ rule: { kind: "function_declaration" } });
+  const callers = fn.callers().map((c: any) => c.name + ":" + c.callSite.node.text());
+  return { sources, callers };
+};
+`,
+  });
+  const target = {
+    "a.ts":
+      "function save(row) {}\nexport function run(input) {\n  const row = input.trim();\n  save(row);\n}\n",
+  };
+  const file = await runCallback(join(dir, "flow.ts"), { target, language: "typescript" });
+  assert.equal(file.status, "succeeded", file.error);
+  assert.deepEqual(file.outputs, [
+    {
+      file: "a.ts",
+      data: {
+        sources: ["variable:row", "call:input.trim", "reference:input", "parameter:input"],
+        callers: ["run:save(row)"],
+      },
+    },
+  ]);
+
+  // Without semantic analysis the query says so instead of answering [].
+  const none = await runCallback(join(dir, "flow.ts"), {
+    target,
+    language: "typescript",
+    semanticAnalysis: "none",
+  });
+  assert.equal(none.status, "failed");
+  assert.match(none.error ?? "", /flowsFrom\(\) needs semantic analysis/);
+});
+
+test("node: data-flow and call-graph queries say they need the CLI", HOSTS.node, async () => {
+  const path = join(
+    scratch({
+      "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+export default async function main() {
+  await step("Callers", forEachFile("**/*.ts", (file) => {
+    parse(file).root().find({ rule: { kind: "function_declaration" } })!.callers();
+  }));
+}
+`,
+    }),
+    "workflow.ts",
+  );
+
+  const result = await run(path, { target: { "a.ts": "function f() {}\n" } });
+
+  assert.equal(result.status, "failed");
+  assert.match(result.error ?? "", /callers\(\) is not available on the Node\.js host yet/);
+});
+
 test("runCallback fails the run when the callback fails on a file", HOSTS.quickjs, async () => {
   const dir = scratch({
     "boom.ts": `export default (file: any) => { if (file.path === "b.ts") throw new Error("boom"); file.write("ok\\n"); };`,

@@ -23,6 +23,15 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_dataflow_and_call_graph_throw_without_provider,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "no_provider_dataflow.js",
+    fixture_dir: "common/without_provider",
+    target: "input.js",
+    no_provider: true,
+}
+
+jssg_test! {
     name: test_type_info_without_provider,
     language: CodemodLang::Static(SupportLang::JavaScript),
     codemod: "no_provider_type_info.js",
