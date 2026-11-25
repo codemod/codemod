@@ -214,8 +214,13 @@ declare module "codemod:ast-grep" {
     reaches(target: SgNode<M> | ((step: FlowStep<M>) => boolean), options?: FlowOptions): boolean;
 
     /**
-     * Functions called from the function at this node. The node can be a
-     * function, its name, or a call (which answers for what it calls).
+     * What the code at this node calls. The answer depends on the node:
+     * - the program (`root.root()`): calls made while the module is
+     *   evaluated (top-level code), so "does importing this run code?";
+     * - a call or a JSX element: what that call calls (for `<Modal />`, the
+     *   `Modal` component, `via: "jsx"`);
+     * - a function or its name: the calls written in its body;
+     * - any other code (a statement, a block): the calls written inside it.
      *
      * Each entry is either a function the call graph resolved
      * (`resolved: true`, `node` is the function, possibly in another file),

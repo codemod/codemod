@@ -138,8 +138,16 @@ for (const caller of callers) {
 
 ## What does this call: `callees()`
 
-Ask on a function, its name, a call, a JSX element (its component), or the program (calls made
-while the module is evaluated). Each entry is a resolved function (`resolved: true`, `node` is the
+The answer depends on the node you ask:
+
+| Node | `callees()` answers |
+| --- | --- |
+| The program, `root.root()` | Calls made while the module is evaluated (top-level code) |
+| A call or a JSX element | What that call calls: for `<Modal />`, the `Modal` component |
+| A function or its name | The calls written in its body |
+| Any other code (a statement, a block) | The calls written inside it |
+
+Each entry is a resolved function (`resolved: true`, `node` is the
 function, possibly in another file, `callSite` is the call) or a call the analysis could not
 resolve (`resolved: false`, `name` is the callee text: `"Number"`, `"res.json"`).
 
