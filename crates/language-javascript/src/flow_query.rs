@@ -4,7 +4,7 @@
 //! modules: an imported callee is resolved by the host, which is the same
 //! import/re-export resolution that answers go-to-definition.
 
-use crate::dataflow::{CallFact, CalleeFact, FileFlow};
+use crate::dataflow::{CallFact, CalleeFact, FileFlow, Name};
 use language_core::{
     ByteRange, CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
     CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
@@ -1188,7 +1188,9 @@ fn callees(
 /// [CallerIndexSlot]), so callers answers are a snapshot of the workspace as
 /// it was when the first callers query ran.
 pub(crate) struct CallerIndex {
-    flows: HashMap<PathBuf, Arc<FileFlow>>,
+    /// What callers answers need of each file, as it was: its functions and
+    /// calls. The full facts are not kept, so they can leave the cache.
+    sites: HashMap<PathBuf, FileSites>,
     contents: HashMap<PathBuf, Arc<str>>,
     /// Calling file (index into `paths`), call index, how.
     calls_of: HashMap<FunctionKey, Vec<(u32, u32, CallEdgeKind)>>,
@@ -1200,7 +1202,7 @@ pub(crate) struct CallerIndex {
 impl CallerIndex {
     fn build(host: &dyn FlowHost) -> Self {
         let mut index = CallerIndex {
-            flows: HashMap::new(),
+            sites: HashMap::new(),
             contents: HashMap::new(),
             calls_of: HashMap::new(),
             paths: Vec::new(),
@@ -1209,7 +1211,8 @@ impl CallerIndex {
         let mut files = host.workspace_files();
         files.sort();
         // Each file's calls are resolved on their own, in parallel; the
-        // table is then put together in file order.
+        // table is then put together in file order. Only the compact sites
+        // are kept, so a file's full facts can leave the cache once done.
         let contributions: Vec<_> = files
             .into_par_iter()
             .filter_map(|file| {
@@ -1217,10 +1220,11 @@ impl CallerIndex {
                     return None;
                 };
                 let calls = file_calls(host, &file, &flow);
-                Some((file, flow, content, calls))
+                let sites = FileSites::of(&flow);
+                Some((file, sites, content, calls))
             })
             .collect();
-        for (file, flow, content, calls) in contributions {
+        for (file, sites, content, calls) in contributions {
             let file_id = index.paths.len() as u32;
             for (target, call_index, via) in calls {
                 index
@@ -1230,7 +1234,7 @@ impl CallerIndex {
                     .push((file_id, call_index, via));
             }
             index.paths.push(file.clone());
-            index.flows.insert(file.clone(), flow);
+            index.sites.insert(file.clone(), sites);
             index.contents.insert(file, content);
         }
         index.unparsed = host.parse_failures();
@@ -1246,19 +1250,44 @@ impl CallerIndex {
         };
         // A file the walk did not cover (outside the workspace root): its
         // calls are keyed by the facts it had then, which are all there is.
-        let Some(snapshot) = self.flows.get(path) else {
+        let Some(snapshot) = self.sites.get(path) else {
             return Some(key.clone());
         };
         let current = host.flow(path)?;
-        if Arc::ptr_eq(snapshot, &current) {
+        // Same content, same facts: the function has the same index.
+        let unchanged = match (self.contents.get(path), host.content(path)) {
+            (Some(then), Some(now)) => Arc::ptr_eq(then, &now) || then == &now,
+            _ => false,
+        };
+        if unchanged {
             return Some(key.clone());
         }
         let fact = current.functions.get(*function as usize)?;
         snapshot
             .functions
             .iter()
-            .position(|f| f.range == fact.range && f.name == fact.name)
+            .position(|(range, name)| *range == fact.range && *name == fact.name)
             .map(|index| (path.clone(), Some(index as u32)))
+    }
+}
+
+/// A file's functions (range, name) and calls (range, calling function),
+/// as the callers table saw them.
+struct FileSites {
+    functions: Box<[(ByteRange, Option<Name>)]>,
+    calls: Box<[(ByteRange, Option<u32>)]>,
+}
+
+impl FileSites {
+    fn of(flow: &FileFlow) -> Self {
+        FileSites {
+            functions: flow
+                .functions
+                .iter()
+                .map(|f| (f.range, f.name.clone()))
+                .collect(),
+            calls: flow.calls.iter().map(|c| (c.range, c.function)).collect(),
+        }
     }
 }
 
@@ -1311,11 +1340,11 @@ impl std::fmt::Debug for CallerIndexSlot {
 
 /// The function `key` stands for, as the callers walk reports it.
 fn callee_ref(index: &CallerIndex, key: &FunctionKey) -> Option<FunctionRef> {
-    let function = index.flows.get(&key.0)?.functions.get(key.1? as usize)?;
+    let (range, name) = index.sites.get(&key.0)?.functions.get(key.1? as usize)?;
     Some(FunctionRef {
         file_path: key.0.clone(),
-        range: function.range,
-        name: function.name.as_deref().map(str::to_string),
+        range: *range,
+        name: name.as_deref().map(str::to_string),
     })
 }
 
@@ -1348,31 +1377,31 @@ fn callers(
                 continue;
             }
             let file = &index.paths[*file_id as usize];
-            let Some(flow) = index.flows.get(file) else {
+            let Some(sites) = index.sites.get(file) else {
                 continue;
             };
-            let call = &flow.calls[*call_index as usize];
-            let caller = call.function.map(|f| &flow.functions[f as usize]);
+            let (call_range, call_function) = sites.calls[*call_index as usize];
+            let caller = call_function.map(|f| &sites.functions[f as usize]);
             let entry = CallGraphEntry {
-                range: caller.map_or(call.range, |f| f.range),
+                range: caller.map_or(call_range, |(range, _)| *range),
                 name: Some(
                     caller
-                        .map(|f| f.name.as_deref().unwrap_or("<anonymous>").to_string())
+                        .map(|(_, name)| name.as_deref().unwrap_or("<anonymous>").to_string())
                         .unwrap_or_else(|| "<module>".to_string()),
                 ),
                 resolved: true,
                 via: *via,
                 depth: depth + 1,
-                call_site: Some((file.clone(), call.range)),
+                call_site: Some((file.clone(), call_range)),
                 callee: callee_ref(&index, &key),
             };
             if !entries.push(file, entry) {
                 truncated = true;
                 break 'walk;
             }
-            let caller_key = (file.clone(), call.function);
+            let caller_key = (file.clone(), call_function);
             if options.transitive
-                && call.function.is_some()
+                && call_function.is_some()
                 && !options.stop_at.contains(*via)
                 && visited.insert(caller_key.clone())
             {
