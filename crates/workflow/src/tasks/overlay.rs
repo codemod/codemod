@@ -46,6 +46,15 @@ impl Overlay {
         self.files.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Every file earlier steps changed, as absolute paths under the
+    /// resolved target: its text now, or `None` when it is gone.
+    pub fn snapshot(&self) -> Vec<(PathBuf, Option<String>)> {
+        self.files()
+            .iter()
+            .map(|(path, text)| (under(&self.root, path), text.clone()))
+            .collect()
+    }
+
     /// What earlier steps made of `path`: `Some(None)` when they removed it,
     /// `None` when it is as on disk.
     pub fn get(&self, path: &str) -> Option<Option<String>> {
