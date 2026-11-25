@@ -5,8 +5,8 @@ description: "Ask where a value comes from, where it goes, who calls a function,
 
 <Warning>
   Experimental. The API can change between releases. JavaScript and TypeScript (JSX and TSX
-  syntax included; types are not used), and Python with less precision (see
-  [Python](#python)).
+  syntax included; types only when you turn on the [TypeScript 7 checker](#types-the-typescript-7-checker)),
+  and Python with less precision (see [Python](#python)).
 </Warning>
 
 [`definition()` and `references()`](/community/jssg/semantic-analysis) answer questions about
@@ -19,6 +19,7 @@ a rewrite is safe before it makes it:
 | Where does this value go? | `node.flowsTo()` |
 | What does this function call? | `node.callees()` |
 | Who calls this function? | `node.callers()` |
+| Is it called from outside the workspace? | `node.entryPoints()` |
 | Is this variable, or the object it holds, changed? | `node.mutations()` |
 
 Each answer is an array of objects that carry `node` and `root`, so you can go straight from an
@@ -70,6 +71,17 @@ use `semantic_analysis: workspace` on the `js-ast-grep` step; with `codemod jssg
   expression the analysis does not track, such as `typeof import("./x")` in a type position, answers
   `[]`, so a loop over pattern matches does not stop on one.
 </Note>
+
+### Answers describe the workspace when the step started
+
+Every answer, from `flowsFrom()` to `callers()` and `typeInfo()`, describes the files as they were
+when the step started. A step sees the edits of the steps before it, the same in a real run and in
+a dry run, and never its own: a callback that writes a file does not change what the next callback
+in the same step is told about it. To ask about an edit, ask in the next step.
+
+A root parsed from text the step produced (`parse({ path, text: edited })` after an edit) does not
+match what the answers describe, so a query on it throws `… changed in this step`, instead of
+pointing at the wrong code.
 
 ## Where does a value come from: `flowsFrom()`
 
@@ -152,12 +164,62 @@ for (const caller of callers) {
 ```
 
 <Warning>
-  **No callers does not mean unused.** Getters and setters run on property reads and writes
-  (`obj.value`), which are not calls, so they have no callers either. A function stored as a value (`{ round: fn }`,
-  `export default fn`) or called dynamically has no callers the graph can see. Before deleting,
-  also check that `references()` finds nothing but the declaration, and that the answer is
-  complete (`!truncated && unparsed.length === 0`).
+  **No callers does not mean unused.** `callers()` lists call sites in the workspace, nothing
+  else. A function its package exports, or a route handler, is called from outside: ask
+  [`entryPoints()`](#called-from-outside-entrypoints). Getters and setters run
+  on property reads and writes (`obj.value`), which are not calls, so they have no callers either.
+  A function stored as a value (`{ round: fn }`, `export default fn`) or called dynamically has no
+  callers the graph can see. Before deleting, also check that `references()` finds nothing but the
+  declaration, and that the answer is complete (`!truncated && unparsed.length === 0`).
 </Warning>
+
+## Called from outside: `entryPoints()`
+
+`fn.entryPoints()` says why something outside the workspace's code calls the function: its package
+exports it, or a rule you declare matches it. `[]` when neither does.
+
+```ts
+fn.entryPoints();
+// [{ kind: "export", label: "@acme/ui#Button" }]
+// [{ kind: "http", label: "GET app/api/users/[id]/route.ts" }]
+```
+
+A package export counts when the function is exported, directly or re-exported, from a module
+the package's `exports` points at (without `exports`: `main`, `module`, `types` or `source`). The
+label is the specifier other packages import it with, then `#` and the export name.
+
+Route handlers, tasks and other functions a framework calls are entry points only when you
+declare them, on the selector:
+
+```ts
+forEachFile(
+  {
+    include: "app/**/*.ts",
+    semanticAnalysis: {
+      mode: "workspace",
+      entryPoints: [
+        { files: "app/**/route.ts", exports: ["GET", "POST", "PUT", "PATCH", "DELETE"], kind: "http" },
+        { decorators: ["*.route", "shared_task"], kind: "handler" },
+      ],
+    },
+  },
+  (file) => { /* ... */ },
+);
+```
+
+| Rule field | Matches |
+| --- | --- |
+| `files` | A glob over the path from the workspace root. `**` crosses directories; brackets are literal, so `[id]` matches a Next.js segment |
+| `exports` | Functions exported from a matching file under one of these names (`"default"` for the default export) |
+| `decorators` | Functions with a decorator of this name, without its arguments (`app.route` for `@app.route("/x")`); `*` matches any run of characters. Python only for now |
+| `kind` | Copied to the answer, so you can tell routes from tasks |
+
+A rule names `exports`, `decorators` or both (then a function must match both). `entryPoints()`
+needs `semanticAnalysis: "workspace"`; `entryPoints` rules are only accepted there.
+
+A function that has callers can still be dead: when no caller is an entry point or reached from
+one, nothing runs it. To check, walk `callers({ transitive: true })` and ask `entryPoints()` of
+each caller.
 
 ## What does this call: `callees()`
 
@@ -219,11 +281,10 @@ What types need:
 | The target's dependencies installed (`node_modules` present), from a full install that runs before this step | Without them, everything from a library is `any` and calls on it stay unresolved. Measured: 7.6% of all calls resolved through types in a repository with dependencies installed, 1.2% across repositories without |
 | A tsconfig (or jsconfig with `allowJs`) | The checker uses the nearest one; files outside any get default options. JSDoc types work in `.js` files |
 
-The checker reads files from disk. In a dry run, a file an earlier step changed (in memory only)
-does not match what the checker read, so `typeInfo()` on it returns `null`.
-Types are a snapshot: the checker reads the files once, so edits made during the run are not
-reflected (the same rule as `callers()`). They cost a side process (about 200–350 MB of memory)
-and a few seconds on a large workspace, the first time a query needs them.
+Types follow [the same rule as every answer](#answers-describe-the-workspace-when-the-step-started):
+the checker sees the files as they were when the step started, including earlier steps' edits in a
+dry run. They cost a side process (about 200–350 MB of memory) and a few seconds on a large
+workspace, the first time a query needs them.
 
 ## Is it changed: `mutations()`
 
@@ -261,7 +322,7 @@ On the root, in workspace scope:
 | `root.resolveModule("@/ui")` | The file an import in this file resolves to (tsconfig `paths` with `extends`, workspace packages, index files), or `null` |
 | `root.resolveExport("@/ui", "Modal")` | What the export lands on through barrels and `export *`: a `definition()` result with `exportName` (`"default"` or the name) and `nameNode` |
 | `root.specifierFor(modal.root, { like: "@/ui" })` | A specifier that reaches the file, in the style of `like` (relative or alias, `.js` or not), checked by resolving it: `"@/ui/modal"` |
-| `root.importers(target?)` | Every place that refers to a module (this file by default): `import` (side-effect imports too, and `import` lines in `.mdx` / `.md`), `export … from`, `require()`, `import()` and test mocks (`jest.mock`, `vi.importActual`, ...), with `kind`, `specifier` and `unparsed`. A snapshot taken on the first query, like `callers()` |
+| `root.importers(target?)` | Every place that refers to a module (this file by default): `import` (side-effect imports too, and `import` lines in `.mdx` / `.md`), `export … from`, `require()`, `import()` and test mocks (`jest.mock`, `vi.importActual`, ...), with `kind`, `specifier` and `unparsed`. As of the step's start, like every answer |
 | `root.publicSpecifiers()` | The specifiers other packages import this file with: its package name when it is the entry (`main`, or `exports["."]`), and `exports` subpaths. Empty for private files |
 | `root.hasTopLevelEffects()` | Whether importing the module runs code: a top-level call, an `import "./x"` side-effect import, or a top-level write to an object member |
 
@@ -303,9 +364,11 @@ for (const call of root.root().findAll({ rule: { pattern: "$DB.query($SQL)" } })
 
 ```ts
 for (const fn of root.root().findAll({ rule: { kind: "function_declaration", inside: { kind: "export_statement" } } })) {
-  const callers = fn.callers();
-  if (callers.length > 0 || callers.truncated || callers.unparsed.length > 0) continue;
   const name = fn.field("name")!;
+  // Called from outside the workspace (a package export, a route handler): keep it.
+  if (name.entryPoints().length > 0) continue;
+  const callers = name.callers();
+  if (callers.length > 0 || callers.truncated || callers.unparsed.length > 0) continue;
   // No callers is not enough: a function stored as a value is referenced, not called,
   // and a getter or setter runs on property reads and writes, which are not calls.
   if (name.references().flatMap((f) => f.nodes).some((n) => !n.equals(name))) continue;
@@ -473,7 +536,8 @@ it models and says where it stops. Build automatic rewrites only on complete ans
 | Namespace members (`ns.fn` stored or passed as a value) | `references()` finds `ns.fn` uses through `import * as ns`; check it alongside `callers()` before deleting |
 | Files that do not parse | Listed in `unparsed` on call-graph answers; asking about one throws |
 | Result limits (50,000 steps or entries) | `truncated: true` on the array |
-| Edits during a run | `flowsFrom`, `flowsTo`, `mutations` use current content. `callers()` and `importers()` answer from tables built on their first query: snapshots. A file rewritten later still counts as calling or importing what it did then. Types are a snapshot too |
+| Edits during a run | Every answer describes the workspace when the step started: a step sees earlier steps' edits, never its own. A query on a root parsed from text the step produced throws |
+| Callers from outside the workspace | `callers()` lists call sites only. Package exports and declared rules are in `entryPoints()` |
 | Types (with `types: "ts7"`) | `via: "type"` edges trust the declared type: a value cast with `as` or typed `any` is followed as declared, or not at all |
 
 ### When the answer is "can't tell"
@@ -488,8 +552,9 @@ it models and says where it stops. Build automatic rewrites only on complete ans
 - `flowsFrom`, `flowsTo` and `mutations` touch one file: facts are built the first time a query
   touches it and cached by content.
 - `callees({ transitive: true })` builds facts only for the files it reaches.
-- The first `callers()` query (and `references()` in workspace scope) walks the whole workspace
-  once, in parallel, and keeps a table for the rest of the run. Measured on a 2,500-file, 13 MB
+- The first `callers()` query in a step (and `references()` in workspace scope) walks the whole
+  workspace once, in parallel, and keeps a table for the rest of the step. Each step that asks
+  builds its own, so a run that asks `callers()` in many steps pays this once per step. Measured on a 2,500-file, 13 MB
   workspace: about a second for that first query, then well under a millisecond per query. At
   24,000 files (132 MB of source) the first query takes about 13 seconds and the run peaks at about
   3.5 GB of memory: in very large repositories, prefer file-local queries or narrow the target.
