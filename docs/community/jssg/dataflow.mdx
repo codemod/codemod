@@ -201,7 +201,8 @@ On the root, in workspace scope:
 | `root.resolveModule("@/ui")` | The file an import in this file resolves to (tsconfig `paths` with `extends`, workspace packages, index files), or `null` |
 | `root.resolveExport("@/ui", "Modal")` | What the export lands on through barrels and `export *`: a `definition()` result with `exportName` (`"default"` or the name) and `nameNode` |
 | `root.specifierFor(modal.root, { like: "@/ui" })` | A specifier that reaches the file, in the style of `like` (relative or alias, `.js` or not), checked by resolving it: `"@/ui/modal"` |
-| `root.importers(target?)` | Every place that refers to a module (this file by default): `import` (side-effect imports too), `export … from`, `require()`, `import()` and test mocks (`jest.mock`, `vi.importActual`, ...), with `kind`, `specifier` and `unparsed` |
+| `root.importers(target?)` | Every place that refers to a module (this file by default): `import` (side-effect imports too, and `import` lines in `.mdx` / `.md`), `export … from`, `require()`, `import()` and test mocks (`jest.mock`, `vi.importActual`, ...), with `kind`, `specifier` and `unparsed`. A snapshot taken on the first query, like `callers()` |
+| `root.publicSpecifiers()` | The specifiers other packages import this file with: its package name when it is the entry (`main`, or `exports["."]`), and `exports` subpaths. Empty for private files |
 | `root.hasTopLevelEffects()` | Whether importing the module runs code: a top-level call, an `import "./x"` side-effect import, or a top-level write to an object member |
 
 `specifierFor` keeps to a workspace package's public API: for a file in another package it only
@@ -218,6 +219,104 @@ const deletable = left.length === 0 && left.unparsed.length === 0 && !barrel.has
 `definition({ follow: true })` goes from a use of an imported name to its declaration in one call.
 `@jssg/utils` builds a debarrel rewrite on these:
 [`importFromDeclarations`](/community/jssg/utils/javascript#importfromdeclarations).
+
+## Cookbook
+
+Short recipes taken from codemods built on these queries. Each one rewrites only when the answer
+is complete, and flags the rest.
+
+### Is this SQL built from request data?
+
+```ts
+// db.query("select ... " + id) -> db.query("select ... ?", [id])
+for (const call of root.root().findAll({ rule: { pattern: "$DB.query($SQL)" } })) {
+  const sql = call.getMatch("SQL")!;
+  if (!sql.dependsOn((s) => s.kind === "parameter" && s.name === "req")) continue;
+  // The text is built in the argument, or in the variable passed: its initializer.
+  const init = sql.flowsFrom().find((s) => s.via === "assign" && s.from?.kind === "variable");
+  const built = sql.is("identifier") ? init?.node : sql;
+  // ...split `built` into text and parameters, then edit `built` and the call's arguments
+}
+```
+
+### Delete exported functions nobody uses
+
+```ts
+for (const fn of root.root().findAll({ rule: { kind: "function_declaration", inside: { kind: "export_statement" } } })) {
+  const callers = fn.callers();
+  if (callers.length > 0 || callers.truncated || callers.unparsed.length > 0) continue;
+  const name = fn.field("name")!;
+  // No callers is not enough: a function stored as a value is referenced, not called.
+  if (name.references().flatMap((f) => f.nodes).some((n) => !n.equals(name))) continue;
+  // ...remove the export statement
+}
+```
+
+### Make a function async, and every caller
+
+```ts
+const callers = loadConfig.callers({ transitive: true, stopAt: ["callback"] });
+if (callers.truncated || callers.unparsed.length > 0) throw new Error("incomplete call graph");
+const seen = new Set<string>();
+for (const caller of callers) {
+  const call = caller.callSite.node;
+  if (seen.has(call.key())) continue;
+  seen.add(call.key());
+  if (caller.via === "callback") {
+    // names.map(getSetting): add a TODO about caller.callee?.name instead
+    continue;
+  }
+  // edit: `await ${call.text()}` in caller.callSite.root; make caller.node async once (key())
+}
+```
+
+### Import from declarations instead of a barrel
+
+```ts
+import { importFromDeclarations } from "@jssg/utils/javascript/modules";
+
+const statements = root.root().findAll({
+  rule: { any: [{ kind: "import_statement" }, { kind: "export_statement", has: { field: "source", kind: "string" } }] },
+});
+const edits = statements.map((s) => importFromDeclarations(root, s)).filter(Boolean);
+// import { Button, Modal } from "@/ui"  ->  import { Button } from "@/ui/button"; import Modal from "@/ui/modal"
+```
+
+Then, on the barrel itself, decide whether it can go: it has no code of its own, no
+`root.hasTopLevelEffects()`, no `root.publicSpecifiers()`, and every entry of `root.importers()`
+can be pointed at the declarations (no namespace import, no `require`, no dynamic import whose
+members are unknown). Run a type check after the codemod and restore any barrel named in a new error.
+
+### Follow the barrel in test mocks
+
+```ts
+import { declarationTargets, retargetImport, retargetMock } from "@jssg/utils/javascript/modules";
+
+const targets = declarationTargets(root, statement);
+const edit = retargetImport(statement, (b) => targets.get(b.local) ?? null);
+const modules = [...new Set([...targets.values()].map((t) => t.from))];
+for (const mock of root.importers(root.resolveModule(source)!)) {
+  if (mock.kind !== "mock" || !mock.root.root().equals(root.root())) continue;
+  const mockEdit = retargetMock(mock.node, modules); // adds jest.mock("./components/Button"), or repoints a factory
+}
+```
+
+### Is this string shown to the user?
+
+```ts
+// Where is the literal first used? Stop at the first JSX use or return.
+for (const step of literal.flowsTo({ stopAt: ["jsx-attribute", "jsx-child", "return"] })) {
+  if (step.via === "jsx-child") return "visible"; // text of an element
+  if (step.via === "argument" && step.kind === "call") {
+    if (/^(toast|alert)\b/.test(step.name)) return "visible";
+    if (/^(console|analytics)\./.test(step.name)) return "hidden";
+  }
+  if (step.via === "return") {
+    // follow the function's callers: step.node.callers().map((c) => c.callSite.node)
+  }
+}
+// A prop of a component: element.callees().find((c) => c.via === "jsx") is the component.
+```
 
 ## Soundness: what "may" means
 
@@ -237,7 +336,7 @@ it models and says where it stops. Build automatic rewrites only on complete ans
 | Namespace members (`ns.fn` stored or passed as a value) | Not seen by `callers()` or `references()` yet |
 | Files that do not parse | Listed in `unparsed` on call-graph answers; asking about one throws |
 | Result limits (50,000 steps or entries) | `truncated: true` on the array |
-| Edits during a run | `flowsFrom`, `flowsTo`, `mutations` use current content. `callers()` uses a table built on the first `callers()` query: a snapshot |
+| Edits during a run | `flowsFrom`, `flowsTo`, `mutations` use current content. `callers()` and `importers()` answer from tables built on their first query: snapshots. A file rewritten later still counts as calling or importing what it did then |
 
 ### When the answer is "can't tell"
 
