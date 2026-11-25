@@ -66,8 +66,31 @@ pub fn convert_matcher<'js>(
     ))
 }
 
+/// Numbers that crossed an isolate boundary as `16.0` become `16`, so a
+/// `range` rule built from another step's result deserializes.
+fn integral_floats(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Number(n) => {
+            if let Some(f) = n.as_f64().filter(|_| !n.is_i64() && !n.is_u64()) {
+                if f.fract() == 0.0 && f >= 0.0 && f <= u64::MAX as f64 {
+                    *value = serde_json::Value::from(f as u64);
+                } else if f.fract() == 0.0 && f < 0.0 && f >= i64::MIN as f64 {
+                    *value = serde_json::Value::from(f as i64);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(integral_floats),
+        serde_json::Value::Object(map) => map.values_mut().for_each(integral_floats),
+        _ => {}
+    }
+}
+
 /// A matcher from a rule object (`{ rule: { pattern: ... } }`, as JSON).
-pub fn rule_matcher(rule: serde_json::Value, lang: SupportLang) -> Result<JsMatcherRjs, String> {
+pub fn rule_matcher(
+    mut rule: serde_json::Value,
+    lang: SupportLang,
+) -> Result<JsMatcherRjs, String> {
+    integral_floats(&mut rule);
     let serde_value: SerializableRuleCore =
         serde_json::from_value(rule).map_err(|e| e.to_string())?;
     let env = DeserializeEnv::new(lang);
