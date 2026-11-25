@@ -1,0 +1,13 @@
+{
+  "name": "codemod-repo-maintenance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "health": "codemod workflow run -w workflows/health.ts --target .. --no-interactive",
+    "test": "node --test \"tests/**/*.test.ts\"",
+    "validate": "codemod workflow validate -w workflows/health.ts"
+  },
+  "devDependencies": {
+    "codemod": "2.0.0-alpha.7"
+  }
+}

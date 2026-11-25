@@ -94,7 +94,7 @@ Mintlify beyond a short human Wish overview.
 - Rust formatting: `cargo fmt --check`
 - Rust lint: `cargo clippy --tests --no-deps -- -D warnings`
 - Rust tests: `cargo test` or `cargo test -p <crate>`
-- Terminal dependency check: `bash ./scripts/check-single-crossterm.sh`
+- Repo health (one crossterm in `codemod`, no `codemod@latest` in docs and messages): `cargo run -p codemod -- workflow run -w .codemod/workflows/health.ts --target . --no-interactive` (CI: `.github/workflows/maintenance.yml`)
 - Runtime TypeScript (engine and npm package) and public types: `pnpm --filter codemod typecheck`
 - npm package tests, on both hosts (build `codemod` and `codemod-node` first):
   `pnpm --filter codemod test`
