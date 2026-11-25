@@ -940,11 +940,33 @@ fn member_functions(
 }
 
 /// The workspace functions a call may call.
+/// The workspace functions a call may call, without asking the type
+/// checker (the callers table, which asks lazily: see [CallerIndex]).
+fn call_targets_untyped(
+    host: &dyn FlowHost,
+    path: &Path,
+    flow: &Arc<FileFlow>,
+    call: &CallFact,
+) -> Vec<(PathBuf, u32, CallEdgeKind)> {
+    call_targets_with(host, path, flow, call, false)
+}
+
+/// The workspace functions a call may call.
 pub fn call_targets(
     host: &dyn FlowHost,
     path: &Path,
     flow: &Arc<FileFlow>,
     call: &CallFact,
+) -> Vec<(PathBuf, u32, CallEdgeKind)> {
+    call_targets_with(host, path, flow, call, true)
+}
+
+fn call_targets_with(
+    host: &dyn FlowHost,
+    path: &Path,
+    flow: &Arc<FileFlow>,
+    call: &CallFact,
+    typed: bool,
 ) -> Vec<(PathBuf, u32, CallEdgeKind)> {
     let mut functions = Vec::new();
     let mut seen = HashSet::new();
@@ -989,7 +1011,7 @@ pub fn call_targets(
                         functions_of(host, origin, &mut functions);
                     }
                 }
-                if functions.is_empty() && !call.is_jsx {
+                if typed && functions.is_empty() && !call.is_jsx {
                     let mut typed = host.typed_method_targets(path, flow, call);
                     typed.dedup();
                     return typed
@@ -1525,6 +1547,13 @@ pub struct CallerIndex {
     contents: HashMap<PathBuf, Arc<str>>,
     /// Calling file (index into `paths`), call index, how.
     calls_of: HashMap<FunctionKey, Vec<(u32, u32, CallEdgeKind)>>,
+    /// Member calls (`x.m()`) the values left unresolved, by property name:
+    /// (file, call index). Types resolve them lazily, for the names a
+    /// callers query asks about, instead of asking the checker about every
+    /// call while the table is built.
+    unresolved_members: HashMap<Name, Vec<(u32, u32)>>,
+    /// Edges found through types so far, and the names already asked about.
+    typed: RwLock<TypedCalls>,
     /// The files with calls, in path order.
     paths: Vec<PathBuf>,
     unparsed: Vec<UnparsedFile>,
@@ -1536,6 +1565,8 @@ impl CallerIndex {
             sites: HashMap::new(),
             contents: HashMap::new(),
             calls_of: HashMap::new(),
+            unresolved_members: HashMap::new(),
+            typed: RwLock::new(TypedCalls::default()),
             paths: Vec::new(),
             unparsed: Vec::new(),
         };
@@ -1550,13 +1581,20 @@ impl CallerIndex {
                 let (Some(flow), Some(content)) = (host.flow(&file), host.content(&file)) else {
                     return None;
                 };
-                let calls = file_calls(host, &file, &flow);
+                let (calls, unresolved) = file_calls(host, &file, &flow);
                 let sites = FileSites::of(&flow);
-                Some((file, sites, content, calls))
+                Some((file, sites, content, calls, unresolved))
             })
             .collect();
-        for (file, sites, content, calls) in contributions {
+        for (file, sites, content, calls, unresolved) in contributions {
             let file_id = index.paths.len() as u32;
+            for (name, call_index) in unresolved {
+                index
+                    .unresolved_members
+                    .entry(name)
+                    .or_default()
+                    .push((file_id, call_index));
+            }
             for (target, call_index, via) in calls {
                 index
                     .calls_of
@@ -1604,6 +1642,12 @@ impl CallerIndex {
 
 /// A file's functions (range, name) and calls (range, calling function),
 /// as the callers table saw them.
+#[derive(Default)]
+struct TypedCalls {
+    names: HashSet<Name>,
+    calls_of: HashMap<FunctionKey, Vec<(u32, u32, CallEdgeKind)>>,
+}
+
 struct FileSites {
     functions: Box<[(ByteRange, Option<Name>)]>,
     calls: Box<[(ByteRange, Option<u32>)]>,
@@ -1625,21 +1669,82 @@ impl FileSites {
 /// One file's contribution to the callers table: each call's targets, as
 /// (target function, call index, how). Depends only on the file's facts and
 /// what its imports resolve to, so a changed file's part can be rebuilt alone.
+#[allow(clippy::type_complexity)]
 fn file_calls(
     host: &dyn FlowHost,
     file: &Path,
     flow: &Arc<FileFlow>,
-) -> Vec<(FunctionKey, u32, CallEdgeKind)> {
+) -> (Vec<(FunctionKey, u32, CallEdgeKind)>, Vec<(Name, u32)>) {
     let mut calls = Vec::new();
+    let mut unresolved = Vec::new();
     for (call_index, call) in flow.calls.iter().enumerate() {
-        let mut targets = call_targets(host, file, flow, call);
+        let mut targets = call_targets_untyped(host, file, flow, call);
+        if targets.is_empty() && !call.is_jsx {
+            if let CalleeFact::Member { property, .. } = &call.callee {
+                unresolved.push((property.clone(), call_index as u32));
+            }
+        }
         let callbacks = callback_targets(host, file, flow, call, &targets);
         targets.extend(callbacks);
         for (target_path, target, via) in targets {
             calls.push(((target_path, Some(target)), call_index as u32, via));
         }
     }
-    calls
+    (calls, unresolved)
+}
+
+impl CallerIndex {
+    /// The calls of `key`: the table's, plus those found through types. The
+    /// first time a function name is asked about, the unresolved member
+    /// calls with that property name are resolved by type (when the host
+    /// has types), in files whose content has not changed since the table
+    /// was built.
+    fn calls_of(&self, host: &dyn FlowHost, key: &FunctionKey) -> Vec<(u32, u32, CallEdgeKind)> {
+        let mut out: Vec<_> = self.calls_of.get(key).cloned().unwrap_or_default();
+        let name = key
+            .1
+            .and_then(|f| self.sites.get(&key.0)?.functions.get(f as usize)?.1.clone());
+        if let Some(name) = name {
+            if !self.typed.read().names.contains(&name) {
+                self.resolve_typed(host, &name);
+            }
+            if let Some(typed) = self.typed.read().calls_of.get(key) {
+                out.extend(typed.iter().copied());
+            }
+        }
+        out
+    }
+
+    fn resolve_typed(&self, host: &dyn FlowHost, name: &Name) {
+        let mut found: Vec<(FunctionKey, (u32, u32, CallEdgeKind))> = Vec::new();
+        for (file_id, call_index) in self.unresolved_members.get(name).into_iter().flatten() {
+            let path = &self.paths[*file_id as usize];
+            let (Some(flow), Some(content)) = (host.flow(path), host.content(path)) else {
+                continue;
+            };
+            let unchanged = self
+                .contents
+                .get(path)
+                .is_some_and(|then| Arc::ptr_eq(then, &content) || **then == *content);
+            let Some(call) = flow.calls.get(*call_index as usize).filter(|_| unchanged) else {
+                continue;
+            };
+            for (target_path, target) in host.typed_method_targets(path, &flow, call) {
+                found.push((
+                    (target_path, Some(target)),
+                    (*file_id, *call_index, CallEdgeKind::Type),
+                ));
+            }
+        }
+        let mut typed = self.typed.write();
+        typed.names.insert(name.clone());
+        for (target, call) in found {
+            let calls = typed.calls_of.entry(target).or_default();
+            if !calls.contains(&call) {
+                calls.push(call);
+            }
+        }
+    }
 }
 
 /// Holds the [CallerIndex] between queries.
@@ -1703,7 +1808,7 @@ fn callers(
         if options.max_depth.is_some_and(|max| depth >= max) {
             continue;
         }
-        for (file_id, call_index, via) in index.calls_of.get(&key).into_iter().flatten() {
+        for (file_id, call_index, via) in index.calls_of(host, &key).iter() {
             if !reported.insert((*file_id, *call_index)) {
                 continue;
             }
@@ -1843,7 +1948,7 @@ impl<'h> Walk<'h> {
             return Vec::new();
         };
         let mut sites = Vec::new();
-        for (file_id, call_index, via) in index.calls_of.get(&key).into_iter().flatten() {
+        for (file_id, call_index, via) in index.calls_of(self.host, &key).iter() {
             if matches!(via, CallEdgeKind::Callback) {
                 continue;
             }
