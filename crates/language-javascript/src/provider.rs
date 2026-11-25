@@ -5,7 +5,7 @@ use crate::lightweight::LightweightAnalyzer;
 use language_core::{
     filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult,
     FlowOptions, FlowResult, MutationOptions, MutationsResult, ProviderMode, ReferencesResult,
-    SemanticProvider, SemanticResult,
+    SemanticProvider, SemanticResult, SymbolKind,
 };
 use std::path::{Path, PathBuf};
 use vfs::VfsPath;
@@ -247,15 +247,7 @@ impl SemanticProvider for OxcSemanticProvider {
     ) -> SemanticResult<Option<DefinitionResult>> {
         // We need the file content for analysis
         let content = self.read_file(file_path)?;
-
-        match &self.analyzer {
-            AnalyzerKind::FileScope(analyzer) => {
-                analyzer.get_definition(file_path, &content, range, options)
-            }
-            AnalyzerKind::WorkspaceScope(analyzer) => {
-                analyzer.get_definition(file_path, &content, range, options)
-            }
-        }
+        self.get_definition_with_content(file_path, &content, range, options)
     }
 
     fn find_references(
@@ -365,14 +357,25 @@ impl OxcSemanticProvider {
         range: ByteRange,
         options: DefinitionOptions,
     ) -> SemanticResult<Option<DefinitionResult>> {
-        match &self.analyzer {
-            AnalyzerKind::FileScope(analyzer) => {
-                analyzer.get_definition(file_path, content, range, options)
-            }
-            AnalyzerKind::WorkspaceScope(analyzer) => {
-                analyzer.get_definition(file_path, content, range, options)
-            }
-        }
+        let (definition, cache) = match &self.analyzer {
+            AnalyzerKind::FileScope(analyzer) => (
+                analyzer.get_definition(file_path, content, range, options)?,
+                analyzer.cache(),
+            ),
+            AnalyzerKind::WorkspaceScope(analyzer) => (
+                analyzer.get_definition(file_path, content, range, options)?,
+                analyzer.cache(),
+            ),
+        };
+        Ok(definition.map(|mut definition| {
+            let location = &definition.location;
+            definition.export_name = match location.kind {
+                // Resolution stopped at an export specifier: that is the name.
+                SymbolKind::Export => Some(location.name.clone()),
+                _ => cache.export_name_at(&location.file_path, location.range),
+            };
+            definition
+        }))
     }
 
     /// Find references with content already available.

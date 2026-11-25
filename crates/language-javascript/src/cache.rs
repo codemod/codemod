@@ -99,6 +99,22 @@ impl FileSymbols {
         Self::default()
     }
 
+    /// The name the declaration at `range` is exported under from this file
+    /// (`"default"` for the default export), or None when it is not exported.
+    /// Re-exports of other modules are not counted.
+    pub fn export_name_at(&self, range: ByteRange) -> Option<String> {
+        let symbol = self.symbols.iter().find(|s| s.range == range)?;
+        let export = self
+            .exports
+            .iter()
+            .find(|e| e.re_export_from.is_none() && e.local_symbol_id == Some(symbol.symbol_id))?;
+        Some(if export.is_default {
+            "default".to_string()
+        } else {
+            export.name.clone()
+        })
+    }
+
     /// Find a symbol by its byte range.
     pub fn find_symbol_at(&self, range: ByteRange) -> Option<&Symbol> {
         // Find the tightest symbol that contains or matches the range
@@ -176,6 +192,11 @@ impl SymbolCache {
     }
 
     /// Content hash of a cached file, without cloning its symbols.
+    /// [`FileSymbols::export_name_at`] for a cached file, without cloning it.
+    pub fn export_name_at(&self, path: &Path, range: ByteRange) -> Option<String> {
+        self.files.read().get(path)?.symbols.export_name_at(range)
+    }
+
     pub fn content_hash(&self, path: &Path) -> Option<u64> {
         self.files.read().get(path).map(|e| e.symbols.content_hash)
     }

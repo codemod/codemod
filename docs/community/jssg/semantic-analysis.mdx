@@ -79,6 +79,8 @@ Get the definition location for the symbol at this node's position.
 interface DefinitionOptions {
   /** If false, stop at import statements without resolving. Default: true (in workspace scope mode) */
   resolveExternal?: boolean;
+  /** Go from a use of an imported name through its import binding to the declaration. Default: false */
+  follow?: boolean;
 }
 
 interface DefinitionResult<M> {
@@ -88,7 +90,27 @@ interface DefinitionResult<M> {
   root: SgRoot<M>;
   /** The kind of definition: 'local', 'import', or 'external' */
   kind: "local" | "import" | "external";
+  /** The declared name inside `node`, or null for an anonymous declaration */
+  nameNode: SgNode<M> | null;
+  /** How the declaration is exported from its module ("default" or the name), or null */
+  exportName: string | null;
 }
+```
+
+A use of an imported name (`Modal` in `<Modal />`) resolves to its binding in the import
+statement first (`kind: 'local'`). Pass `{ follow: true }` to continue from there to the
+declaration in one call. `node` can be the name, a whole declarator (`LIMIT: number = 10`) or a
+whole `export default function Modal() {}` statement; `nameNode` is always the name, and
+`exportName` says how a codemod must import it:
+
+```ts
+// import { Modal, formatValue } from "./components" (a barrel)
+const def = use.definition({ follow: true });
+def.root.filename(); // ".../modal.tsx"
+def.exportName; // "default": import Modal from "./modal"
+def.nameNode?.text(); // "Modal"
+// For `function format() {}; export { format as formatValue }`:
+// exportName "formatValue", nameNode.text() "format"
 ```
 
 **Definition kinds:**

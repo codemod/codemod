@@ -77,3 +77,11 @@ const mutations: Mutation[] = node.mutations({ after: root.root() });
 export const definite = mutations.filter(
   (m) => m.confidence === "definite" && !m.viaAlias && !m.deferred,
 );
+
+// definition(): export name, name node, follow.
+const def = node.definition({ follow: true });
+if (def) {
+  const exportName: string | null = def.exportName;
+  const nameText: string | undefined = def.nameNode?.text();
+  void [exportName, nameText];
+}

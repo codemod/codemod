@@ -81,3 +81,12 @@ jssg_test! {
     target: "packages/shared/src/dates.ts",
     scope: workspace,
 }
+
+jssg_test! {
+    name: test_definition_export_name_name_node_and_follow,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_definition_export_name.js",
+    fixture_dir: "typescript/definition_exports",
+    target: "app.ts",
+    scope: workspace,
+}

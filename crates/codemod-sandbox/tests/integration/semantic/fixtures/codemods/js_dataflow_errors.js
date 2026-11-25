@@ -53,6 +53,16 @@ export default function transform(root) {
   if (!Array.isArray(items.mutations({ after: audit }))) throw new Error("after: a node works");
   if (!Array.isArray(items.flowsFrom(undefined))) throw new Error("undefined options work");
 
+  // A missing name is null, not undefined, as the types say.
+  const escape = items.mutations().find((m) => m.kind === "escape");
+  if (escape.name !== null) throw new Error("escape name: expected null, got " + escape.name);
+  const literal = audit
+    .field("arguments")
+    .child(1)
+    .flowsFrom()
+    .find((s) => s.kind === "call");
+  if (literal && literal.index !== null) throw new Error("call step index: expected null");
+
   // A root parsed from a string has no file; another language is not supported.
   const loose = parse("javascript", "const a = b;")
     .root()

@@ -591,15 +591,48 @@ declare module "codemod:ast-grep" {
      * @default true
      */
     resolveExternal?: boolean;
+    /**
+     * Go through import bindings: a use of an imported name normally lands
+     * on its binding in the import statement (`kind: 'local'`); with
+     * `follow` the lookup continues from there to the declaration in the
+     * other module (`kind: 'external'`), or to the import when the module
+     * cannot be resolved (`kind: 'import'`).
+     * @default false
+     * @example
+     * ```ts
+     * // <Modal /> → export default function Modal() in ./modal.tsx
+     * const def = tag.definition({ follow: true });
+     * def?.exportName; // "default"
+     * def?.nameNode?.text(); // "Modal"
+     * ```
+     */
+    follow?: boolean;
   }
 
   export interface DefinitionResult<M extends TypesMap = TypesMap> {
-    /** The SgNode at the definition location */
+    /**
+     * The SgNode at the definition location. Depending on the declaration
+     * this is the name, the whole declarator (`LIMIT: number = 10`) or the
+     * whole `export default function ...` statement; use `nameNode` for the name.
+     */
     node: SgNode<M>;
     /** The SgRoot for the file containing the definition */
     root: SgRoot<M>;
     /** The kind of definition (local, import, or external) */
     kind: DefinitionKind;
+    /**
+     * The declared name's identifier inside `node` (`format` in
+     * `function format() {}`, `Modal` in `export default function Modal`).
+     * Null for an anonymous declaration.
+     */
+    nameNode: SgNode<M> | null;
+    /**
+     * The name the declaration is exported under from its module:
+     * `"default"` for a default export, `"formatValue"` for
+     * `export { format as formatValue }`. Null when it is not exported.
+     * A declaration exported under several names reports one of them.
+     */
+    exportName: string | null;
   }
 
   /**

@@ -984,11 +984,13 @@ impl<'js> SgNodeRjs<'js> {
             };
 
             // Parse options
-            let resolve_external = if let Some(opts) = options.0 {
-                opts.get::<_, Option<bool>>("resolveExternal")?
-                    .unwrap_or(true)
-            } else {
-                true
+            let (resolve_external, follow) = match options.0 {
+                Some(opts) => (
+                    opts.get::<_, Option<bool>>("resolveExternal")?
+                        .unwrap_or(true),
+                    opts.get::<_, Option<bool>>("follow")?.unwrap_or(false),
+                ),
+                None => (true, false),
             };
 
             let def_options = language_core::DefinitionOptions { resolve_external };
@@ -997,92 +999,33 @@ impl<'js> SgNodeRjs<'js> {
             let range =
                 language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
 
-            match provider.get_definition(&file_path, range, def_options) {
-                Ok(Some(def_result)) => {
-                    let is_same_file = def_result.location.file_path == file_path;
-                    let loc = &def_result.location;
-
-                    // Convert DefinitionKind to string for JS
-                    let kind_str = def_result.kind.as_str();
-
-                    if is_same_file {
-                        // Definition is in the same file, use existing root
-                        let root_node = self.root.grep.root();
-                        if let Some(node) = find_node_at_range(
-                            &root_node,
-                            loc.range.start as usize,
-                            loc.range.end as usize,
-                        ) {
-                            let node_match: NodeMatch<_> = node.into();
-                            let static_node_match: NodeMatch<'static, TSDoc> =
-                                unsafe { std::mem::transmute(node_match) };
-
-                            let result_obj = rquickjs::Object::new(ctx.clone())?;
-
-                            let sg_node = SgNodeRjs {
-                                root: Arc::clone(&self.root),
-                                inner_node: static_node_match,
-                                _phantom: PhantomData,
-                            };
-                            result_obj.set("node", sg_node)?;
-
-                            let sg_root = SgRootRjs {
-                                inner: Arc::clone(&self.root),
-                                _phantom: PhantomData,
-                            };
-                            result_obj.set("root", sg_root)?;
-                            result_obj.set("kind", kind_str)?;
-
-                            return result_obj.into_js(&ctx);
-                        }
-                    } else {
-                        // Definition is in a different file, create new root
-                        let lang_str = detect_language_from_path(&def_result.location.file_path);
-                        let lang = Lang::from_str(&lang_str).map_err(|e| {
-                            Exception::throw_message(&ctx, &format!("Unsupported language: {}", e))
-                        })?;
-                        let grep = AstGrep::new(def_result.content.clone(), lang);
-
-                        if let Ok(new_root) = SgRootRjs::try_new_with_semantic(
-                            grep,
-                            Some(def_result.location.file_path.to_string_lossy().to_string()),
-                            self.root.semantic_provider.clone(),
-                            self.root.current_file_path.clone(),
-                            self.root.target_directory.as_deref(),
-                        ) {
-                            let root_node = new_root.inner.grep.root();
-                            if let Some(node) = find_node_at_range(
-                                &root_node,
-                                loc.range.start as usize,
-                                loc.range.end as usize,
-                            ) {
-                                let node_match: NodeMatch<_> = node.into();
-                                let static_node_match: NodeMatch<'static, TSDoc> =
-                                    unsafe { std::mem::transmute(node_match) };
-
-                                let result_obj = rquickjs::Object::new(ctx.clone())?;
-
-                                let sg_node = SgNodeRjs {
-                                    root: Arc::clone(&new_root.inner),
-                                    inner_node: static_node_match,
-                                    _phantom: PhantomData,
-                                };
-                                result_obj.set("node", sg_node)?;
-                                result_obj.set("root", new_root)?;
-                                result_obj.set("kind", kind_str)?;
-
-                                return result_obj.into_js(&ctx);
-                            }
-                        }
+            let get = |path: &std::path::Path, range| {
+                provider
+                    .get_definition(path, range, def_options)
+                    .map_err(|e| {
+                        Exception::throw_message(&ctx, &format!("Failed to get definition: {}", e))
+                    })
+            };
+            let mut found = get(&file_path, range)?;
+            // `follow`: a use of an imported name lands on its import binding
+            // in this file; ask again from there to reach the declaration.
+            if follow {
+                for _ in 0..8 {
+                    let Some(def) = &found else { break };
+                    if def.kind != language_core::DefinitionKind::Local
+                        || def.location.kind != language_core::SymbolKind::Import
+                    {
+                        break;
                     }
-
-                    Ok(Value::new_null(ctx))
+                    match get(&def.location.file_path, def.location.range)? {
+                        Some(next) if next.location != def.location => found = Some(next),
+                        _ => break,
+                    }
                 }
-                Ok(None) => Ok(Value::new_null(ctx)),
-                Err(e) => Err(Exception::throw_message(
-                    &ctx,
-                    &format!("Failed to get definition: {}", e),
-                )),
+            }
+            match found {
+                Some(def_result) => self.definition_object(&ctx, &file_path, &def_result),
+                None => Ok(Value::new_null(ctx)),
             }
         }
     }
@@ -1337,7 +1280,7 @@ impl<'js> SgNodeRjs<'js> {
                 )?;
                 object.set("kind", mutation.kind.as_str())?;
                 object.set("confidence", mutation.confidence.as_str())?;
-                object.set("name", mutation.name.clone())?;
+                object.set("name", or_null(&ctx, mutation.name.clone())?)?;
                 object.set("deferred", mutation.deferred)?;
                 object.set("viaAlias", mutation.via_alias)?;
                 result.set(count, object)?;
@@ -1459,8 +1402,8 @@ impl<'js> SgNodeRjs<'js> {
                 )?;
                 object.set("kind", step.kind.as_str())?;
                 object.set("via", step.via.as_str())?;
-                object.set("name", step.name.clone())?;
-                object.set("index", step.index)?;
+                object.set("name", or_null(&ctx, step.name.clone())?)?;
+                object.set("index", or_null(&ctx, step.index)?)?;
                 object.set("depth", step.depth)?;
                 object.set("boundary", step.boundary)?;
                 result.set(index, object)?;
@@ -1540,7 +1483,7 @@ impl<'js> SgNodeRjs<'js> {
                         _phantom: PhantomData,
                     },
                 )?;
-                object.set("name", entry.name.clone())?;
+                object.set("name", or_null(&ctx, entry.name.clone())?)?;
                 object.set("resolved", entry.resolved)?;
                 object.set("via", entry.via.as_str())?;
                 object.set("depth", entry.depth)?;
@@ -1604,6 +1547,78 @@ impl<'js> SgNodeRjs<'js> {
 
 #[cfg(feature = "native")]
 impl<'js> SgNodeRjs<'js> {
+    /// The object `definition()` returns: `node`, `root`, `kind`,
+    /// `exportName` and `nameNode`. Null when the range has no node.
+    fn definition_object(
+        &self,
+        ctx: &Ctx<'js>,
+        file_path: &std::path::Path,
+        def_result: &language_core::DefinitionResult,
+    ) -> Result<Value<'js>> {
+        let loc = &def_result.location;
+        let root = if loc.file_path == file_path {
+            Arc::clone(&self.root)
+        } else {
+            let lang_str = detect_language_from_path(&loc.file_path);
+            let lang = Lang::from_str(&lang_str).map_err(|e| {
+                Exception::throw_message(ctx, &format!("Unsupported language: {}", e))
+            })?;
+            let grep = AstGrep::new(def_result.content.clone(), lang);
+            match SgRootRjs::try_new_with_semantic(
+                grep,
+                Some(loc.file_path.to_string_lossy().to_string()),
+                self.root.semantic_provider.clone(),
+                self.root.current_file_path.clone(),
+                self.root.target_directory.as_deref(),
+            ) {
+                Ok(new_root) => new_root.inner,
+                Err(_) => return Ok(Value::new_null(ctx.clone())),
+            }
+        };
+        let wrap = |node: Node<'_, TSDoc>| {
+            let node_match: NodeMatch<_> = node.into();
+            let static_node_match: NodeMatch<'static, TSDoc> =
+                unsafe { std::mem::transmute(node_match) };
+            SgNodeRjs {
+                root: Arc::clone(&root),
+                inner_node: static_node_match,
+                _phantom: PhantomData,
+            }
+        };
+        let root_node = root.grep.root();
+        let Some(node) =
+            find_node_at_range(&root_node, loc.range.start as usize, loc.range.end as usize)
+        else {
+            return Ok(Value::new_null(ctx.clone()));
+        };
+        // The declared name: the node itself for a binding, the identifier
+        // inside it for a declaration or `export default function f`.
+        // A default export's symbol is named "default": fall back to the
+        // `name` field of the declaration inside.
+        let name_node = node
+            .dfs()
+            .find(|n| n.kind().ends_with("identifier") && n.text() == loc.name.as_str())
+            .or_else(|| {
+                node.dfs()
+                    .find_map(|n| n.field("name"))
+                    .filter(|n| n.kind().ends_with("identifier"))
+            });
+
+        let result_obj = rquickjs::Object::new(ctx.clone())?;
+        result_obj.set("node", wrap(node))?;
+        result_obj.set("nameNode", or_null(ctx, name_node.map(wrap))?)?;
+        result_obj.set(
+            "root",
+            SgRootRjs {
+                inner: Arc::clone(&root),
+                _phantom: PhantomData,
+            },
+        )?;
+        result_obj.set("kind", def_result.kind.as_str())?;
+        result_obj.set("exportName", or_null(ctx, def_result.export_name.clone())?)?;
+        result_obj.into_js(ctx)
+    }
+
     /// The provider, file and byte range a data-flow or call-graph query
     /// about this node needs, or why the query cannot run here and what to do.
     ///
@@ -1716,6 +1731,16 @@ impl<'js> SgNodeRjs<'js> {
             inner_node: static_node_match,
             _phantom: PhantomData,
         })
+    }
+}
+
+/// `null`, not `undefined`, for a missing value: the public types say
+/// `string | null`, and `=== null` checks must work.
+#[cfg(feature = "native")]
+fn or_null<'js, T: IntoJs<'js>>(ctx: &Ctx<'js>, value: Option<T>) -> Result<Value<'js>> {
+    match value {
+        Some(value) => value.into_js(ctx),
+        None => Ok(Value::new_null(ctx.clone())),
     }
 }
 

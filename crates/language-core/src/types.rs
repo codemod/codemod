@@ -266,6 +266,11 @@ pub struct DefinitionResult {
     pub content: String,
     /// The kind of definition (local, import, or external)
     pub kind: DefinitionKind,
+    /// The name the definition is exported under from its module
+    /// (`"default"` for a default export), when it is exported. A
+    /// declaration exported under several names reports one of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export_name: Option<String>,
 }
 
 impl DefinitionResult {
@@ -275,6 +280,7 @@ impl DefinitionResult {
             location,
             content,
             kind,
+            export_name: None,
         }
     }
 }
