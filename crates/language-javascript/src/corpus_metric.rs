@@ -366,6 +366,20 @@ fn corpus_metric() {
         percent(t.calls - t.resolved, t.calls),
         t.callback_only
     );
+    let outside: usize = t
+        .unresolved_why
+        .iter()
+        .filter(|(why, _)| {
+            why.contains("external") || why.contains("global") || why.contains("require")
+        })
+        .map(|(_, count)| *count)
+        .sum();
+    let _ = writeln!(
+        out,
+        "calls whose callee is not a global or an external package: {}  resolved {}",
+        t.calls - outside,
+        percent(t.resolved, t.calls - outside)
+    );
     let _ = writeln!(out, "unresolved, why:");
     let mut why: Vec<_> = t.unresolved_why.iter().collect();
     why.sort_by(|a, b| b.1.cmp(a.1));

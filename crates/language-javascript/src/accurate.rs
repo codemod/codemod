@@ -1155,6 +1155,28 @@ fn default_resolve_options() -> ResolveOptions {
             ".jsx".to_string(),
             ".mjs".to_string(),
             ".cjs".to_string(),
+            ".mts".to_string(),
+            ".cts".to_string(),
+        ],
+        // TypeScript ESM imports name the emitted file: `./a.js` is
+        // `./a.ts` in the source tree.
+        extension_alias: vec![
+            (
+                ".js".to_string(),
+                vec![".ts".to_string(), ".tsx".to_string(), ".js".to_string()],
+            ),
+            (
+                ".jsx".to_string(),
+                vec![".tsx".to_string(), ".jsx".to_string()],
+            ),
+            (
+                ".mjs".to_string(),
+                vec![".mts".to_string(), ".mjs".to_string()],
+            ),
+            (
+                ".cjs".to_string(),
+                vec![".cts".to_string(), ".cjs".to_string()],
+            ),
         ],
         main_fields: vec!["module".to_string(), "main".to_string()],
         condition_names: vec![
@@ -1936,6 +1958,48 @@ console.log(x);
             "{:?}",
             def.location.file_path
         );
+    }
+
+    /// TypeScript ESM style: `./impl.js` names the emitted file of `impl.ts`.
+    #[test]
+    fn js_extension_import_finds_the_ts_source() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("impl.ts"), "export function thing() {}\n").unwrap();
+        fs::write(
+            dir.path().join("view.tsx"),
+            "export const View = () => null;\n",
+        )
+        .unwrap();
+        let main = dir.path().join("main.ts");
+        let content = "import { thing } from './impl.js';\nimport { View } from './view.jsx';\nfunction run() { thing(); View(); }\n";
+        fs::write(&main, content).unwrap();
+
+        let analyzer = AccurateAnalyzer::new(dir.path().to_path_buf());
+        for (needle, file) in [("thing", "impl.ts"), ("View", "view.tsx")] {
+            let def = analyzer
+                .get_definition(
+                    &main,
+                    content,
+                    range_of(content, needle),
+                    DefinitionOptions::default(),
+                )
+                .unwrap()
+                .unwrap();
+            assert!(
+                def.location.file_path.ends_with(file),
+                "{needle}: {:?}",
+                def.location.file_path
+            );
+        }
+        let callees = analyzer
+            .call_graph(
+                &main,
+                content,
+                range_of(content, "run"),
+                CallGraphOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(entry_names(&callees), ["thing", "View"]);
     }
 
     fn entry_names(result: &CallGraphResult) -> Vec<String> {
