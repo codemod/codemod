@@ -197,6 +197,22 @@ pub struct SemanticAnalysisDetailed {
     #[serde(default)]
     #[ts(optional, as = "Option<String>")]
     pub root: Option<String>,
+    /// Where types come from (only with mode "workspace"). `ts7`: the
+    /// TypeScript 7 checker installed in the target. Off by default.
+    /// Experimental.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, as = "Option<SemanticAnalysisTypes>")]
+    pub types: Option<SemanticAnalysisTypes>,
+}
+
+/// A type source for semantic analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum SemanticAnalysisTypes {
+    /// The TypeScript 7 checker (`tsc --api`).
+    Ts7,
+    /// No types.
+    None,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]

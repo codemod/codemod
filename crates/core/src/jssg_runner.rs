@@ -22,6 +22,7 @@ use codemod_sandbox::sandbox::runtime_module::{
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
+pub use semantic_factory::SemanticTypes;
 use serde_json::Value;
 
 use crate::execution::{CodemodExecutionConfig, ProgressCallback};
@@ -32,7 +33,9 @@ pub enum SemanticMode {
     #[default]
     None,
     File,
-    Workspace(PathBuf),
+    /// Workspace-wide, rooted here, with types from the TypeScript 7
+    /// checker when `types` is `SemanticTypes::Ts7`.
+    Workspace(PathBuf, SemanticTypes),
 }
 
 pub struct JssgRunRequest {
@@ -120,8 +123,11 @@ pub fn semantic_provider(
     match mode {
         SemanticMode::None => None,
         SemanticMode::File => Some(Arc::new(LazySemanticProvider::file_scope())),
-        SemanticMode::Workspace(root) => {
-            let provider = Arc::new(LazySemanticProvider::workspace_scope(root.clone()));
+        SemanticMode::Workspace(root, types) => {
+            let provider = Arc::new(LazySemanticProvider::workspace_scope_with_types(
+                root.clone(),
+                *types,
+            ));
             for file in files {
                 if let Ok(content) = std::fs::read_to_string(file) {
                     let _ = provider.notify_file_processed(file, &content);
@@ -190,8 +196,11 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     let semantic: Option<Arc<dyn SemanticProvider>> = match &request.semantic {
         SemanticMode::None => None,
         SemanticMode::File => Some(Arc::new(LazySemanticProvider::file_scope())),
-        SemanticMode::Workspace(root) => {
-            let provider = Arc::new(LazySemanticProvider::workspace_scope(root.clone()));
+        SemanticMode::Workspace(root, types) => {
+            let provider = Arc::new(LazySemanticProvider::workspace_scope_with_types(
+                root.clone(),
+                *types,
+            ));
             for file in config.collect_files() {
                 if let Ok(content) = std::fs::read_to_string(&file) {
                     let _ = provider.notify_file_processed(&file, &content);

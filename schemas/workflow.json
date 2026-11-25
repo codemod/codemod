@@ -417,6 +417,17 @@
             "null"
           ],
           "default": null
+        },
+        "types": {
+          "description": "Where types come from (only with mode \"workspace\"). `ts7`: the\nTypeScript 7 checker installed in the target. Off by default.\nExperimental.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SemanticAnalysisTypes"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -435,6 +446,21 @@
           "description": "Workspace-wide analysis with cross-file support",
           "type": "string",
           "const": "workspace"
+        }
+      ]
+    },
+    "SemanticAnalysisTypes": {
+      "description": "A type source for semantic analysis.",
+      "oneOf": [
+        {
+          "description": "The TypeScript 7 checker (`tsc --api`).",
+          "type": "string",
+          "const": "ts7"
+        },
+        {
+          "description": "No types.",
+          "type": "string",
+          "const": "none"
         }
       ]
     },

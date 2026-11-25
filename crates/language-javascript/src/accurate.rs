@@ -1,17 +1,18 @@
 //! Accurate mode implementation for workspace-wide lazy indexing.
 
 use crate::cache::{ExportedSymbol, FileSymbols, ImportedSymbol, Symbol, SymbolCache};
-use crate::dataflow::{FileFlow, FlowCache};
+use crate::dataflow::{CallFact, CalleeFact, FileFlow, FlowCache};
 use crate::error::JsSemanticError;
 use crate::flow_query::{self, CallerIndexSlot, FlowHost};
 use crate::oxc_adapter::{analyze, find_symbol_at_range};
+use crate::ts_api::{self, TsDecl, TsTypes};
 use crate::vfs_fs::VfsFileSystem;
 use crate::workspace_packages::{self, WorkspacePackages};
 use language_core::{
     filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionKind, DefinitionOptions,
-    DefinitionResult, FileReferences, FlowOptions, FlowResult, MutationOptions, MutationsResult,
-    ReferencesResult, SemanticResult, SpecifierOptions, SpecifierStyle, SymbolLocation,
-    UnparsedFile,
+    DefinitionResult, FileReferences, FlowOptions, FlowResult, FunctionRef, MutationOptions,
+    MutationsResult, ReferencesResult, SemanticResult, SpecifierOptions, SpecifierStyle,
+    SymbolLocation, UnparsedFile,
 };
 use oxc_resolver::{
     Resolution, ResolveError, ResolveOptions, Resolver, ResolverGeneric, TsconfigDiscovery,
@@ -179,6 +180,10 @@ pub struct AccurateAnalyzer {
     /// `resolve_import` answers by (importing directory, specifier, name). Emptied
     /// whenever a file gets new content, since exports may have moved.
     import_targets: RwLock<HashMap<ImportKey, Option<(PathBuf, ByteRange)>>>,
+    /// The TypeScript checker, found on first use (spike: `ts_api`).
+    types: std::sync::OnceLock<Option<TsTypes>>,
+    /// Types were turned on (`types: "ts7"`).
+    types_enabled: AtomicBool,
 }
 
 /// Importing file's directory, module specifier, export name.
@@ -242,6 +247,8 @@ impl AccurateAnalyzer {
             unreadable_files: RwLock::new(HashSet::new()),
             workspace_packages: RwLock::new(None),
             import_targets: RwLock::new(HashMap::new()),
+            types: std::sync::OnceLock::new(),
+            types_enabled: AtomicBool::new(false),
         }
     }
 
@@ -1578,18 +1585,128 @@ impl AccurateAnalyzer {
         *self.workspace_packages.write() = None;
     }
 
-    /// Gets the type of a symbol at the given byte range.
-    /// Type inference is not yet fully implemented, returns None.
-    #[allow(dead_code)]
+    /// The type of the expression or declaration name at exactly this
+    /// range, printed by the TypeScript checker. None without a checker,
+    /// or when no expression has this range.
     pub fn get_type(
         &self,
-        _file_path: &Path,
-        _content: &str,
-        _range: ByteRange,
+        file_path: &Path,
+        content: &str,
+        range: ByteRange,
     ) -> SemanticResult<Option<String>> {
-        // TODO: Implement type inference using oxc's type system
-        Ok(None)
+        let Some(types) = self.types() else {
+            return Ok(None);
+        };
+        Ok(types.type_at(&self.canonical_path(file_path), content, range))
     }
+
+    /// Turn types on: the TypeScript 7 checker answers `typeInfo()` and
+    /// resolves method calls the values do not. Takes effect if called
+    /// before the first question that needs types.
+    pub fn enable_types(&self) {
+        self.types_enabled.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn types(&self) -> Option<&TsTypes> {
+        self.types
+            .get_or_init(|| {
+                let enabled = self.types_enabled.load(Ordering::Relaxed);
+                match TsTypes::discover(&self.workspace_root, enabled) {
+                    Ok(types) => Some(types),
+                    Err(ts_api::NoChecker::Off) => None,
+                    Err(ts_api::NoChecker::NotFound) => {
+                        log::warn!(
+                            "types: \"ts7\" is on but no TypeScript 7 checker was found: install \
+                             typescript@{}.x in the workspace or set CODEMOD_TS_API",
+                            ts_api::PINNED_VERSION
+                        );
+                        None
+                    }
+                    Err(ts_api::NoChecker::WrongVersion { exe, version }) => {
+                        log::warn!(
+                            "types: {} is TypeScript {version}, this codemod speaks {}.x; types are off",
+                            exe.display(),
+                            ts_api::PINNED_VERSION
+                        );
+                        None
+                    }
+                }
+            })
+            .as_ref()
+    }
+
+    /// Where the property name of a member call starts, for the checker.
+    fn member_name_start(content: &str, flow: &FileFlow, call: &CallFact) -> Option<u32> {
+        let CalleeFact::Member { object, property } = &call.callee else {
+            return None;
+        };
+        let object_end = flow.nodes[*object as usize].range.end;
+        property_name_start(content, object_end, property)
+    }
+
+    /// The declarations the checker gives for a member call, asking for
+    /// every member call of the file in one round trip the first time.
+    fn typed_declarations(&self, path: &Path, flow: &FileFlow, call: &CallFact) -> Vec<TsDecl> {
+        if call.is_jsx {
+            return Vec::new();
+        }
+        let Some(types) = self.types() else {
+            return Vec::new();
+        };
+        let Some(content) = self.cache.content(path) else {
+            return Vec::new();
+        };
+        let Some(name_start) = Self::member_name_start(&content, flow, call) else {
+            return Vec::new();
+        };
+        let offsets: Vec<u32> = flow
+            .calls
+            .iter()
+            .filter(|c| !c.is_jsx)
+            .filter_map(|c| Self::member_name_start(&content, flow, c))
+            .collect();
+        types.prefetch(path, &content, &offsets);
+        types.declarations_at(path, &content, name_start)
+    }
+
+    /// The workspace functions a declaration the checker pointed at stands
+    /// for (see [`flow_query::declaration_functions`]).
+    fn functions_in_declaration(&self, decl: &TsDecl) -> Vec<(PathBuf, u32)> {
+        let path = self.canonical_path(&decl.path);
+        if FlowHost::flow(self, &path).is_none() {
+            return Vec::new();
+        }
+        let Some(content) = self.cache.content(&path) else {
+            return Vec::new();
+        };
+        let start = ts_api::skip_trivia(&content, ts_api::byte_of(&content, decl.pos16));
+        let range = ByteRange::new(start, ts_api::byte_of(&content, decl.end16));
+        flow_query::declaration_functions(self, &path, range)
+    }
+}
+
+/// Where the property name of `object.property` starts: after the object,
+/// `!`, `?.` or `.`, and trivia.
+fn property_name_start(content: &str, object_end: u32, property: &str) -> Option<u32> {
+    let bytes = content.as_bytes();
+    let mut i = ts_api::skip_trivia(content, object_end) as usize;
+    while bytes.get(i) == Some(&b'!') {
+        i = ts_api::skip_trivia(content, i as u32 + 1) as usize;
+    }
+    if content.get(i..)?.starts_with("?.") {
+        i += 2;
+    } else if bytes.get(i) == Some(&b'.') {
+        i += 1;
+    } else {
+        return None;
+    }
+    let i = ts_api::skip_trivia(content, i as u32) as usize;
+    let rest = content.get(i..)?;
+    (rest.starts_with(property)
+        || rest
+            .strip_prefix('#')
+            .is_some_and(|r| r.starts_with(property)))
+    .then_some(i as u32)
 }
 
 impl AccurateAnalyzer {
@@ -1721,6 +1838,71 @@ impl FlowHost for AccurateAnalyzer {
     /// Callers answers are a snapshot: the table of every call is built once.
     fn caller_index(&self) -> Option<&CallerIndexSlot> {
         Some(&self.callers)
+    }
+
+    fn typed_method_targets(
+        &self,
+        path: &Path,
+        flow: &FileFlow,
+        call: &CallFact,
+    ) -> Vec<(PathBuf, u32)> {
+        let decls = self.typed_declarations(path, flow, call);
+        let Some(types) = self.types() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for decl in decls.iter().filter(|d| !d.library) {
+            let found = self.functions_in_declaration(decl);
+            if found.is_empty() {
+                // A signature with no body (interface, abstract, overload):
+                // the members that implement it, unless there are too many.
+                for related in types.related_declarations(path, decl).decls {
+                    out.extend(self.functions_in_declaration(&related));
+                }
+            } else {
+                out.extend(found);
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    fn typed_declaration(
+        &self,
+        path: &Path,
+        flow: &FileFlow,
+        call: &CallFact,
+    ) -> Option<FunctionRef> {
+        let decl = self
+            .typed_declarations(path, flow, call)
+            .into_iter()
+            .next()?;
+        let content: Arc<str> = if decl.library {
+            Arc::from(std::fs::read_to_string(&decl.path).ok()?)
+        } else {
+            self.cache.content(&self.canonical_path(&decl.path))?
+        };
+        let start = ts_api::skip_trivia(&content, ts_api::byte_of(&content, decl.pos16));
+        let mut end = ts_api::byte_of(&content, decl.end16);
+        // The checker's member nodes end with their `;` or `,`; the syntax
+        // tree's do not.
+        while end > start && matches!(content.as_bytes()[end as usize - 1], b';' | b',') {
+            end -= 1;
+        }
+        let name = match &call.callee {
+            CalleeFact::Member { property, .. } => Some(property.to_string()),
+            CalleeFact::Node(_) => None,
+        };
+        Some(FunctionRef {
+            file_path: if decl.library {
+                decl.path
+            } else {
+                self.canonical_path(&decl.path)
+            },
+            range: ByteRange::new(start, end),
+            name,
+        })
     }
 }
 
@@ -2440,9 +2622,14 @@ console.log(x);
             ByteRange::new(pi_pos as u32, (pi_pos + 2) as u32),
         );
 
-        // Type inference not yet implemented, should return None
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
+        // Types come from the TypeScript 7 checker when one is configured
+        // (CODEMOD_TS_API); without it there is no answer.
+        let result = result.unwrap();
+        if analyzer.types().is_some() {
+            assert!(result.is_some(), "the checker answers for PI");
+        } else {
+            assert!(result.is_none());
+        }
     }
 
     #[test]

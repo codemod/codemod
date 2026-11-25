@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use butterflow_core::jssg_runner::SemanticMode;
+use butterflow_core::jssg_runner::{SemanticMode, SemanticTypes};
 use codemod_deps::Registry;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
@@ -204,8 +204,9 @@ fn writes_itself(
 }
 
 /// The semantic analysis a `semanticAnalysis` option asks for: `"file"`
-/// (the default), `"workspace"` (the whole target, or `{ mode, root }`), or
-/// `"none"`.
+/// (the default), `"workspace"` (the whole target, or `{ mode, root,
+/// types }`), or `"none"`. `types: "ts7"` turns on the TypeScript 7
+/// checker (workspace mode only).
 pub(crate) fn semantic_mode(
     task: &TaskContext<'_>,
     option: Option<&Value>,
@@ -215,19 +216,42 @@ pub(crate) fn semantic_mode(
         None => SemanticMode::File,
         Some(Value::String(mode)) if mode == "none" => SemanticMode::None,
         Some(Value::String(mode)) if mode == "file" => SemanticMode::File,
-        Some(Value::String(mode)) if mode == "workspace" => SemanticMode::Workspace(target.clone()),
-        Some(Value::Object(detail)) => match detail.get("mode").and_then(Value::as_str) {
-            Some("none") => SemanticMode::None,
-            Some("file") => SemanticMode::File,
-            Some("workspace") => SemanticMode::Workspace(
-                detail
-                    .get("root")
-                    .and_then(Value::as_str)
-                    .map(|root| target.join(root))
-                    .unwrap_or_else(|| target.clone()),
-            ),
-            _ => return Err("semanticAnalysis.mode must be 'none', 'file' or 'workspace'".into()),
-        },
+        Some(Value::String(mode)) if mode == "workspace" => {
+            SemanticMode::Workspace(target.clone(), SemanticTypes::Off)
+        }
+        Some(Value::Object(detail)) => {
+            let types = match detail.get("types") {
+                None | Some(Value::Null) => SemanticTypes::Off,
+                Some(Value::String(types)) if types == "none" => SemanticTypes::Off,
+                Some(Value::String(types)) if types == "ts7" => SemanticTypes::Ts7,
+                Some(other) => {
+                    return Err(format!(
+                        "semanticAnalysis.types must be 'ts7' or 'none', not {other}"
+                    ))
+                }
+            };
+            let mode = detail.get("mode").and_then(Value::as_str);
+            if types != SemanticTypes::Off && mode != Some("workspace") {
+                return Err("semanticAnalysis.types needs mode: 'workspace'".into());
+            }
+            match mode {
+                Some("none") => SemanticMode::None,
+                Some("file") => SemanticMode::File,
+                Some("workspace") => SemanticMode::Workspace(
+                    detail
+                        .get("root")
+                        .and_then(Value::as_str)
+                        .map(|root| target.join(root))
+                        .unwrap_or_else(|| target.clone()),
+                    types,
+                ),
+                _ => {
+                    return Err(
+                        "semanticAnalysis.mode must be 'none', 'file' or 'workspace'".into(),
+                    )
+                }
+            }
+        }
         Some(other) => {
             return Err(format!(
                 "semanticAnalysis must be 'file', 'workspace', 'none' or an object, not {other}"

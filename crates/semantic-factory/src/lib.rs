@@ -31,7 +31,7 @@ mod config;
 mod factory;
 mod lazy;
 
-pub use config::{SemanticConfig, SemanticScope, WorkspaceWalker};
+pub use config::{SemanticConfig, SemanticScope, SemanticTypes, WorkspaceWalker};
 pub use factory::SemanticFactory;
 pub use language_core::{
     ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult, SemanticError,

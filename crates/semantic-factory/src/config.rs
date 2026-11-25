@@ -50,6 +50,20 @@ pub struct SemanticConfig {
     pub fs_root: Option<VfsPath>,
     /// How to enumerate workspace files during indexing.
     pub walker: WorkspaceWalker,
+    /// Where types come from. Off by default.
+    pub types: SemanticTypes,
+}
+
+/// Where a provider gets types from (`typeInfo()`, method calls resolved
+/// by the receiver's type). Workspace scope, JavaScript/TypeScript only.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SemanticTypes {
+    /// No types (the default).
+    #[default]
+    Off,
+    /// The TypeScript 7 checker: the binary `CODEMOD_TS_API` names, else the
+    /// workspace's own `typescript@7.0` install.
+    Ts7,
 }
 
 impl std::fmt::Debug for SemanticConfig {
@@ -58,6 +72,7 @@ impl std::fmt::Debug for SemanticConfig {
             .field("scope", &self.scope)
             .field("fs_root", &self.fs_root.as_ref().map(|_| "<VfsPath>"))
             .field("walker", &self.walker)
+            .field("types", &self.types)
             .finish()
     }
 }
@@ -69,6 +84,7 @@ impl SemanticConfig {
             scope: SemanticScope::FileScope,
             fs_root: None,
             walker: WorkspaceWalker::Ignore,
+            types: SemanticTypes::Off,
         }
     }
 
@@ -78,6 +94,7 @@ impl SemanticConfig {
             scope: SemanticScope::FileScope,
             fs_root: Some(fs_root),
             walker: WorkspaceWalker::Ignore,
+            types: SemanticTypes::Off,
         }
     }
 
@@ -87,6 +104,7 @@ impl SemanticConfig {
             scope: SemanticScope::WorkspaceScope { root },
             fs_root: None,
             walker: WorkspaceWalker::Ignore,
+            types: SemanticTypes::Off,
         }
     }
 
@@ -96,7 +114,14 @@ impl SemanticConfig {
             scope: SemanticScope::WorkspaceScope { root },
             fs_root: Some(fs_root),
             walker: WorkspaceWalker::Ignore,
+            types: SemanticTypes::Off,
         }
+    }
+
+    /// Where types come from (`SemanticTypes::Ts7` turns the checker on).
+    pub fn with_types(mut self, types: SemanticTypes) -> Self {
+        self.types = types;
+        self
     }
 
     /// Override the workspace walker used during indexing. No-op for
