@@ -297,7 +297,8 @@ impl Adjacency {
     }
 
     /// Number of edges.
-    pub fn edge_count(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn edge_count(&self) -> usize {
         self.edges.len()
     }
 
