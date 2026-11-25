@@ -160,7 +160,7 @@ pub struct AccurateAnalyzer {
     /// Every module reference in the workspace, by the file it resolves to:
     /// built on the first `importers()` query and kept, like the callers
     /// table, so files rewritten later in the run still count as importers.
-    importers_index: RwLock<Option<Arc<ImportersIndex>>>,
+    importers_index: language_flow::once::BuildOnce<ImportersIndex>,
     /// Files that failed to parse, with the parser's message. A file here is
     /// not parsed again until new content for it arrives through `process_file`.
     parse_errors: RwLock<HashMap<PathBuf, String>>,
@@ -235,7 +235,7 @@ impl AccurateAnalyzer {
             walker,
             flows: FlowCache::default(),
             callers: CallerIndexSlot::default(),
-            importers_index: RwLock::new(None),
+            importers_index: Default::default(),
             parse_errors: RwLock::new(HashMap::new()),
             flow_everywhere: AtomicBool::new(false),
             canonical_paths: RwLock::new(HashMap::new()),
@@ -386,6 +386,7 @@ impl AccurateAnalyzer {
 
         // Claim the file. Another thread may be parsing it: that holds no
         // locks and waits on nothing, so wait for it to finish.
+        let mut waits = 0u32;
         loop {
             if self.indexed_files.read().contains(&canonical) {
                 return Ok(());
@@ -405,13 +406,27 @@ impl AccurateAnalyzer {
             if self.indexing_in_progress.write().insert(canonical.clone()) {
                 break;
             }
-            std::thread::yield_now();
+            // A parse takes microseconds to milliseconds: yield first, then
+            // sleep, so a long wait does not hold a core.
+            waits += 1;
+            if waits < 64 {
+                std::thread::yield_now();
+            } else {
+                std::thread::sleep(std::time::Duration::from_micros(200));
+            }
         }
+        // If the parse panics, give the file up (as if unreadable) rather
+        // than leave it claimed for threads waiting on it.
+        let claim = Claim {
+            analyzer: self,
+            path: &canonical,
+        };
 
         // Read and parse the file using the virtual filesystem
         let content = match self.read_file(&canonical) {
             Ok(content) => content,
             Err(error) => {
+                std::mem::forget(claim);
                 self.unreadable_files.write().insert(canonical.clone());
                 self.indexing_in_progress.write().remove(&canonical);
                 return Err(error.into());
@@ -427,10 +442,12 @@ impl AccurateAnalyzer {
                         .write()
                         .insert(canonical.clone(), message.clone());
                 }
+                std::mem::forget(claim);
                 self.indexing_in_progress.write().remove(&canonical);
                 return Err(error.into());
             }
         };
+        std::mem::forget(claim);
         let imports: Vec<String> = file_symbols
             .imports
             .iter()
@@ -1111,12 +1128,8 @@ impl AccurateAnalyzer {
 
     /// The importers table, built on first use.
     fn importers_index(&self) -> Arc<ImportersIndex> {
-        if let Some(index) = self.importers_index.read().as_ref() {
-            return Arc::clone(index);
-        }
-        let index = Arc::new(self.build_importers_index());
-        *self.importers_index.write() = Some(Arc::clone(&index));
-        index
+        self.importers_index
+            .get_or_build(|| self.build_importers_index())
     }
 
     fn build_importers_index(&self) -> ImportersIndex {
@@ -1569,7 +1582,7 @@ impl AccurateAnalyzer {
         self.indexing_in_progress.write().clear();
         self.flows.clear();
         self.callers.clear();
-        *self.importers_index.write() = None;
+        self.importers_index.clear();
         self.parse_errors.write().clear();
         self.flow_everywhere.store(false, Ordering::Relaxed);
         self.canonical_paths.write().clear();
@@ -1721,6 +1734,24 @@ impl FlowHost for AccurateAnalyzer {
     /// Callers answers are a snapshot: the table of every call is built once.
     fn caller_index(&self) -> Option<&CallerIndexSlot> {
         Some(&self.callers)
+    }
+}
+
+/// A file claimed for indexing. Dropped only while unwinding from a panic in
+/// the parse (the normal paths `forget` it): the file is then given up as
+/// unreadable and released, so threads waiting for it go on.
+struct Claim<'a> {
+    analyzer: &'a AccurateAnalyzer,
+    path: &'a PathBuf,
+}
+
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        self.analyzer
+            .unreadable_files
+            .write()
+            .insert(self.path.clone());
+        self.analyzer.indexing_in_progress.write().remove(self.path);
     }
 }
 
@@ -3046,6 +3077,62 @@ console.log(x);
     fn range_of(source: &str, needle: &str) -> ByteRange {
         let start = source.find(needle).unwrap() as u32;
         ByteRange::new(start, start + needle.len() as u32)
+    }
+
+    /// forEachFile workers share one analyzer and may all ask callers() at
+    /// once: one table is built, everyone gets the answer a lone query gets.
+    #[test]
+    fn concurrent_callers_queries_share_one_table() {
+        let dir = TempDir::new().unwrap();
+        let mut sources = Vec::new();
+        for index in 0..8 {
+            let lib = dir.path().join(format!("lib{index}.js"));
+            let lib_src = format!("export function target{index}() {{}}\n");
+            fs::write(&lib, &lib_src).unwrap();
+            for user in 0..5 {
+                fs::write(
+                    dir.path().join(format!("use{index}_{user}.js")),
+                    format!(
+                        "import {{ target{index} }} from './lib{index}.js';\nexport function caller{index}_{user}() {{ target{index}(); }}\n"
+                    ),
+                )
+                .unwrap();
+            }
+            sources.push((lib, lib_src, format!("target{index}")));
+        }
+        let options = CallGraphOptions {
+            direction: language_core::CallGraphDirection::Callers,
+            ..Default::default()
+        };
+        let ask = |analyzer: &AccurateAnalyzer, (lib, src, name): &(PathBuf, String, String)| {
+            let mut names = entry_names(
+                &analyzer
+                    .call_graph(lib, src, range_of(src, name), options)
+                    .unwrap(),
+            );
+            names.sort();
+            names
+        };
+        let alone: Vec<Vec<String>> = {
+            let analyzer = AccurateAnalyzer::new(dir.path().to_path_buf());
+            sources.iter().map(|site| ask(&analyzer, site)).collect()
+        };
+        assert_eq!(
+            alone[3],
+            (0..5).map(|u| format!("caller3_{u}")).collect::<Vec<_>>()
+        );
+
+        for _ in 0..3 {
+            let analyzer = AccurateAnalyzer::new(dir.path().to_path_buf());
+            let together: Vec<Vec<String>> = std::thread::scope(|scope| {
+                let handles: Vec<_> = sources
+                    .iter()
+                    .map(|site| scope.spawn(|| ask(&analyzer, site)))
+                    .collect();
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            assert_eq!(together, alone);
+        }
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! parser in them.
 
 pub mod facts;
+pub mod once;
 pub mod query;
 
 pub use facts::*;
