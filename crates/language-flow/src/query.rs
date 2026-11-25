@@ -41,6 +41,12 @@ pub trait FlowHost: Sync {
     fn module_path(&self, _from: &Path, _specifier: &str) -> Option<PathBuf> {
         None
     }
+    /// When `name` is not declared in the module `specifier` but is a module
+    /// of its own (Python's `from pkg import mod`), a specifier for it, seen
+    /// from the same file.
+    fn submodule(&self, _from: &Path, _specifier: &str, _name: &str) -> Option<String> {
+        None
+    }
     /// Every file a "who calls this" query has to look at.
     fn workspace_files(&self) -> Vec<PathBuf>;
     /// Why the module specifier (imported from the file from) could not be
@@ -385,6 +391,10 @@ fn origins(
                         host.resolve_import(path, &import.module, &import.name)
                     {
                         origins_at(host, &target, range, seen, out);
+                    } else if let Some(specifier) =
+                        host.submodule(path, &import.module, &import.name)
+                    {
+                        out.push(Origin::Namespace(path.to_path_buf(), specifier));
                     } else {
                         // A CommonJS module imported with `import`.
                         let name = (import.name != "default").then_some(import.name.as_str());
@@ -394,6 +404,10 @@ fn origins(
                 continue;
             }
             _ => {}
+        }
+        // `repo: OrderRepository`: whatever the declared type may be.
+        if let Some(&declared) = flow.annotations.get(&current) {
+            stack.push(declared);
         }
         // `await import("./m")`, `import("./m").then((ns) => …)`: the
         // module's namespace (the promise of it stands for it too:
@@ -523,11 +537,15 @@ fn returned_origins(
             continue;
         };
         let function_node = target_flow.functions[target as usize].node;
-        let returned: Vec<u32> = target_flow.in_edges[function_node as usize]
+        let mut returned: Vec<u32> = target_flow.in_edges[function_node as usize]
             .iter()
             .filter(|(_, edge)| *edge == FlowEdgeKind::Return)
             .map(|(value, _)| *value)
             .collect();
+        // `def get_repo() -> Repo`: what the declared return type may be.
+        if let Some(&declared) = target_flow.annotations.get(&function_node) {
+            returned.push(declared);
+        }
         for value in returned {
             origins(host, &target_path, &target_flow, value, seen, out);
         }
@@ -638,6 +656,7 @@ fn field_values(flow: &FileFlow, class_node: u32, name: &str) -> Vec<u32> {
                 .iter()
                 .filter(|(_, edge)| *edge == FlowEdgeKind::Store)
                 .map(|(value, _)| *value)
+                .chain(flow.annotations.get(node).copied())
         })
         .collect()
 }
@@ -700,7 +719,10 @@ fn constructor_of(
     depth: u32,
     out: &mut Vec<(PathBuf, u32)>,
 ) {
-    if let Some(function) = method_of(flow, class_node, "constructor") {
+    // `__init__` is Python's constructor.
+    if let Some(function) = method_of(flow, class_node, "constructor")
+        .or_else(|| method_of(flow, class_node, "__init__"))
+    {
         out.push((path.to_path_buf(), function));
         return;
     }
@@ -742,6 +764,8 @@ fn member_origins(
         Origin::Namespace(from, specifier) => {
             if let Some((target, range)) = host.resolve_import(from, specifier, property) {
                 origins_at(host, &target, range, seen, out);
+            } else if let Some(submodule) = host.submodule(from, specifier, property) {
+                out.push(Origin::Namespace(from.clone(), submodule));
             } else {
                 commonjs_export(host, from, specifier, Some(property), seen, out);
             }
@@ -763,11 +787,13 @@ fn member_origins(
             FlowNodeKind::Class => class_member(path, flow, *node, property, host, seen, out),
             // new C().method()
             FlowNodeKind::Call => {
+                // `new C()`, or `C()` where calling a class makes an
+                // instance (Python): only class origins are used below.
                 let constructed = flow
                     .call_by_node
                     .get(node)
                     .map(|call| &flow.calls[*call as usize])
-                    .filter(|call| call.is_new);
+                    .filter(|call| !call.is_jsx);
                 if let Some(CallFact {
                     callee: CalleeFact::Node(callee),
                     ..
@@ -964,7 +990,10 @@ pub fn call_targets(
             for origin in &found {
                 functions_of(host, origin, &mut functions);
             }
-            if call.is_new {
+            let class_call = found.iter().any(|origin| {
+                matches!(origin, Origin::Node(_, f, n) if f.nodes[*n as usize].kind == FlowNodeKind::Class)
+            });
+            if call.is_new || class_call {
                 CallEdgeKind::Constructor
             } else if call.is_jsx {
                 CallEdgeKind::Jsx

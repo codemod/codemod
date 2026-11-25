@@ -140,6 +140,18 @@ pub struct FileFlow {
     /// `throughCalls: false` does not follow them.
     pub model_edges: FxHashSet<(u32, u32)>,
     pub loops: Vec<ByteRange>,
+    /// Module-level bindings by name, for languages whose imports name a
+    /// module's top-level names directly (Python). Empty for JavaScript,
+    /// whose exports the host resolves itself.
+    pub module_bindings: FxHashMap<Name, u32>,
+    /// A binding, field or function node -> the node of its declared type
+    /// (`repo: OrderRepository`, `def f() -> Repo`). Only call resolution
+    /// reads it: `repo.find()` looks for `find` on what the type may be.
+    pub annotations: FxHashMap<u32, u32>,
+    /// A binding, field or function node -> its declared type as written.
+    pub declared_types: FxHashMap<u32, Name>,
+    /// Function index -> the decorators written on it, as written.
+    pub decorators: FxHashMap<u32, Vec<Name>>,
     /// Syntax the builder saw but does not model, by what it is. Values that
     /// pass through it are not connected to where they go. Used to measure
     /// coverage; queries do not read it.
