@@ -11,6 +11,7 @@ use language_core::{
     FlowResult, FlowStep, Mutation, MutationKind, MutationOptions, MutationsResult, UnparsedFile,
 };
 use parking_lot::RwLock;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,7 +20,7 @@ use std::sync::Arc;
 const RESULT_LIMIT: usize = 50_000;
 
 /// What the queries need from an analyzer.
-pub(crate) trait FlowHost {
+pub(crate) trait FlowHost: Sync {
     /// The path files are cached under.
     fn canonical(&self, path: &Path) -> PathBuf;
     /// Facts for a file, built on first use.
@@ -886,22 +887,27 @@ impl CallerIndex {
             calls_of: HashMap::new(),
             unparsed: Vec::new(),
         };
-        for file in host.workspace_files() {
-            let (Some(flow), Some(content)) = (host.flow(&file), host.content(&file)) else {
-                continue;
-            };
-            for (call_index, call) in flow.calls.iter().enumerate() {
-                let mut targets = call_targets(host, &file, &flow, call);
-                if targets.is_empty() {
-                    targets = callback_targets(host, &file, &flow, call);
-                }
-                for (target_path, target, via) in targets {
-                    index
-                        .calls_of
-                        .entry((target_path, Some(target)))
-                        .or_default()
-                        .push((file.clone(), call_index as u32, via));
-                }
+        let mut files = host.workspace_files();
+        files.sort();
+        // Each file's calls are resolved on their own, in parallel; the
+        // table is then put together in file order.
+        let contributions: Vec<_> = files
+            .into_par_iter()
+            .filter_map(|file| {
+                let (Some(flow), Some(content)) = (host.flow(&file), host.content(&file)) else {
+                    return None;
+                };
+                let calls = file_calls(host, &file, &flow);
+                Some((file, flow, content, calls))
+            })
+            .collect();
+        for (file, flow, content, calls) in contributions {
+            for (target, call_index, via) in calls {
+                index
+                    .calls_of
+                    .entry(target)
+                    .or_default()
+                    .push((file.clone(), call_index, via));
             }
             index.flows.insert(file.clone(), flow);
             index.contents.insert(file, content);
@@ -933,6 +939,27 @@ impl CallerIndex {
             .position(|f| f.range == fact.range && f.name == fact.name)
             .map(|index| (path.clone(), Some(index as u32)))
     }
+}
+
+/// One file's contribution to the callers table: each call's targets, as
+/// (target function, call index, how). Depends only on the file's facts and
+/// what its imports resolve to, so a changed file's part can be rebuilt alone.
+fn file_calls(
+    host: &dyn FlowHost,
+    file: &Path,
+    flow: &Arc<FileFlow>,
+) -> Vec<(FunctionKey, u32, CallEdgeKind)> {
+    let mut calls = Vec::new();
+    for (call_index, call) in flow.calls.iter().enumerate() {
+        let mut targets = call_targets(host, file, flow, call);
+        if targets.is_empty() {
+            targets = callback_targets(host, file, flow, call);
+        }
+        for (target_path, target, via) in targets {
+            calls.push(((target_path, Some(target)), call_index as u32, via));
+        }
+    }
+    calls
 }
 
 /// Holds the [CallerIndex] between queries.

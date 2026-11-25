@@ -265,9 +265,15 @@ impl FlowCache {
             }
         }
         let flow = Arc::new(build_file_flow(path, &content()?).ok()?);
-        self.files
-            .write()
-            .insert(path.to_path_buf(), (content_hash, Arc::clone(&flow)));
+        let mut files = self.files.write();
+        // Another thread may have built them meanwhile: keep one copy, so
+        // every caller holds the same facts.
+        if let Some((hash, built)) = files.get(path) {
+            if *hash == content_hash {
+                return Some(Arc::clone(built));
+            }
+        }
+        files.insert(path.to_path_buf(), (content_hash, Arc::clone(&flow)));
         Some(flow)
     }
 
