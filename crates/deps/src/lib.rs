@@ -15,6 +15,7 @@ pub mod lockfiles;
 pub mod manifest_edits;
 pub mod model;
 pub mod project;
+pub mod python;
 pub mod registry;
 pub mod semver;
 pub mod walk;

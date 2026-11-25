@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use codemod_deps::manifest_edits::{self, Change};
 use codemod_deps::project::{self, Project};
+use codemod_deps::python::{self, PyChange};
 use codemod_deps::registry::describe;
 use codemod_deps::{semver as versions, Ecosystem, Kind, Registry, Walk};
 use codemod_sandbox::sandbox::engine::PendingFiles;
@@ -96,6 +97,14 @@ impl Files {
         }
     }
 
+    /// The Python manifests (pyproject.toml, requirements*.txt).
+    fn python(&self) -> Vec<python::PyManifest> {
+        python::discover(&self.target)
+            .into_iter()
+            .filter_map(|path| self.read(&path).map(|text| python::read(&path, &text)))
+            .collect()
+    }
+
     fn project(&self) -> Project {
         let paths = project::discover(&self.target);
         let present = project::present_root_files(&self.target);
@@ -104,8 +113,8 @@ impl Files {
 }
 
 /// The project as `dependencies()` sees it, with each declaration resolved.
-fn project_json(project: &Project) -> Value {
-    let packages: Vec<Value> = project
+fn project_json(project: &Project, py: &[python::PyManifest]) -> Value {
+    let mut packages: Vec<Value> = project
         .packages
         .iter()
         .map(|package| {
@@ -136,6 +145,41 @@ fn project_json(project: &Project) -> Value {
             })
         })
         .collect();
+    for manifest in py {
+        let declarations: Vec<Value> = manifest
+            .declarations
+            .iter()
+            .map(|declared| {
+                let pep440 = if versions::valid_range(Ecosystem::Pypi, &declared.range) {
+                    declared.range.clone()
+                } else {
+                    python::to_pep440(&declared.range)
+                };
+                let readable =
+                    !pep440.is_empty() && versions::valid_range(Ecosystem::Pypi, &pep440);
+                json!({
+                    "name": declared.name,
+                    "range": declared.range,
+                    "kind": declared.kind,
+                    "group": declared.group,
+                    "protocol": "pypi",
+                    "resolved": pep440,
+                    "catalog": null,
+                    "local": null,
+                    "readable": readable,
+                })
+            })
+            .collect();
+        packages.push(json!({
+            "ecosystem": "pypi",
+            "dir": manifest.dir,
+            "manifest": manifest.manifest,
+            "name": manifest.name,
+            "version": manifest.version,
+            "member": true,
+            "declarations": declarations,
+        }));
+    }
     let catalogs: Vec<Value> = project
         .catalogs
         .iter()
@@ -159,12 +203,41 @@ fn project_json(project: &Project) -> Value {
 /// Apply manifest changes through the step's files: each file is taken,
 /// edited from the text the step has, and set, so the step commits it.
 fn edit(files: &Files, changes: &str) -> Result<Value, String> {
-    let changes: Vec<Change> =
+    let all: Vec<Value> =
         serde_json::from_str(changes).map_err(|e| format!("bad dependency edit: {e}"))?;
     let pending = files
         .pending
         .as_ref()
         .ok_or("dependency edits run inside a step")?;
+    let (py, npm): (Vec<Value>, Vec<Value>) = all.into_iter().partition(|change| {
+        change
+            .get("manifest")
+            .and_then(Value::as_str)
+            .is_some_and(python::is_manifest)
+    });
+    let mut py_edits = Vec::new();
+    if !py.is_empty() {
+        let py: Vec<PyChange> = serde_json::from_value(Value::Array(py))
+            .map_err(|e| format!("bad dependency edit: {e}"))?;
+        let mut manifests: Vec<&str> = py.iter().map(PyChange::manifest).collect();
+        manifests.dedup();
+        for manifest in manifests {
+            let (mut text, guard) = pending
+                .take(&files.path(manifest))
+                .map_err(|e| format!("cannot read {manifest}: {e}"))?;
+            for change in py.iter().filter(|c| c.manifest() == manifest) {
+                let (next, edits) = python::apply(manifest, &text, change)?;
+                text = next;
+                py_edits.extend(edits);
+            }
+            guard.set(text);
+        }
+    }
+    if npm.is_empty() {
+        return Ok(json!({ "edits": py_edits, "skipped": [] }));
+    }
+    let changes: Vec<Change> = serde_json::from_value(Value::Array(npm))
+        .map_err(|e| format!("bad dependency edit: {e}"))?;
     let project = files.project();
     let mut taken = BTreeMap::new();
     let mut texts = BTreeMap::new();
@@ -186,7 +259,15 @@ fn edit(files: &Files, changes: &str) -> Result<Value, String> {
         }
     }
     drop(taken);
-    Ok(json!({ "edits": edits, "skipped": skipped }))
+    let mut all_edits = serde_json::to_value(&edits).unwrap_or_default();
+    if let Value::Array(list) = &mut all_edits {
+        list.extend(
+            py_edits
+                .iter()
+                .map(|e| serde_json::to_value(e).unwrap_or_default()),
+        );
+    }
+    Ok(json!({ "edits": all_edits, "skipped": skipped }))
 }
 
 /// Parsed graphs, by a hash of everything the parse read: kept for the
@@ -304,7 +385,7 @@ pub(crate) fn install(
     host.set(
         "project",
         Function::new(ctx.clone(), move || {
-            answer(Ok(project_json(&read.project())))
+            answer(Ok(project_json(&read.project(), &read.python())))
         })?,
     )?;
     let edits = Arc::clone(&files);
