@@ -274,7 +274,7 @@ pub async fn handler(
         return Err(error);
     }
 
-    let params = parse_params(args.params.as_deref().unwrap_or(&[]))
+    let mut params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
 
     let dry_run_only_dependency = if resolved_package.dry_run_only {
@@ -297,12 +297,45 @@ pub async fn handler(
             );
         }
     }
-    let dry_run = args.dry_run || pro_dry_run_required;
+    let mut dry_run = args.dry_run || pro_dry_run_required;
+    let mut flags = args.flags.clone();
+    let mut target_path = target_path;
 
-    let capabilities = args.flags.capabilities(codemod_config, None, dry_run);
+    if crate::launcher::enabled(&flags) {
+        use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+        let requested = resolve_capabilities(
+            ResolveCapabilitiesArgs {
+                allow_fs: false,
+                allow_fetch: false,
+                allow_child_process: false,
+            },
+            codemod_config.clone(),
+            None,
+        );
+        let Some(choices) = crate::launcher::setup(crate::launcher::Plan {
+            title: canonical_codemod_name.clone(),
+            workflow: &workflow_path,
+            target: target_path.clone(),
+            params,
+            dry_run,
+            dry_run_locked: pro_dry_run_required,
+            requested,
+            flags: &flags,
+        })
+        .await?
+        else {
+            return Ok(());
+        };
+        choices.apply_to(&mut flags);
+        target_path = choices.target;
+        params = choices.params;
+        dry_run = choices.dry_run || pro_dry_run_required;
+    }
+
+    let capabilities = flags.capabilities(codemod_config, None, dry_run);
 
     if !dry_run {
-        crate::dirty_git_check::dirty_check(args.flags.no_interactive)(
+        crate::dirty_git_check::dirty_check(flags.no_interactive)(
             &target_path,
             args.allow_dirty,
             None,
@@ -329,9 +362,8 @@ pub async fn handler(
             managed_git: args.start.managed_git,
             skip_shard_steps: pro_dry_run_required,
             nested_observer: Some(run_telemetry.nested_observer(telemetry.clone())),
-            ..args
-                .flags
-                .settings(capabilities, registry_client.clone(), &telemetry)
+            allow_dirty: args.allow_dirty,
+            ..flags.settings(capabilities, registry_client.clone(), &telemetry)
         },
     })
     .await;
@@ -365,6 +397,7 @@ pub async fn handler(
         }
     };
     let duration_ms = outcome.duration.as_millis();
+    let dry_run = outcome.dry_run;
 
     if let Some(usage_error) = llm_usage_output_error {
         let error_msg = format!("Workflow completed but failed to write LLM usage: {usage_error}");
@@ -397,7 +430,7 @@ pub async fn handler(
     )
     .await;
 
-    if args.flags.format == OutputFormat::Text {
+    if flags.format == OutputFormat::Text {
         if dry_run {
             print_dry_run_summary(files_modified, files_unmodified, files_with_errors);
         } else {
@@ -413,7 +446,7 @@ pub async fn handler(
 
     if crate::utils::report_prompt::should_show_report(
         args.report,
-        args.flags.no_interactive,
+        flags.no_interactive,
         files_modified,
     ) {
         let report = ExecutionReport::build(

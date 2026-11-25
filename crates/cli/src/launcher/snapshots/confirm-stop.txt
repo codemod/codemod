@@ -1,0 +1,14 @@
+codemod · moment-to-dayjs · run e7470df3 · agent claude-code · model systemone/jev-latest   running
+┌ Steps ─────────────────────────────┐┌ Logs │ Diff · whole run ───────────────────────────────────┐
+│▣ Whole run 2 steps                 ││moment@2.30.1                                               │
+│✓ Who uses moment? 0.2s             ││orders.ts: 3 calls                                          │
+│⠋ Migrate pac┌ Stop the run? ───────────────────────────────────────────────────────┐             │
+│             │The run stops and can be resumed later.                               │             │
+│             │                                                                      │             │
+│             │y stop   n keep running                                               │             │
+│             └──────────────────────────────────────────────────────────────────────┘             │
+│                                    ││                                                            │
+│                                    ││                                                            │
+│                                    ││                                                            │
+└────────────────────────────────────┘└────────────────────────────────────────────────────────────┘
+y stop · n keep running

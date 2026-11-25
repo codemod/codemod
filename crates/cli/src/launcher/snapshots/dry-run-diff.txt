@@ -1,0 +1,14 @@
+codemod · moment-to-dayjs · run 03609be7 · dry run                                             done
+┌ Steps ─────────────────────────────┐┌ Logs │ Diff · whole run ───────────────────────────────────┐
+│▣ Whole run 1 step · 1 file · 1 step││packages/api/src/orders.ts +1 -1                            │
+│✗ Rename toMoment → toDayjs 1.2s    ││@@ -1,2 +1,2 @@                                             │
+│    1 file failed                   ││-import moment from "moment";                               │
+│                                    ││+import dayjs from "dayjs";                                 │
+│                                    ││ const x = 1;                                               │
+│                                    ││                                                            │
+│                                    ││                                                            │
+│                                    ││                                                            │
+│                                    ││                                                            │
+│                                    ││                                                            │
+└────────────────────────────────────┘└────────────────────────────────────────────────────────────┘
+↑↓ step · tab logs/diff · pgup/pgdn scroll · a apply for real · q quit

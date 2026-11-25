@@ -9,22 +9,22 @@ use std::path::PathBuf;
 
 use crate::auth::types::{AuthTokens, UserInfo};
 
-/// `config.json` in the codemod config directory. Other tools write to it
-/// too (an interactive launcher sets `decisionModel` and `agent`), so keys
-/// this version does not know are kept when it is saved.
+/// `config.json` in the codemod config directory. Other parts of the CLI
+/// keep their own keys in the same file (`agent` and `decisionModel`, read by
+/// `user_settings` and by `codemod/assess`), so keys this struct does not name
+/// are kept as they are when it is saved.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    // Defaulted to empty, not to `Config::default()`: the file may hold only
+    // run preferences when nobody has logged in yet, and `load_config_with_env`
+    // then fills in the registry settings, `CODEMOD_REGISTRY_URL` included.
+    #[serde(default)]
     pub default_registry: String,
+    #[serde(default)]
     pub registries: HashMap<String, RegistryAuthConfig>,
     pub anonymous_feedback: AnonymousFeedbackConfig,
-    /// The decision model `codemod/assess` asks, unless the workflow or the
-    /// call names one: `{ "provider": "systemone" | "openai", "model": "..." }`.
-    #[serde(rename = "decisionModel", skip_serializing_if = "Option::is_none")]
-    pub decision_model: Option<codemod_workflow::assess::ModelPreference>,
-    /// The preferred coding agent (`claude-code`, `codex`, ...).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
+    /// Every other key (run preferences, see `user_settings`).
     #[serde(flatten)]
     pub other: serde_json::Map<String, serde_json::Value>,
 }
@@ -59,8 +59,6 @@ impl Config {
             default_registry: registry_url.to_string(),
             registries,
             anonymous_feedback: AnonymousFeedbackConfig::default(),
-            decision_model: None,
-            agent: None,
             other: serde_json::Map::new(),
         }
     }
@@ -116,21 +114,29 @@ impl TokenStorage {
     pub fn load_config_with_env(&self, env: Option<&HashMap<String, String>>) -> Result<Config> {
         let config_path = self.config_dir.join("config.json");
 
-        if !config_path.exists() {
-            let default_registry = env
-                .and_then(|vars| vars.get("CODEMOD_REGISTRY_URL"))
+        let default_registry = || {
+            env.and_then(|vars| vars.get("CODEMOD_REGISTRY_URL"))
                 .map(|value| value.trim())
                 .filter(|value| !value.is_empty())
                 .map(|value| value.to_string())
-                .unwrap_or_else(|| RegistryConfig::default().default_registry);
-            return Ok(Config::with_default_registry(default_registry));
+                .unwrap_or_else(|| RegistryConfig::default().default_registry)
+        };
+        if !config_path.exists() {
+            return Ok(Config::with_default_registry(default_registry()));
         }
 
         let content = fs::read_to_string(&config_path)
             .with_context(|| format!("Failed to read config file: {config_path:?}"))?;
 
-        let config: Config =
+        let mut config: Config =
             serde_json::from_str(&content).context("Failed to parse config file")?;
+        if config.default_registry.trim().is_empty() {
+            // Only preferences were saved: the registry settings are the
+            // defaults, as if there were no file.
+            let defaults = Config::with_default_registry(default_registry());
+            config.default_registry = defaults.default_registry;
+            config.registries.extend(defaults.registries);
+        }
 
         Ok(config)
     }
@@ -380,23 +386,25 @@ mod tests {
         let storage =
             TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
         let config = storage.load_config().expect("config");
-        assert_eq!(config.agent.as_deref(), Some("claude-code"));
-        assert_eq!(
-            config
-                .decision_model
-                .as_ref()
-                .and_then(|d| d.provider.as_deref()),
-            Some("openai")
-        );
         assert!(!config.default_registry.is_empty());
         storage.enable_anonymous_feedback().expect("save");
+        let path = temp_dir.path().join("config.json");
         let saved: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(temp_dir.path().join("config.json")).unwrap())
-                .unwrap();
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["decisionModel"]["model"], "gpt-6-luna");
         assert_eq!(saved["agent"], "claude-code");
         assert_eq!(saved["launcher"]["lastRun"], 1);
         assert_eq!(saved["anonymous_feedback"]["enabled"], true);
+        // Both readers of the preferences still see them after the save.
+        let settings = crate::user_settings::SettingsFile::at(path.clone()).load();
+        assert_eq!(settings.agent.as_deref(), Some("claude-code"));
+        assert_eq!(
+            settings.decision_model.map(|model| model.id()).as_deref(),
+            Some("openai/gpt-6-luna")
+        );
+        let preference = codemod_workflow::assess::config::user_preference(&path).unwrap();
+        assert_eq!(preference.provider.as_deref(), Some("openai"));
+        assert_eq!(preference.model.as_deref(), Some("gpt-6-luna"));
     }
 
     #[test]
@@ -417,6 +425,29 @@ mod tests {
 
         assert!(!config.anonymous_feedback.enabled);
         assert_eq!(config.anonymous_feedback.consented_at, None);
+    }
+
+    #[test]
+    fn a_file_with_only_run_preferences_reads_as_defaults_and_keeps_them() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        fs::write(
+            temp_dir.path().join("config.json"),
+            r#"{ "agent": "codex", "decisionModel": { "provider": "systemone", "model": "jev-latest" } }"#,
+        )
+        .expect("expected config write");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+
+        let config = storage.load_config().expect("config");
+        assert_eq!(config.default_registry, Config::default().default_registry);
+        assert!(config.registries.contains_key(&config.default_registry));
+
+        storage.save_config(&config).expect("save");
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(temp_dir.path().join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved["agent"], "codex");
+        assert_eq!(saved["decisionModel"]["model"], "jev-latest");
     }
 
     #[test]

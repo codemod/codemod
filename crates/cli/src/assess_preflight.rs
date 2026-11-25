@@ -6,7 +6,9 @@
 //! The build knows statically whether the workflow (or a local file it
 //! imports) imports `codemod/assess` ([`codemod_workflow::uses_assess`]).
 //! The provider and model come from the workflow's `codemod.yaml`, the user
-//! config and the environment ([`codemod_workflow::assess::config`]).
+//! config and the environment ([`codemod_workflow::assess::config`]). A model
+//! chosen for this run (`--model`, or the launcher's choice) takes the user
+//! config's place: flag, then saved, then environment, then the default.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -77,10 +79,12 @@ impl Prompts for TerminalPrompts {
 }
 
 /// The decision model for a run of `workflow`: `None` when it does not use
-/// `codemod/assess`. Fails, before anything runs, when the run may not send
+/// `codemod/assess`. `chosen` is the model picked for this run (`--model`, or
+/// in the launcher). Fails, before anything runs, when the run may not send
 /// files to the model or has no key for it and nobody can be asked.
 pub(crate) fn decision_model(
     workflow: &Path,
+    chosen: Option<&crate::user_settings::DecisionModel>,
     allow_ai: bool,
     interactive: bool,
     prompts: &dyn Prompts,
@@ -90,7 +94,26 @@ pub(crate) fn decision_model(
     }
     let env: Env = std::env::vars().collect();
     let layers = Layers::for_workflow(workflow).map_err(anyhow::Error::msg)?;
-    decision_model_with(layers, allow_ai, interactive, prompts, env)
+    decision_model_with(
+        with_chosen(layers, chosen),
+        allow_ai,
+        interactive,
+        prompts,
+        env,
+    )
+}
+
+/// `layers` with the model chosen for this run in the user config's place:
+/// it comes before the saved one and the environment, and after what the
+/// call or the workflow's `codemod.yaml` names.
+fn with_chosen(mut layers: Layers, chosen: Option<&crate::user_settings::DecisionModel>) -> Layers {
+    if let Some(chosen) = chosen {
+        layers.user = ModelPreference {
+            provider: Some(chosen.provider.clone()),
+            model: Some(chosen.model.clone()),
+        };
+    }
+    layers
 }
 
 /// The decision model for a test run of `workflow` (`codemod/testing`):
@@ -139,7 +162,7 @@ fn decision_model_with(
             .map(|path| format!(" or \"decisionModel\" in {}", path.display()))
             .unwrap_or_default();
         let missing = format!(
-            "This workflow uses codemod/assess, which asks {target}, and no API key is set: set {}, or choose another provider with DECISION_PROVIDER{config}.",
+            "This workflow uses codemod/assess, which asks {target}, and no API key is set: set {}, or choose another provider with --model, DECISION_PROVIDER{config}.",
             settings.key_vars()
         );
         if !interactive {
@@ -206,7 +229,7 @@ mod tests {
         let path = dir.path().join("workflow.ts");
         std::fs::write(&path, "export default async function main() {}\n").unwrap();
         let prompts = scripted(false, None);
-        assert!(decision_model(&path, false, false, &prompts)
+        assert!(decision_model(&path, None, false, false, &prompts)
             .unwrap()
             .is_none());
         assert_eq!(prompts.asked.get(), 0);
@@ -268,6 +291,61 @@ mod tests {
             "{error}"
         );
         assert!(error.contains("set OPENAI_API_KEY"), "{error}");
+    }
+
+    #[test]
+    fn a_chosen_model_comes_before_the_saved_one_and_the_environment() {
+        use crate::user_settings::DecisionModel as Chosen;
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.json");
+        std::fs::write(
+            &config,
+            r#"{ "decisionModel": { "provider": "systemone", "model": "jev-saved" } }"#,
+        )
+        .unwrap();
+        let layers = Layers::load(dir.path(), Some(&config)).unwrap();
+        let env = env(&[
+            ("DECISION_PROVIDER", "systemone"),
+            ("DECISION_MODEL", "jev-env"),
+        ]);
+        // What the run asks, as the missing-key message names it.
+        let asks = |layers: Layers| {
+            decision_model_with(layers, true, false, &scripted(true, None), env.clone())
+                .err()
+                .unwrap()
+                .to_string()
+        };
+
+        let saved = asks(with_chosen(layers.clone(), None));
+        assert!(
+            saved.contains("System One (api.typesafe.ai, model jev-saved)"),
+            "{saved}"
+        );
+
+        let flag = Chosen::parse("openai/gpt-flag").unwrap();
+        let chosen = asks(with_chosen(layers.clone(), Some(&flag)));
+        assert!(
+            chosen.contains("OpenAI Decisions (api.openai.com, model gpt-flag)"),
+            "{chosen}"
+        );
+        assert!(chosen.contains("set OPENAI_API_KEY"), "{chosen}");
+        assert!(chosen.contains("--model"), "{chosen}");
+
+        // A bare model is System One's.
+        let bare = Chosen::parse("jev-flag").unwrap();
+        let chosen = asks(with_chosen(layers, Some(&bare)));
+        assert!(
+            chosen.contains("System One (api.typesafe.ai, model jev-flag)"),
+            "{chosen}"
+        );
+
+        // The workflow's codemod.yaml still comes first.
+        let pinned = workflow(
+            dir.path(),
+            Some("name: x\ndecision_model:\n  model: jev-pinned\n"),
+        );
+        let chosen = asks(with_chosen(pinned, Some(&bare)));
+        assert!(chosen.contains("model jev-pinned"), "{chosen}");
     }
 
     #[test]

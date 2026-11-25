@@ -691,12 +691,13 @@ The provider and model come from, first to last:
      provider: systemone
      model: jev-latest
    ```
-3. your user config: `"decisionModel"` in `config.json` in the codemod config directory (`~/.config/codemod/` on Linux, `~/Library/Application Support/codemod/` on macOS, `%APPDATA%\codemod\` on Windows):
+3. the run: `--model <provider>/<model>`, or the model picked in the launcher (which also saves it to your user config);
+4. your user config: `"decisionModel"` in `config.json` in the codemod config directory (`~/.config/codemod/` on Linux, `~/Library/Application Support/codemod/` on macOS, `%APPDATA%\codemod\` on Windows):
    ```json config.json
    { "decisionModel": { "provider": "systemone", "model": "jev-latest" } }
    ```
-4. the environment: `DECISION_PROVIDER` (`systemone` or `openai`) and `DECISION_MODEL` (or `TYPESAFE_DEFAULT_MODEL` for System One);
-5. System One with `jev-latest`.
+5. the environment: `DECISION_PROVIDER` (`systemone` or `openai`) and `DECISION_MODEL` (or `TYPESAFE_DEFAULT_MODEL` for System One);
+6. System One with `jev-latest`.
 
 A level that names a provider only lends its model to that provider: a call that switches to OpenAI does not take a System One model from your config.
 
