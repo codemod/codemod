@@ -20,10 +20,10 @@
 
 use crate::accurate::AccurateAnalyzer;
 use crate::dataflow::{CalleeFact, FileFlow};
-use crate::flow_query::{call_targets, callback_targets, FlowHost};
+use crate::flow_query::{call_targets, callback_targets, functions_from, FlowHost};
 use language_core::{FlowEdgeKind, FlowNodeKind};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Most nodes one argument query visits before it counts as capped.
 const ARGUMENT_WALK_LIMIT: usize = 5_000;
@@ -48,7 +48,22 @@ struct Totals {
     dead_end_kinds: BTreeMap<String, usize>,
     dead_end_samples: HashMap<String, usize>,
     skipped: BTreeMap<String, usize>,
+    functions: usize,
+    callers_known: usize,
+    callers_unknown_why: BTreeMap<&'static str, usize>,
+    named_functions: usize,
+    named_callers_known: usize,
+    named_unknown_why: BTreeMap<&'static str, usize>,
+    blocking_names: HashMap<String, usize>,
 }
+
+/// Globals whose methods are the platform's, never workspace functions:
+/// an unresolved `console.log()` does not make a workspace `log` unknown.
+const BUILTIN_GLOBALS: &[&str] = &[
+    "console", "Math", "JSON", "Object", "Array", "Promise", "Number", "String", "Boolean",
+    "Reflect", "Symbol", "Date", "Error", "Intl", "BigInt", "RegExp", "Map", "Set", "WeakMap",
+    "WeakSet", "URL", "Atomics", "process", "Buffer",
+];
 
 /// Where a value comes from, following only copies (read, assign, alias).
 fn roots(flow: &FileFlow, start: u32) -> Vec<u32> {
@@ -256,6 +271,143 @@ fn argument_query(flow: &FileFlow, content: &str, start: u32, totals: &mut Total
     }
 }
 
+/// The name an unresolved call could reach a workspace function by, or None
+/// when its callee is the platform's or an external package's.
+fn plausible_name(
+    host: &AccurateAnalyzer,
+    path: &Path,
+    flow: &FileFlow,
+    call: &crate::dataflow::CallFact,
+) -> Option<String> {
+    let (node, name) = match &call.callee {
+        CalleeFact::Member { object, property } => (*object, property.to_string()),
+        CalleeFact::Node(callee) => (
+            *callee,
+            flow.nodes[*callee as usize].name.as_deref()?.to_string(),
+        ),
+    };
+    let roots = roots(flow, node);
+    let outside = roots.iter().all(|&root| {
+        let root_node = &flow.nodes[root as usize];
+        match root_node.kind {
+            FlowNodeKind::Global => root_node
+                .name
+                .as_deref()
+                .is_some_and(|n| BUILTIN_GLOBALS.contains(&n) || n == "require"),
+            FlowNodeKind::Import => flow.imports.get(&root).is_some_and(|i| {
+                !i.module.starts_with('.')
+                    && host
+                        .resolve_import(
+                            path,
+                            &i.module,
+                            if i.namespace { "default" } else { &i.name },
+                        )
+                        .is_none()
+                    && host.module_path(path, &i.module).is_none()
+            }),
+            _ => false,
+        }
+    });
+    (!outside && !roots.is_empty()).then_some(name)
+}
+
+/// "Callers known" for one repo: a workspace function counts when
+///
+/// 1. no unresolved call in the workspace could reach it by name: the
+///    unresolved call's method name, or its callee's identifier, equals the
+///    function's name (calls on builtin globals and on packages outside the
+///    workspace are left out: they cannot be workspace code), and
+/// 2. its value never goes where the analysis loses it: an argument of an
+///    unresolved call, a return value, a property write, an array element,
+///    or a JSX prop (all of these let code we cannot see call it).
+///
+/// Object literal members and variables are not escapes: a call through
+/// them either resolves, or falls under rule 1 by name.
+fn measure_callers_known(
+    analyzer: &AccurateAnalyzer,
+    files: &[(PathBuf, std::sync::Arc<FileFlow>)],
+    totals: &mut Totals,
+) {
+    let mut names: HashSet<String> = HashSet::new();
+    let mut escaped: HashMap<(PathBuf, u32), &'static str> = HashMap::new();
+    let mut escape = |functions: Vec<(PathBuf, u32)>, why: &'static str| {
+        for key in functions {
+            escaped.entry(key).or_insert(why);
+        }
+    };
+    for (file, flow) in files {
+        for call in &flow.calls {
+            if !call_targets(analyzer, file, flow, call).is_empty() {
+                continue;
+            }
+            if let Some(name) = plausible_name(analyzer, file, flow, call) {
+                names.insert(name);
+            }
+            for argument in &call.args {
+                escape(
+                    functions_from(analyzer, file, flow, *argument),
+                    "passed to an unresolved call",
+                );
+            }
+        }
+        for node in 0..flow.nodes.len() as u32 {
+            for &(target, edge) in &flow.out_edges[node as usize] {
+                let why = match edge {
+                    FlowEdgeKind::Return => "returned",
+                    FlowEdgeKind::Store => "stored in a property",
+                    FlowEdgeKind::JsxAttribute => "a JSX prop",
+                    FlowEdgeKind::Capture
+                        if flow.nodes[target as usize].kind == FlowNodeKind::Array =>
+                    {
+                        "in an array"
+                    }
+                    _ => continue,
+                };
+                if matches!(
+                    flow.nodes[node as usize].kind,
+                    FlowNodeKind::Literal | FlowNodeKind::Call | FlowNodeKind::Member
+                ) {
+                    continue;
+                }
+                escape(functions_from(analyzer, file, flow, node), why);
+            }
+        }
+    }
+    for (file, flow) in files {
+        for (index, function) in flow.functions.iter().enumerate() {
+            totals.functions += 1;
+            let key = (file.clone(), index as u32);
+            let why = if function.name.as_deref().is_some_and(|n| names.contains(n)) {
+                *totals
+                    .blocking_names
+                    .entry(function.name.as_deref().unwrap_or("").to_string())
+                    .or_default() += 1;
+                Some("an unresolved call uses its name")
+            } else {
+                escaped.get(&key).copied()
+            };
+            let named = function.name.is_some();
+            if named {
+                totals.named_functions += 1;
+            }
+            match why {
+                None => {
+                    totals.callers_known += 1;
+                    if named {
+                        totals.named_callers_known += 1;
+                    }
+                }
+                Some(why) => {
+                    *totals.callers_unknown_why.entry(why).or_default() += 1;
+                    if named {
+                        *totals.named_unknown_why.entry(why).or_default() += 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn measure_repo(root: &Path, totals: &mut Totals) {
     let analyzer = AccurateAnalyzer::new(root.to_path_buf());
     let files = analyzer.workspace_files();
@@ -269,9 +421,13 @@ fn measure_repo(root: &Path, totals: &mut Totals) {
             .or_insert_with(|| (0, failure.file_path.display().to_string()));
         entry.0 += 1;
     }
+    let mut repo_files = Vec::new();
     for file in files {
         if file.components().any(|c| c.as_os_str() == "node_modules") {
             continue;
+        }
+        if let Some(flow) = analyzer.flow(&file) {
+            repo_files.push((file.clone(), flow));
         }
         let (Some(flow), Some(content)) = (analyzer.flow(&file), analyzer.content(&file)) else {
             continue;
@@ -311,6 +467,7 @@ fn measure_repo(root: &Path, totals: &mut Totals) {
             }
         }
     }
+    measure_callers_known(&analyzer, &repo_files, totals);
 }
 
 fn percent(part: usize, whole: usize) -> String {
@@ -380,6 +537,41 @@ fn corpus_metric() {
         t.calls - outside,
         percent(t.resolved, t.calls - outside)
     );
+    let _ = writeln!(
+        out,
+        "callers known, named functions (headline): {} of {} ({})",
+        t.named_callers_known,
+        t.named_functions,
+        percent(t.named_callers_known, t.named_functions)
+    );
+    let mut unknown: Vec<_> = t.named_unknown_why.iter().collect();
+    unknown.sort_by(|a, b| b.1.cmp(a.1));
+    for (why, count) in unknown {
+        let _ = writeln!(
+            out,
+            "  {count:>7} {}  {why}",
+            percent(*count, t.named_functions)
+        );
+    }
+    if std::env::var("DATAFLOW_CORPUS_SAMPLES").is_ok() {
+        let _ = writeln!(
+            out,
+            "  names blocking the most functions: {:?}",
+            top(&t.blocking_names, 30)
+        );
+    }
+    let _ = writeln!(
+        out,
+        "callers known, all functions: {} of {} functions ({})",
+        t.callers_known,
+        t.functions,
+        percent(t.callers_known, t.functions)
+    );
+    let mut unknown: Vec<_> = t.callers_unknown_why.iter().collect();
+    unknown.sort_by(|a, b| b.1.cmp(a.1));
+    for (why, count) in unknown {
+        let _ = writeln!(out, "  {count:>7} {}  {why}", percent(*count, t.functions));
+    }
     let _ = writeln!(out, "unresolved, why:");
     let mut why: Vec<_> = t.unresolved_why.iter().collect();
     why.sort_by(|a, b| b.1.cmp(a.1));

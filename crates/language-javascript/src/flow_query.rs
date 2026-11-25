@@ -480,6 +480,27 @@ fn field_values(flow: &FileFlow, class_node: u32, name: &str) -> Vec<u32> {
         .collect()
 }
 
+/// The workspace functions a value may be (through aliases and imports).
+#[cfg(test)]
+pub(crate) fn functions_from(
+    host: &dyn FlowHost,
+    path: &Path,
+    flow: &Arc<FileFlow>,
+    node: u32,
+) -> Vec<(PathBuf, u32)> {
+    let mut found = Vec::new();
+    origins(host, path, flow, node, &mut HashSet::new(), &mut found);
+    let mut functions = Vec::new();
+    for origin in &found {
+        if let Origin::Node(_, origin_flow, origin_node) = origin {
+            if origin_flow.nodes[*origin_node as usize].kind == FlowNodeKind::Function {
+                functions_of(host, origin, &mut functions);
+            }
+        }
+    }
+    functions
+}
+
 /// Classes deeper than this in an `extends` chain are not looked at.
 const MAX_CLASS_DEPTH: u32 = 16;
 
