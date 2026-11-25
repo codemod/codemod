@@ -127,6 +127,18 @@ impl SgRoot {
 
     /// Throws: module resolution needs the semantic provider.
     #[napi]
+    pub fn importers(&self, _target: Option<Unknown<'_>>) -> Result<Vec<Value>> {
+        Err(no_semantic_provider("importers"))
+    }
+
+    /// Throws: it uses the call graph, which needs the semantic provider.
+    #[napi]
+    pub fn has_top_level_effects(&self) -> Result<bool> {
+        Err(no_semantic_provider("hasTopLevelEffects"))
+    }
+
+    /// Throws: module resolution needs the semantic provider.
+    #[napi]
     pub fn resolve_module(&self, _specifier: String) -> Result<Option<String>> {
         Err(no_semantic_provider("resolveModule"))
     }

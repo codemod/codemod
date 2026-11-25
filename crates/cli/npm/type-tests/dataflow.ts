@@ -102,3 +102,10 @@ for (const caller of node.callers({ transitive: true, stopAt: ["callback"] })) {
 }
 // @ts-expect-error stopAt takes edge kinds
 node.flowsTo({ stopAt: ["callback"] });
+
+// Module helpers on the root.
+const importers = root.importers();
+export const importerKinds: Array<"import" | "export" | "require" | "dynamic" | "mock"> =
+  importers.map((i) => i.kind);
+export const importersComplete: boolean = importers.unparsed.length === 0;
+export const effects: boolean = root.hasTopLevelEffects();

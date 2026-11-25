@@ -195,6 +195,19 @@ On the root, in workspace scope:
 | `root.resolveModule("@/ui")` | The file an import in this file resolves to (tsconfig `paths` with `extends`, workspace packages, index files), or `null` |
 | `root.resolveExport("@/ui", "Modal")` | What the export lands on through barrels and `export *`: a `definition()` result with `exportName` (`"default"` or the name) and `nameNode` |
 | `root.specifierFor(modal.root, { like: "@/ui" })` | A specifier that reaches the file, in the style of `like` (relative or alias, `.js` or not), checked by resolving it: `"@/ui/modal"` |
+| `root.importers(target?)` | Every place that refers to a module (this file by default): `import` (side-effect imports too), `export … from`, `require()`, `import()` and test mocks (`jest.mock`, `vi.importActual`, ...), with `kind`, `specifier` and `unparsed` |
+| `root.hasTopLevelEffects()` | Whether importing the module runs code: a top-level call, an `import "./x"` side-effect import, or a top-level write to an object member |
+
+`specifierFor` keeps to a workspace package's public API: for a file in another package it only
+offers that package's name and its `exports` subpaths (without `exports`, only the name), never a
+relative path or alias into its files. When none reaches the file, it answers `null`, and a
+debarrel rewrite keeps the original import.
+
+```ts
+// Delete a barrel only when nothing imports it any more and skipping it skips no side effects.
+const left = barrel.importers();
+const deletable = left.length === 0 && left.unparsed.length === 0 && !barrel.hasTopLevelEffects();
+```
 
 `definition({ follow: true })` goes from a use of an imported name to its declaration in one call.
 `@jssg/utils` builds a debarrel rewrite on these:

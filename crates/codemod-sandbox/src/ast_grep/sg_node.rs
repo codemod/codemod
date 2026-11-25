@@ -330,6 +330,146 @@ impl<'js> SgRootRjs<'js> {
         }
     }
 
+    /// Whether importing this module runs code: a call made at module top
+    /// level (`program.callees()`), an `import "./x"` side-effect import, or
+    /// a top-level write to an object's member (`registry.x = …`,
+    /// `window.y++`). Declarations alone (functions, classes, constants
+    /// from literals) are not effects. A "may" answer: an unresolved call
+    /// counts, even if it is pure.
+    #[qjs(rename = "hasTopLevelEffects")]
+    pub fn has_top_level_effects(&self, ctx: Ctx<'js>) -> Result<bool> {
+        #[cfg(not(feature = "native"))]
+        {
+            return Err(Exception::throw_message(
+                &ctx,
+                &not_in_wasm("hasTopLevelEffects"),
+            ));
+        }
+        #[cfg(feature = "native")]
+        {
+            let program = self.inner.grep.root();
+            for statement in program.children() {
+                match statement.kind().as_ref() {
+                    "import_statement"
+                        if !statement.children().any(|c| c.kind() == "import_clause") =>
+                    {
+                        return Ok(true);
+                    }
+                    "expression_statement" => {
+                        let writes_member = statement.dfs().any(|n| {
+                            matches!(
+                                n.kind().as_ref(),
+                                "assignment_expression"
+                                    | "augmented_assignment_expression"
+                                    | "update_expression"
+                            ) && n.children().next().is_some_and(|target| {
+                                matches!(
+                                    target.kind().as_ref(),
+                                    "member_expression" | "subscript_expression"
+                                )
+                            })
+                        });
+                        if writes_member {
+                            return Ok(true);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let length = self.inner.grep.root().range().end as u32;
+            let Some(node) =
+                SgNodeRjs::node_in(&self.inner, language_core::ByteRange::new(0, length))
+            else {
+                return Ok(false);
+            };
+            let calls = node.call_graph(ctx.clone(), Opt(None), true)?;
+            Ok(calls.as_array().is_some_and(|calls| !calls.is_empty()))
+        }
+    }
+
+    /// Every place in the workspace that refers to `target` (this root's
+    /// file by default; a path or an SgRoot): `import` and `export … from`
+    /// statements, `require()`, `import()`, and test mocks. An array of
+    /// `{ node, root, kind, specifier }` with `unparsed`.
+    #[qjs(rename = "importers")]
+    pub fn importers(&self, ctx: Ctx<'js>, target: Opt<Value<'js>>) -> Result<Value<'js>> {
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = target;
+            return Err(Exception::throw_message(&ctx, &not_in_wasm("importers")));
+        }
+        #[cfg(feature = "native")]
+        {
+            let (provider, file) = self.module_query(&ctx, "importers")?;
+            let target_path = match target.0 {
+                None => file.clone(),
+                Some(value) if value.is_undefined() || value.is_null() => file.clone(),
+                Some(value) => target_path(&ctx, &file, value, "importers")?,
+            };
+            let found = provider
+                .importers(&target_path)
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
+
+            let result = rquickjs::Array::new(ctx.clone())?;
+            let mut seen = std::collections::HashSet::new();
+            let mut count = 0;
+            for file in &found.files {
+                let root = if file.file_path == file_path_of(&self.inner) {
+                    Arc::clone(&self.inner)
+                } else {
+                    let lang = Lang::from_str(&detect_language_from_path(&file.file_path))
+                        .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
+                    match SgRootRjs::try_new_with_semantic(
+                        AstGrep::new(file.content.clone(), lang),
+                        Some(file.file_path.to_string_lossy().to_string()),
+                        self.inner.semantic_provider.clone(),
+                        self.inner.current_file_path.clone(),
+                        self.inner.target_directory.as_deref(),
+                    ) {
+                        Ok(root) => root.inner,
+                        Err(_) => continue,
+                    }
+                };
+                for importer in &file.importers {
+                    let Some(mut node) = SgNodeRjs::node_in(&root, importer.range) else {
+                        continue;
+                    };
+                    // A static import is found by its binding: report the statement.
+                    if importer.kind == language_core::ImportKind::Import {
+                        if let Some(statement) = node.ancestor_of_kind("import_statement") {
+                            node = statement;
+                        }
+                    }
+                    if !seen.insert(node.key()) {
+                        continue;
+                    }
+                    let object = rquickjs::Object::new(ctx.clone())?;
+                    object.set("node", node)?;
+                    object.set(
+                        "root",
+                        SgRootRjs {
+                            inner: Arc::clone(&root),
+                            _phantom: PhantomData,
+                        },
+                    )?;
+                    object.set("kind", importer.kind.as_str())?;
+                    object.set("specifier", importer.specifier.clone())?;
+                    result.set(count, object)?;
+                    count += 1;
+                }
+            }
+            let unparsed = rquickjs::Array::new(ctx.clone())?;
+            for (index, file) in found.unparsed.iter().enumerate() {
+                let object = rquickjs::Object::new(ctx.clone())?;
+                object.set("path", file.file_path.to_string_lossy().to_string())?;
+                object.set("message", file.message.clone())?;
+                unparsed.set(index, object)?;
+            }
+            result.as_object().set("unparsed", unparsed)?;
+            result.into_js(&ctx)
+        }
+    }
+
     /// A specifier this root's file can import `target` with (a path, or a
     /// root from `definition()`/`resolveExport()`), checked by resolving it;
     /// null when none reaches it. `options.like` keeps the style of the
@@ -349,27 +489,7 @@ impl<'js> SgRootRjs<'js> {
         #[cfg(feature = "native")]
         {
             let (provider, file) = self.module_query(&ctx, "specifierFor")?;
-            let target_path = if let Some(path) = target.as_string() {
-                std::path::PathBuf::from(path.to_string()?)
-            } else if let Ok(root) = rquickjs::Class::<SgRootRjs>::from_value(&target) {
-                match root.borrow().inner.filename.clone() {
-                    Some(name) => std::path::PathBuf::from(name),
-                    None => return Err(Exception::throw_type(
-                        &ctx,
-                        "specifierFor(target): this root was parsed from a string and has no file",
-                    )),
-                }
-            } else {
-                return Err(Exception::throw_type(
-                    &ctx,
-                    "specifierFor(target): target must be a file path or an SgRoot",
-                ));
-            };
-            let target_path = if target_path.is_relative() {
-                file.parent().unwrap_or(&file).join(target_path)
-            } else {
-                target_path
-            };
+            let target_path = target_path(&ctx, &file, target, "specifierFor")?;
             let mut spec_options = language_core::SpecifierOptions::default();
             if let Some(opts) = query_options(&ctx, options, "specifierFor", &["prefer", "like"])? {
                 spec_options.like = opts.get::<_, Option<String>>("like")?;
@@ -421,6 +541,48 @@ impl SgRootRjs<'_> {
         };
         Ok((provider, std::path::PathBuf::from(filename)))
     }
+}
+
+/// A query's `target`: a path (relative to `file`'s directory, or absolute)
+/// or an SgRoot with a file.
+#[cfg(feature = "native")]
+fn target_path<'js>(
+    ctx: &Ctx<'js>,
+    file: &std::path::Path,
+    target: Value<'js>,
+    method: &str,
+) -> Result<std::path::PathBuf> {
+    let path = if let Some(path) = target.as_string() {
+        std::path::PathBuf::from(path.to_string()?)
+    } else if let Ok(root) = rquickjs::Class::<SgRootRjs>::from_value(&target) {
+        match root.borrow().inner.filename.clone() {
+            Some(name) => std::path::PathBuf::from(name),
+            None => {
+                return Err(Exception::throw_type(
+                    ctx,
+                    &format!(
+                        "{method}(target): this root was parsed from a string and has no file"
+                    ),
+                ))
+            }
+        }
+    } else {
+        return Err(Exception::throw_type(
+            ctx,
+            &format!("{method}(target): target must be a file path or an SgRoot"),
+        ));
+    };
+    Ok(if path.is_relative() {
+        file.parent().unwrap_or(file).join(path)
+    } else {
+        path
+    })
+}
+
+/// A root's file, canonicalized, for comparing with provider paths.
+#[cfg(feature = "native")]
+fn file_path_of(root: &SgRootInner) -> std::path::PathBuf {
+    std::path::PathBuf::from(root.canonical_filename())
 }
 
 /// `module` as a path: absolute paths as they are, anything else resolved
@@ -1939,6 +2101,25 @@ impl<'js> SgNodeRjs<'js> {
         .ok()?;
         roots.push((file_path.to_path_buf(), Arc::clone(&root.inner)));
         Some(root.inner)
+    }
+
+    /// The nearest ancestor of this kind.
+    fn ancestor_of_kind(&self, kind: &str) -> Option<Self> {
+        let mut current = self.inner_node.get_node().parent();
+        while let Some(node) = current {
+            if node.kind() == kind {
+                let node_match: NodeMatch<_> = node.into();
+                let static_node_match: NodeMatch<'static, TSDoc> =
+                    unsafe { std::mem::transmute(node_match) };
+                return Some(SgNodeRjs {
+                    root: Arc::clone(&self.root),
+                    inner_node: static_node_match,
+                    _phantom: PhantomData,
+                });
+            }
+            current = node.parent();
+        }
+        None
     }
 
     /// The innermost syntax node with this byte range, or the tightest one around it.

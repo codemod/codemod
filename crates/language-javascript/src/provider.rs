@@ -268,6 +268,10 @@ impl SemanticProvider for OxcSemanticProvider {
             .specifier_for(from_file, target, options))
     }
 
+    fn importers(&self, target: &Path) -> SemanticResult<language_core::ImportersResult> {
+        Ok(self.workspace("importers")?.importers(target))
+    }
+
     fn get_definition(
         &self,
         file_path: &Path,

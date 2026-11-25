@@ -2,8 +2,8 @@
 
 use crate::{
     ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult, FlowOptions,
-    FlowResult, MutationOptions, MutationsResult, ReferencesResult, SemanticError, SemanticResult,
-    SpecifierOptions,
+    FlowResult, ImportersResult, MutationOptions, MutationsResult, ReferencesResult, SemanticError,
+    SemanticResult, SpecifierOptions,
 };
 use std::path::{Path, PathBuf};
 
@@ -177,6 +177,16 @@ pub trait SemanticProvider: Send + Sync {
         _options: &SpecifierOptions,
     ) -> SemanticResult<Option<String>> {
         Err(unsupported("specifierFor"))
+    }
+
+    /// Every place in the workspace that refers to the module at `target`:
+    /// static imports and re-exports, `require`, `import()`, and test mocks
+    /// (`jest.mock`, `vi.importActual`, ...), each resolved to check it
+    /// reaches `target`.
+    ///
+    /// The default is an `Unsupported` error.
+    fn importers(&self, _target: &Path) -> SemanticResult<ImportersResult> {
+        Err(unsupported("importers"))
     }
 
     /// Notify the provider that a file has been processed.

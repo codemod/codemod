@@ -90,6 +90,15 @@ jssg_test! {
     scope: workspace,
 }
 
+jssg_test! {
+    name: test_importers_of_a_module_by_kind,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "js_importers.js",
+    fixture_dir: "javascript/importers",
+    target: "src/lib/index.js",
+    scope: workspace,
+}
+
 // Realistic codemods built on data flow and the call graph. They are the
 // yardstick for the API's ergonomics: each rewrites its fixture and the
 // result must match the expected directory.

@@ -259,6 +259,13 @@ impl SemanticProvider for LazySemanticProvider {
         }
     }
 
+    fn importers(&self, target: &Path) -> SemanticResult<language_core::ImportersResult> {
+        match self.get_or_init(Self::detect_language(target)) {
+            Some(provider) => provider.importers(target),
+            None => Err(unsupported_language("importers", target)),
+        }
+    }
+
     fn notify_file_processed(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
         let lang = Self::detect_language(file_path);
         match self.get_or_init(lang) {

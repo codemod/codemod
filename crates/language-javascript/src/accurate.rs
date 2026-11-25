@@ -1028,6 +1028,111 @@ impl AccurateAnalyzer {
         None
     }
 
+    /// Every place in the workspace that refers to the module at `target`.
+    /// Walks every workspace file once (in parallel; facts are cached), and
+    /// resolves each candidate specifier from its file.
+    pub fn importers(&self, target: &Path) -> language_core::ImportersResult {
+        use language_core::{ImportKind, Importer, ImportersFile};
+        use rayon::prelude::*;
+
+        let target = self.canonical_path(target);
+        let mut files = FlowHost::workspace_files(self);
+        files.sort();
+        let found: Vec<ImportersFile> = files
+            .into_par_iter()
+            .filter_map(|file| {
+                let flow = FlowHost::flow(self, &file)?;
+                let content = FlowHost::content(self, &file)?;
+                let text = |range: ByteRange| {
+                    content
+                        .get(range.start as usize..range.end as usize)
+                        .unwrap_or_default()
+                };
+                let mut candidates: Vec<(ByteRange, ImportKind, String)> = Vec::new();
+                for (&node, import) in &flow.imports {
+                    candidates.push((
+                        flow.nodes[node as usize].range,
+                        ImportKind::Import,
+                        import.module.clone(),
+                    ));
+                }
+                for (&node, module) in &flow.requires {
+                    candidates.push((
+                        flow.nodes[node as usize].range,
+                        ImportKind::Require,
+                        module.clone(),
+                    ));
+                }
+                for (&node, module) in &flow.dynamic_imports {
+                    candidates.push((
+                        flow.nodes[node as usize].range,
+                        ImportKind::Dynamic,
+                        module.clone(),
+                    ));
+                }
+                for call in &flow.calls {
+                    if !MOCK_CALLS.contains(&&*call.callee_text) {
+                        continue;
+                    }
+                    let Some(&first) = call.args.first() else {
+                        continue;
+                    };
+                    let literal = text(flow.nodes[first as usize].range);
+                    let quoted = literal.len() >= 2
+                        && matches!(literal.as_bytes()[0], b'"' | b'\'' | b'`')
+                        && literal.as_bytes()[0] == literal.as_bytes()[literal.len() - 1];
+                    if quoted {
+                        candidates.push((
+                            call.range,
+                            ImportKind::Mock,
+                            literal[1..literal.len() - 1].to_string(),
+                        ));
+                    }
+                }
+                if let Some((symbols, _)) = self.cache.get(&file) {
+                    for export in &symbols.exports {
+                        if let Some(module) = &export.re_export_from {
+                            candidates.push((export.range, ImportKind::Export, module.clone()));
+                        }
+                    }
+                }
+                // `import "./x"`: no binding, so not in the facts.
+                for (range, module) in side_effect_imports(&content) {
+                    candidates.push((range, ImportKind::Import, module));
+                }
+
+                let mut resolved: HashMap<String, bool> = HashMap::new();
+                let mut importers: Vec<Importer> = candidates
+                    .into_iter()
+                    .filter(|(_, _, specifier)| {
+                        *resolved.entry(specifier.clone()).or_insert_with(|| {
+                            self.resolve_module_path(&file, specifier).as_ref() == Some(&target)
+                        })
+                    })
+                    .map(|(range, kind, specifier)| Importer {
+                        range,
+                        kind,
+                        specifier,
+                    })
+                    .collect();
+                if importers.is_empty() {
+                    return None;
+                }
+                importers.sort_by_key(|i| (i.range.start, i.range.end));
+                importers.dedup_by_key(|i| (i.range.start, i.range.end));
+                Some(ImportersFile {
+                    file_path: file,
+                    content: content.to_string(),
+                    importers,
+                })
+            })
+            .collect();
+        language_core::ImportersResult {
+            files: found,
+            unparsed: FlowHost::parse_failures(self),
+        }
+    }
+
     /// A specifier an import in `from_file` can use to reach `target`.
     ///
     /// Candidates are the relative path and every tsconfig `paths` alias
@@ -1710,6 +1815,52 @@ fn walk_vfs_tree(start: &VfsPath, prefix: &str, on_file: &mut dyn FnMut(&Path)) 
         }
     }
     recurse(start, prefix, on_file);
+}
+
+/// Calls that name a module for a test framework's mocks.
+const MOCK_CALLS: [&str; 10] = [
+    "jest.mock",
+    "jest.doMock",
+    "jest.unmock",
+    "jest.requireActual",
+    "jest.requireMock",
+    "vi.mock",
+    "vi.doMock",
+    "vi.unmock",
+    "vi.importActual",
+    "vi.importMock",
+];
+
+/// `import "m";` statements (no bindings), by a scan of the source: their
+/// range (the statement) and specifier. Comments and strings are skipped by
+/// requiring the statement to start a line.
+fn side_effect_imports(content: &str) -> Vec<(ByteRange, String)> {
+    let mut out = Vec::new();
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if let Some(rest) = trimmed.strip_prefix("import") {
+            let rest_trimmed = rest.trim_start();
+            if let Some(quote) = rest_trimmed
+                .chars()
+                .next()
+                .filter(|c| *c == '"' || *c == '\'')
+            {
+                if let Some(end) = rest_trimmed[1..].find(quote) {
+                    let specifier = &rest_trimmed[1..1 + end];
+                    let start = offset + indent;
+                    let stmt_len = trimmed.trim_end().len();
+                    out.push((
+                        ByteRange::new(start as u32, (start + stmt_len) as u32),
+                        specifier.to_string(),
+                    ));
+                }
+            }
+        }
+        offset += line.len();
+    }
+    out
 }
 
 /// `a/./b/../c` as `a/c`, without touching the filesystem (a `paths` or

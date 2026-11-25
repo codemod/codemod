@@ -18,7 +18,9 @@ pub use dataflow::{
     MutationOptions, MutationsResult, UnparsedFile,
 };
 pub use error::{SemanticError, SemanticResult};
-pub use modules::{SpecifierOptions, SpecifierStyle};
+pub use modules::{
+    ImportKind, Importer, ImportersFile, ImportersResult, SpecifierOptions, SpecifierStyle,
+};
 pub use noop::NoopSemanticProvider;
 pub use provider::{ProviderMode, SemanticProvider};
 pub use types::{

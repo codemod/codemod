@@ -429,6 +429,48 @@ declare module "codemod:ast-grep" {
      * ```
      */
     specifierFor(target: string | SgRoot<M>, options?: SpecifierOptions): string | null;
+
+    /**
+     * Every place in the workspace that refers to `target` (this root's file
+     * when omitted; a path relative to this file, an absolute path, or an
+     * SgRoot): `import` statements (side-effect imports too), `export … from`,
+     * `require()`, `import()`, and test-framework mocks (`jest.mock`,
+     * `jest.requireActual`, `vi.mock`, `vi.importActual`, ...). Each
+     * specifier is resolved from its file, so aliases and barrels count.
+     *
+     * Walks every workspace file (once; facts are cached). `unparsed` lists
+     * files that did not parse: references in them are missing.
+     *
+     * @throws as `resolveModule()` does.
+     * @experimental
+     * @example
+     * ```ts
+     * // Can this barrel be deleted? Not while anything still imports it.
+     * const left = root.importers();
+     * if (left.length === 0 && left.unparsed.length === 0) {
+     *   // no importers in the workspace
+     * }
+     * ```
+     */
+    importers(target?: string | SgRoot<M>): Array<ImporterEntry<M>> & { unparsed: UnparsedFile[] };
+
+    /**
+     * Whether importing this module runs code: a call made at module top
+     * level (what `root.root().callees()` answers), an `import "./x"`
+     * side-effect import, or a top-level write to an object member
+     * (`registry.x = …`). Declarations alone are not effects. A "may" answer:
+     * an unresolved call counts even if it is pure, and a side-effect import
+     * counts without looking at the imported module.
+     *
+     * @throws as `resolveModule()` does.
+     * @experimental
+     * @example
+     * ```ts
+     * // Skipping a barrel also skips its side effects: keep it when it has some.
+     * if (barrel.hasTopLevelEffects()) return null;
+     * ```
+     */
+    hasTopLevelEffects(): boolean;
     /**
      * Rename the current file to a new path.
      *
@@ -726,6 +768,26 @@ declare module "codemod:ast-grep" {
      * ```
      */
     follow?: boolean;
+  }
+
+  /** One place that refers to a module, from `root.importers()`. */
+  export interface ImporterEntry<M extends TypesMap = TypesMap> {
+    /**
+     * The `import` or `export … from` statement, or the `require(…)`,
+     * `import(…)` or mock call.
+     */
+    node: SgNode<M>;
+    root: SgRoot<M>;
+    /**
+     * - 'import': `import … from "m"`, `import "m"`
+     * - 'export': `export … from "m"`, `export * from "m"`
+     * - 'require': `require("m")`
+     * - 'dynamic': `import("m")`
+     * - 'mock': `jest.mock("m")`, `jest.requireActual("m")`, `vi.mock("m")`, `vi.importActual("m")`, ...
+     */
+    kind: "import" | "export" | "require" | "dynamic" | "mock";
+    /** The specifier as written. */
+    specifier: string;
   }
 
   export interface SpecifierOptions {

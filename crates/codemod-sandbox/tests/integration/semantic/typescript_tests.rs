@@ -193,6 +193,15 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_has_top_level_effects,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_has_top_level_effects.js",
+    fixture_dir: "typescript/side_effect_barrel",
+    target: "src/App.ts",
+    scope: workspace,
+}
+
+jssg_test! {
     name: test_specifier_for_respects_package_exports,
     language: CodemodLang::Static(SupportLang::TypeScript),
     codemod: "ts_specifier_package_boundary.js",
