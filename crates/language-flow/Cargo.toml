@@ -1,0 +1,11 @@
+[package]
+name = "language-flow"
+version.workspace = true
+edition = "2021"
+description = "Language-neutral value-flow facts and the flow, mutation and call-graph queries over them"
+
+[dependencies]
+language-core = { workspace = true }
+parking_lot = "0.12"
+rayon = "1.10"
+rustc-hash = "2"

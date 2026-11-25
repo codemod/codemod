@@ -6,6 +6,7 @@ description = "JavaScript/TypeScript semantic analysis provider using oxc"
 
 [dependencies]
 language-core = { workspace = true }
+language-flow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

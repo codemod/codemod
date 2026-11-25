@@ -3619,11 +3619,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "language-flow"
+version = "1.18.7"
+dependencies = [
+ "language-core",
+ "parking_lot",
+ "rayon",
+ "rustc-hash",
+]
+
+[[package]]
 name = "language-javascript"
 version = "1.18.7"
 dependencies = [
  "ignore",
  "language-core",
+ "language-flow",
  "libc",
  "log",
  "oxc 0.99.0",

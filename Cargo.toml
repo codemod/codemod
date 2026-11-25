@@ -13,6 +13,7 @@ members = [
     "xtask",
     "crates/llrt-capabilities",
     "crates/language-core",
+    "crates/language-flow",
     "crates/language-javascript",
     "crates/language-python",
     "crates/semantic-factory",
@@ -53,6 +54,7 @@ testing-utils = { path = "crates/testing-utils" }
 rmcp = { version = "0.8", features = ["server"] }
 codemod-llrt-capabilities = { path = "crates/llrt-capabilities" }
 language-core = { path = "crates/language-core" }
+language-flow = { path = "crates/language-flow" }
 language-javascript = { path = "crates/language-javascript" }
 language-python = { path = "crates/language-python" }
 semantic-factory = { path = "crates/semantic-factory" }
