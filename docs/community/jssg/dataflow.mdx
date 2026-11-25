@@ -32,15 +32,27 @@ The methods use the step's semantic analysis. Set `semanticAnalysis: "file"` (th
 graph across files and for module resolution:
 
 ```ts workflow.ts
-await step("Parameterize queries", jssg("./scripts/sql.ts", {
-  language: "typescript",
-  semanticAnalysis: "workspace",
-}));
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+import transform from "./scripts/sql.ts";
+
+export default async function main() {
+  await step(
+    "Parameterize queries",
+    forEachFile(
+      { include: "src/**/*.ts", language: "typescript", semanticAnalysis: "workspace" },
+      (file) => {
+        const out = transform(parse(file));
+        if (typeof out === "string") file.write(out);
+      },
+    ),
+  );
+}
 ```
 
-In `workflow.yaml`, use `semantic_analysis: workspace`; with `codemod jssg run`, pass
-`--semantic-workspace <dir>`. Roots that a `forEachFile` callback parses with `parse(file)` get the
-selector's analysis too.
+Roots that the callback parses with `parse(file)` get the selector's analysis. In `workflow.yaml`,
+use `semantic_analysis: workspace` on the `js-ast-grep` step; with `codemod jssg run`, pass
+`--semantic-workspace <dir>`.
 
 <Note>
   The queries **throw** instead of answering `[]` when they cannot run: semantic analysis is off,
@@ -321,6 +333,50 @@ for (const step of literal.flowsTo({ stopAt: ["jsx-attribute", "jsx-child", "ret
 }
 // A prop of a component: element.callees().find((c) => c.via === "jsx") is the component.
 ```
+
+### Type-check gate
+
+A codemod that removes or moves files (a barrel set aside as `index.barrel.bak.ts`) should prove
+the project still type-checks, and undo the changes that broke it. The checker runs in workflow
+`shell` steps; [`@jssg/utils/javascript/typecheck`](/community/jssg/utils/javascript#type-check-gate)
+maps its errors back to the changes:
+
+```ts workflow.ts
+import { step, forEachFile, shell, fail } from "codemod/workflow";
+import { parseTypeErrors, newTypeErrors, typeErrorCauses } from "@jssg/utils/javascript/typecheck";
+import debarrel from "./scripts/debarrel.ts"; // a forEachFile callback: rewrites imports, file.rename()s barrels
+
+export default async function main() {
+  const tsc = () => shell("npx tsc --noEmit -p . --pretty false", { allowFailure: true });
+  const before = parseTypeErrors((await step("Type check (before)", tsc())).stdout);
+
+  await step(
+    "Debarrel",
+    forEachFile({ include: "src/**/*.{ts,tsx}", language: "tsx", semanticAnalysis: "workspace" }, debarrel),
+  );
+
+  // The barrels the codemod set aside.
+  const { stdout } = await step("Removed barrels", shell("git ls-files --others --exclude-standard -- '*.barrel.bak.*'"));
+  const removed = stdout.split("\n").filter(Boolean)
+    .map((bak) => ({ from: bak.replace(".barrel.bak", ""), to: null, bak }));
+
+  const after = parseTypeErrors((await step("Type check (after)", tsc())).stdout);
+  const causes = typeErrorCauses(newTypeErrors(before, after), removed);
+
+  // Put back each barrel a new error points at, then check once more.
+  const restore = removed.filter((change) => causes.has(change));
+  if (restore.length > 0) {
+    for (const change of restore) await step(`Restore ${change.from}`, shell`mv ${change.bak} ${change.from}`);
+    const again = newTypeErrors(before, parseTypeErrors((await step("Type check (again)", tsc())).stdout));
+    if (again.length > 0) fail(`${again.length} new type errors after restoring ${restore.length} barrels`);
+  }
+  if (causes.has(null)) fail(`${causes.get(null)!.length} new type errors not caused by a removed barrel: review the edits`);
+}
+```
+
+A restored barrel's consumers stay rewritten: the barrel comes back for whatever still needed it
+(an import the codemod could not see, such as a non-TypeScript consumer or a generated file). The
+step names say which barrels were restored.
 
 ## Soundness: what "may" means
 

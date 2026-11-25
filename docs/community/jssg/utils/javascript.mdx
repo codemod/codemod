@@ -577,6 +577,33 @@ for (const mock of root.importers(barrel)) {
 // jest.mock("./components/Button");
 ```
 
+## Type-check gate
+
+```typescript
+import { parseTypeErrors, newTypeErrors, typeErrorCauses } from "@jssg/utils/javascript/typecheck";
+```
+
+For codemods that move or remove files: run the project's checker before and after in workflow `shell` steps, keep the errors the codemod introduced, and find the file change behind each. See [the workflow pattern](/community/jssg/dataflow#type-check-gate).
+
+## `parseTypeErrors`
+
+The errors in `tsc` output, plain (`src/a.ts(3,10): error TS2307: …`) or `--pretty` (`src/a.ts:3:10 - error TS2307: …`): `{ file, line, column, code, message }`.
+
+## `newTypeErrors`
+
+Errors in `after` that were not in `before`, compared by file, code and message (lines move under a codemod).
+
+## `typeErrorCauses`
+
+Groups errors by the `{ from, to }` file change that caused them: a "cannot find module" error (`TS2307`, `TS2305`, `TS2614`) whose relative specifier resolves to a removed or moved file, or any error in a moved file. Errors with no file change behind them come back under `null`. Pass a resolver for aliases.
+
+```typescript
+const causes = typeErrorCauses(newTypeErrors(before, after), [
+  { from: "src/components/index.ts", to: null },
+]);
+causes.get(null); // errors the codemod's edits caused: review them
+```
+
 ---
 
 ## Common Patterns
