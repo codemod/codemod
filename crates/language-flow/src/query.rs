@@ -1432,6 +1432,28 @@ pub fn entry_points(host: &dyn FlowHost, path: &Path, range: ByteRange) -> Vec<E
     found
 }
 
+/// Every function in the workspace that is called from outside its code,
+/// with why: `(file, function range, entry points)`, in file and range order.
+pub fn all_entry_points(host: &dyn FlowHost) -> Vec<(PathBuf, ByteRange, Vec<EntryPoint>)> {
+    let mut found = Vec::new();
+    for path in host.workspace_files() {
+        let Some(flow) = host.flow(&path) else {
+            continue;
+        };
+        for (index, fact) in flow.functions.iter().enumerate() {
+            let mut entries = host.entry_points_of(&path, &flow, index as u32);
+            if entries.is_empty() {
+                continue;
+            }
+            entries.sort();
+            entries.dedup();
+            found.push((path.clone(), fact.range, entries));
+        }
+    }
+    found.sort_by(|a, b| (&a.0, a.1.start, a.1.end).cmp(&(&b.0, b.1.start, b.1.end)));
+    found
+}
+
 /// Where a callees walk starts inside its first function.
 #[derive(Clone, Copy)]
 enum FirstStep {

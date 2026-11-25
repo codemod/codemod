@@ -284,3 +284,86 @@ async fn test_callees_through_types_interface() {
     let result = run_test(config).await;
     assert!(result.is_ok(), "Test failed: {:?}", result.err());
 }
+
+// Analyses as values: lookups, lookup(edges), crawl() and join().
+
+jssg_test! {
+    name: test_lookup_get_answers_edges_leaving_a_node,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_lookup_get.js",
+    fixture_dir: "typescript/analyses",
+    target: "client.ts",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_builtin_lookup_cannot_be_listed,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_lookup_builtin_not_listable.js",
+    fixture_dir: "typescript/analyses",
+    target: "client.ts",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_lookup_from_edges_matches_by_syntax_node,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_lookup_from_edges.js",
+    fixture_dir: "typescript/analyses",
+    target: "client.ts",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_lookup_from_edges_rejects_non_nodes,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_lookup_rejects_non_nodes.js",
+    fixture_dir: "typescript/analyses",
+    target: "client.ts",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_crawl_reaches_nodes_with_the_edge_that_reached_them,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_crawl_reaches.js",
+    fixture_dir: "typescript/analyses",
+    target: "client.ts",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_crawl_does_not_walk_past_stop_at,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_crawl_stop_at.js",
+    fixture_dir: "typescript/analyses",
+    target: "client.ts",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_crawl_rejects_a_map,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_crawl_rejects_map.js",
+    fixture_dir: "typescript/analyses",
+    target: "client.ts",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_join_links_patterns_by_captured_name,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_join_links_patterns.js",
+    fixture_dir: "typescript/analyses",
+    target: "client.ts",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_join_resolves_captures_and_falls_back_to_text,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_join_by.js",
+    fixture_dir: "typescript/join_by",
+    target: "bus.ts",
+    scope: workspace,
+}

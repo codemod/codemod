@@ -1,3 +1,5 @@
+#[cfg(feature = "native")]
+pub(crate) mod analysis;
 pub(crate) mod sg_node;
 mod types;
 pub(crate) mod utils;
@@ -55,6 +57,19 @@ pub use native::{
     with_combined_scan, with_combined_scan_of, LanguageScan, ScanPass,
 };
 
+/// The analyses `codemod/ast-grep` exports beside `parse` (`analysis.rs`).
+#[cfg(feature = "native")]
+const ANALYSIS_EXPORTS: &[&str] = &[
+    "callGraph",
+    "dataflow",
+    "symbols",
+    "types",
+    "entryPoints",
+    "lookup",
+    "join",
+    "crawl",
+];
+
 /// The `codemod/ast-grep` runtime module. Public so other hosts can register
 /// it in their own QuickJS runtimes.
 #[allow(dead_code)]
@@ -74,6 +89,10 @@ impl ModuleDef for AstGrepModule {
         declare.declare("jssgTransform")?;
         #[cfg(feature = "native")]
         declare.declare("createFile")?;
+        #[cfg(feature = "native")]
+        for name in ANALYSIS_EXPORTS {
+            declare.declare(*name)?;
+        }
         Ok(())
     }
 
@@ -92,6 +111,34 @@ impl ModuleDef for AstGrepModule {
             exports.export("jssgTransform", Func::from(jssg_transform_rjs))?;
             default.set("createFile", Func::from(create_file_rjs))?;
             exports.export("createFile", Func::from(create_file_rjs))?;
+            Class::<analysis::Lookup>::define(&default)?;
+            let analyses: [(&str, Function); 8] = [
+                (
+                    "callGraph",
+                    Function::new(ctx.clone(), analysis::call_graph_rjs)?,
+                ),
+                (
+                    "dataflow",
+                    Function::new(ctx.clone(), analysis::dataflow_rjs)?,
+                ),
+                (
+                    "symbols",
+                    Function::new(ctx.clone(), analysis::symbols_rjs)?,
+                ),
+                ("types", Function::new(ctx.clone(), analysis::types_rjs)?),
+                (
+                    "entryPoints",
+                    Function::new(ctx.clone(), analysis::entry_points_rjs)?,
+                ),
+                ("lookup", Function::new(ctx.clone(), analysis::lookup_rjs)?),
+                ("join", Function::new(ctx.clone(), analysis::join_rjs)?),
+                ("crawl", Function::new(ctx.clone(), analysis::crawl_rjs)?),
+            ];
+            for (name, function) in analyses {
+                let function = function.with_name(name)?;
+                default.set(name, function.clone())?;
+                exports.export(name, function)?;
+            }
         }
         exports.export("default", default)?;
         exports.export("parse", Func::from(parse_rjs))?;

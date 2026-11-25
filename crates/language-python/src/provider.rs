@@ -300,6 +300,13 @@ impl SemanticProvider for RuffSemanticProvider {
         self.flow.entry_points(file_path, &content, range)
     }
 
+    fn list_entry_points(
+        &self,
+        _language: &str,
+    ) -> SemanticResult<Vec<language_core::FunctionEntryPoints>> {
+        Ok(self.flow.all_entry_points())
+    }
+
     fn get_mutations(
         &self,
         file_path: &Path,

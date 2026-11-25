@@ -1813,6 +1813,20 @@ impl AccurateAnalyzer {
         Ok(flow_query::entry_points(self, file_path, range))
     }
 
+    /// Every function in the workspace that is called from outside its code.
+    pub fn all_entry_points(&self) -> Vec<language_core::FunctionEntryPoints> {
+        flow_query::all_entry_points(self)
+            .into_iter()
+            .map(
+                |(file_path, range, entry_points)| language_core::FunctionEntryPoints {
+                    file_path,
+                    range,
+                    entry_points,
+                },
+            )
+            .collect()
+    }
+
     pub fn set_entry_point_rules(&self, rules: Vec<EntryPointRule>) {
         *self.entry_point_rules.write() = rules;
     }

@@ -39,6 +39,16 @@ pub struct EntryPoint {
     pub label: String,
 }
 
+/// A function in the workspace that is called from outside its code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionEntryPoints {
+    pub file_path: std::path::PathBuf,
+    /// The function's range.
+    pub range: crate::ByteRange,
+    /// Why it is an entry point; never empty.
+    pub entry_points: Vec<EntryPoint>,
+}
+
 /// What a provider knows about one function, for the declared rules.
 #[derive(Debug, Clone, Default)]
 pub struct FunctionEntry<'a> {

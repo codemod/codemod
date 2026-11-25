@@ -1567,4 +1567,149 @@ declare module "codemod:ast-grep" {
    * @experimental
    */
   export function createFile(path: string, text: string): void;
+
+  // ---- Analyses as values ---------------------------------------------------
+
+  /** A language an analysis covers. */
+  export type AnalysisLanguage = "typescript" | "tsx" | "javascript" | "jsx" | "python";
+
+  /** One edge of a lookup: the node it reaches, and what the lookup knows about the hop. */
+  export type Edge<To = SgNode, Meta = {}> = { node: To } & Meta;
+
+  /**
+   * A read-only map from a node to the edges that leave it. Nodes match by
+   * syntax node (`node.key()`), not by object, so a node from another query
+   * finds its edges. `get(node)` is `undefined` when no edge leaves it.
+   *
+   * Built-in lookups (`callGraph`, `dataflow`, `symbols`) are answered node
+   * by node and can't be listed: `size`, `keys()` and iteration throw.
+   * Lookups from `lookup()` and `join()` list their edges, as a Map does.
+   */
+  export interface Lookup<From = SgNode, To = SgNode, Meta = {}>
+    extends ReadonlyMap<From, ReadonlyArray<Edge<To, Meta>>> {
+    readonly [Symbol.toStringTag]: "Lookup";
+  }
+
+  /** Where a call is: the call expression. */
+  export interface SiteMeta {
+    site: SgNode;
+  }
+
+  /** `callGraph(lang)`: who calls a function, and whom it calls (resolved calls only). */
+  export function callGraph(language: AnalysisLanguage): {
+    callers: Lookup<SgNode, SgNode, SiteMeta & { via: CallEdgeKind }>;
+    callees: Lookup<SgNode, SgNode, SiteMeta & { via: CallEdgeKind }>;
+  };
+
+  /** One hop of a value: what kind of node, and how it got there. */
+  export interface FlowMeta {
+    kind: FlowNodeKind;
+    via: FlowEdgeKind;
+    name: string | null;
+    index: number | null;
+    boundary: string | null;
+  }
+
+  /** `dataflow(lang)`: where a value comes from one hop back, and where it goes one hop on. */
+  export function dataflow(language: AnalysisLanguage): {
+    sources: Lookup<SgNode, SgNode, FlowMeta>;
+    uses: Lookup<SgNode, SgNode, FlowMeta>;
+  };
+
+  /**
+   * `symbols(lang)`: an identifier's definition (through imports, to the
+   * declaration, as `definition({ follow: true })`), and a definition's references.
+   */
+  export function symbols(language: AnalysisLanguage): {
+    definition: Lookup<SgNode, SgNode, { kind: DefinitionKind; exportName: string | null }>;
+    references: Lookup<SgNode, SgNode>;
+  };
+
+  /**
+   * `types(lang)`: an expression's type from the TypeScript 7 checker, or
+   * `undefined`. Importing `types` turns the checker on for the step.
+   */
+  export function types(language: "typescript" | "tsx" | "javascript" | "jsx"): {
+    typeOf: ReadonlyMap<SgNode, string>;
+  };
+
+  /**
+   * `entryPoints(lang)`: every function in the workspace something outside
+   * its code calls (package exports, and `semanticAnalysis.entryPoints`
+   * rules). `node.entryPoints()` says why.
+   */
+  export function entryPoints(language: AnalysisLanguage): SgNode[];
+
+  /**
+   * A lookup from `[from, to, meta?]` edges. Both ends must be nodes; the
+   * error names the edge that is not. Built once, read-only.
+   *
+   * @example
+   * ```ts
+   * const renders = lookup(pages.map((page) => [page, page.find("<$C $$$/>")!, { via: "jsx" }]));
+   * ```
+   */
+  export function lookup<From extends SgNode = SgNode, To extends SgNode = SgNode, Meta extends object = {}>(
+    edges: Iterable<readonly [From, To] | readonly [From, To, Meta]>,
+  ): Lookup<From, To, Meta>;
+
+  /** One side of a `join`. */
+  export interface JoinSide<M extends TypesMap = TypesMap> {
+    /** A pattern, or a rule as `findAll()` takes. */
+    find: string | { rule: Rule<M> };
+    /** The metavariable whose captured text joins the two sides, like "$NAME". */
+    on: string;
+    /** Which node the edge holds: the match (default), or the function around it. */
+    anchor?: "match" | "function";
+  }
+
+  /**
+   * A lookup from two patterns matched across the workspace: an edge from
+   * each `from` match to each `to` match whose `on` metavariables captured
+   * the same thing. Built in Rust, in one pass. Each edge has `site` (the
+   * `from` match), `name` (the captured text) and `meta`.
+   *
+   * By default, two captures that both resolve (an imported function, a
+   * variable) join when they resolve to the same declaration; when either
+   * doesn't (a string, a property without types), when their text is equal.
+   * So results get more precise with types on: a tRPC client's
+   * `trpc.user.getUser` resolves only through the TypeScript 7 checker.
+   * `by: "text"` compares text only; `by: symbols(lang).definition` (or any
+   * lookup) resolves only, and drops what doesn't resolve. For text that
+   * needs normalizing, build the edges with `lookup()`.
+   *
+   * @example
+   * ```ts
+   * // tRPC: a client call reaches the procedure it names.
+   * const procedures = join({
+   *   from: { find: "trpc.$R.$P.$M($$$)", anchor: "function", on: "$P" },
+   *   to: { find: { rule: { pattern: { context: "({ $P: publicProcedure.$M($$$) })", selector: "pair" } } }, on: "$P" },
+   *   meta: { via: "trpc" },
+   * });
+   * ```
+   */
+  export function join<Meta extends object = {}>(spec: {
+    from: JoinSide;
+    to: JoinSide;
+    meta?: Meta;
+    /** How captures are compared; see above. */
+    by?: "text" | Lookup<SgNode, SgNode, any>;
+    /** The language to match; the step's language when it has one. */
+    language?: AnalysisLanguage;
+  }): Lookup<SgNode, SgNode, SiteMeta & { name: string } & Meta>;
+
+  /** How `crawl` reached a node: the edge, and the node it left from. */
+  export type Reached<Meta = {}> = Edge<SgNode, Meta> & { from: SgNode };
+
+  /**
+   * Every node reached from `start` through the lookups' edges, breadth
+   * first, each once. Maps each node to the edge that reached it first, and
+   * each start node to `null`. Never walks past a node in `stopAt` (it is
+   * still reached). Takes lookups only: make a Map into one with `lookup()`.
+   */
+  export function crawl<Meta = {}>(
+    lookups: Lookup<SgNode, SgNode, Meta> | ReadonlyArray<Lookup<SgNode, SgNode, any>>,
+    start: SgNode | Iterable<SgNode>,
+    options?: { stopAt?: Iterable<SgNode> },
+  ): Promise<ReadonlyMap<SgNode, Reached<Meta> | null>>;
 }

@@ -260,6 +260,82 @@ pub(crate) fn semantic_mode(
     })
 }
 
+/// The analyses `codemod/ast-grep` exports. Code that imports one asks
+/// whole-workspace questions.
+const ANALYSES: &[&str] = &[
+    "callGraph",
+    "dataflow",
+    "symbols",
+    "types",
+    "entryPoints",
+    "join",
+    "crawl",
+];
+
+/// The semantic analysis code gets when it names none: workspace scope when
+/// it imports an analysis from `codemod/ast-grep` (with the TypeScript 7
+/// checker when it imports `types`), otherwise what `semanticAnalysis`
+/// says.
+pub(crate) fn semantic_mode_for(
+    task: &TaskContext<'_>,
+    option: Option<&Value>,
+    code: &str,
+) -> Result<SemanticMode, String> {
+    match (option, imported_analyses(code)) {
+        (None, imported) if !imported.is_empty() => {
+            let types = if imported.contains(&"types") {
+                SemanticTypes::Ts7
+            } else {
+                SemanticTypes::Off
+            };
+            Ok(SemanticMode::Workspace(task.run.target.clone(), types))
+        }
+        _ => semantic_mode(task, option),
+    }
+}
+
+/// The analyses `code` imports from `codemod/ast-grep`, by name or through
+/// a namespace (`sg.callGraph(...)`).
+pub(crate) fn imported_analyses(code: &str) -> Vec<&'static str> {
+    static IMPORT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"import\s+(?:type\s+)?([^;]*?)\s*from\s*["']codemod[/:]ast-grep["']"#)
+            .expect("a valid pattern")
+    });
+    let mut found = Vec::new();
+    for clause in IMPORT
+        .captures_iter(code)
+        .map(|c| c.get(1).map_or("", |m| m.as_str()))
+    {
+        if let Some(named) = clause
+            .split_once('{')
+            .and_then(|(_, rest)| rest.split_once('}'))
+        {
+            for name in named.0.split(',') {
+                let name = name.trim().trim_start_matches("type ").trim();
+                let name = name.split_whitespace().next().unwrap_or("");
+                if let Some(analysis) = ANALYSES.iter().find(|a| **a == name) {
+                    found.push(*analysis);
+                }
+            }
+        }
+        let namespace = clause
+            .split_once("* as ")
+            .map(|(_, rest)| rest.trim())
+            .or_else(|| (!clause.contains('{')).then(|| clause.trim()))
+            .filter(|n| !n.is_empty());
+        if let Some(namespace) = namespace {
+            for analysis in ANALYSES {
+                if code.contains(&format!("{namespace}.{analysis}(")) {
+                    found.push(*analysis);
+                }
+            }
+        }
+    }
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
 /// The rules in `semanticAnalysis.entryPoints`: each
 /// `{ files?, exports?, decorators?, kind }`, naming exports or decorators.
 /// Workspace mode only: entry points are a whole-workspace question.

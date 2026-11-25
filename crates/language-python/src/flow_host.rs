@@ -144,6 +144,20 @@ impl PyFlow {
         Ok(query::entry_points(self, path, range))
     }
 
+    /// Every function in the workspace that a rule declares an entry point.
+    pub fn all_entry_points(&self) -> Vec<language_core::FunctionEntryPoints> {
+        query::all_entry_points(self)
+            .into_iter()
+            .map(
+                |(file_path, range, entry_points)| language_core::FunctionEntryPoints {
+                    file_path,
+                    range,
+                    entry_points,
+                },
+            )
+            .collect()
+    }
+
     pub fn set_entry_point_rules(&self, rules: Vec<EntryPointRule>) {
         *self.entry_point_rules.write() = rules;
     }

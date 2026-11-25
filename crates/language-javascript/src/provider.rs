@@ -399,6 +399,16 @@ impl SemanticProvider for OxcSemanticProvider {
         }
     }
 
+    fn list_entry_points(
+        &self,
+        _language: &str,
+    ) -> SemanticResult<Vec<language_core::FunctionEntryPoints>> {
+        match &self.analyzer {
+            AnalyzerKind::FileScope(_) => Err(needs_workspace("entryPoints")),
+            AnalyzerKind::WorkspaceScope(analyzer) => Ok(analyzer.all_entry_points()),
+        }
+    }
+
     fn get_mutations(
         &self,
         file_path: &Path,

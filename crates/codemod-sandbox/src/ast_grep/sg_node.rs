@@ -2392,6 +2392,107 @@ impl<'js> SgNodeRjs<'js> {
     }
 }
 
+/// What `codemod/ast-grep`'s analyses (`analysis.rs`) need from nodes and roots.
+#[cfg(feature = "native")]
+impl<'js> SgNodeRjs<'js> {
+    /// The language this node's file is parsed as, as `parse` names it.
+    pub(crate) fn language_name(&self) -> String {
+        get_language(&self.root.grep).to_string()
+    }
+
+    /// The innermost node with this byte range in `root`.
+    pub(crate) fn node_at(
+        root: &Arc<SgRootInner>,
+        range: language_core::ByteRange,
+    ) -> Option<Self> {
+        Self::node_in(root, range)
+    }
+
+    /// A node for a match in `root`.
+    pub(crate) fn from_match(root: &Arc<SgRootInner>, node_match: NodeMatch<'_, TSDoc>) -> Self {
+        let static_node_match: NodeMatch<'static, TSDoc> =
+            unsafe { std::mem::transmute(node_match) };
+        SgNodeRjs {
+            root: Arc::clone(root),
+            inner_node: static_node_match,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// The text a metavariable (`P` for `$P`) captured in this match.
+    pub(crate) fn captured_text(&self, name: &str) -> Option<String> {
+        self.inner_node
+            .get_env()
+            .get_match(name)
+            .map(|node| node.text().to_string())
+    }
+
+    /// The node a metavariable (`P` for `$P`) captured in this match.
+    pub(crate) fn captured_node(&self, name: &str) -> Option<Self> {
+        let node = self.inner_node.get_env().get_match(name)?.clone();
+        Some(Self::from_match(&self.root, node.into()))
+    }
+
+    /// The nearest function around this node, or the node itself when it is one.
+    pub(crate) fn enclosing_function(&self) -> Option<Self> {
+        const FUNCTIONS: &[&str] = &[
+            "function_declaration",
+            "generator_function_declaration",
+            "function_expression",
+            "function",
+            "generator_function",
+            "arrow_function",
+            "method_definition",
+            "function_definition",
+            "lambda",
+        ];
+        if FUNCTIONS.contains(&&*self.inner_node.kind()) {
+            return Some(self.clone());
+        }
+        let mut current = self.inner_node.get_node().parent();
+        while let Some(node) = current {
+            if FUNCTIONS.contains(&&*node.kind()) {
+                return Some(Self::from_match(&self.root, node.into()));
+            }
+            current = node.parent();
+        }
+        None
+    }
+
+    /// Every match of `pattern` in this root's file.
+    pub(crate) fn matches_in(
+        root: &Arc<SgRootInner>,
+        pattern: &crate::ast_grep::utils::JsMatcherRjs,
+    ) -> Vec<Self> {
+        root.grep
+            .root()
+            .find_all(pattern)
+            .map(|node_match| Self::from_match(root, node_match))
+            .collect()
+    }
+}
+
+/// A root for a file the analyses read from disk, with the step's semantic
+/// analysis, so its nodes answer `callers()`, `callees()` and the rest.
+#[cfg(feature = "native")]
+pub(crate) fn root_for_path(
+    provider: Option<Arc<dyn SemanticProvider>>,
+    file_path: &std::path::Path,
+    target_directory: Option<&std::path::Path>,
+) -> Option<Arc<SgRootInner>> {
+    let content = std::fs::read_to_string(file_path).ok()?;
+    let lang = Lang::from_str(&detect_language_from_path(file_path)).ok()?;
+    let root = SgRootRjs::try_new_with_semantic(
+        AstGrep::new(content, lang),
+        Some(file_path.to_string_lossy().to_string()),
+        provider,
+        None,
+        target_directory,
+    )
+    .ok()?;
+    Some(root.inner)
+}
+
 /// The object `definition()` returns: `node`, `root`, `kind`, `exportName`
 /// and `nameNode`. `own_root` answers for its own file; other files get a
 /// new root. Null when the range has no node.

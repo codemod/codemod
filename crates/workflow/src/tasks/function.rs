@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use butterflow_core::jssg_runner::JssgFileChange;
+use butterflow_core::jssg_runner::{JssgFileChange, SemanticMode};
 use codemod_sandbox::sandbox::engine::ExecutionResult;
 use codemod_sandbox::Worker;
 use rquickjs::{async_with, CatchResultExt, Function, Module, Promise};
@@ -74,7 +74,13 @@ fn call_with(
         .ok_or_else(|| format!("unknown function '{callback}'"))?;
     let captures = serde_json::to_string(captures).map_err(|e| e.to_string())?;
     let args = args.map(Value::to_string);
-    let isolates = StepIsolates::new(task)?;
+    let mut isolates = StepIsolates::new(task)?;
+    // A step that imports an analysis (`callGraph`, `join`, ...) asks about
+    // the whole workspace.
+    let mode = isolate::semantic_mode_for(task, None, module)?;
+    if matches!(mode, SemanticMode::Workspace(..)) {
+        isolates.semantic_provider = butterflow_core::jssg_runner::semantic_provider(&mode, &[]);
+    }
     let options = isolates.worker_options(task, None);
     let name = module_name(task, callback);
     let workflow_path = task.run.workflow_path.clone();

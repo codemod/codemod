@@ -2,8 +2,8 @@
 
 use crate::{
     ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult, EntryPoint,
-    EntryPointRule, FlowOptions, FlowResult, ImportersResult, MutationOptions, MutationsResult,
-    ReferencesResult, SemanticError, SemanticResult, SpecifierOptions,
+    EntryPointRule, FlowOptions, FlowResult, FunctionEntryPoints, ImportersResult, MutationOptions,
+    MutationsResult, ReferencesResult, SemanticError, SemanticResult, SpecifierOptions,
 };
 use std::path::{Path, PathBuf};
 
@@ -214,6 +214,14 @@ pub trait SemanticProvider: Send + Sync {
         _file_path: &Path,
         _range: ByteRange,
     ) -> SemanticResult<Vec<EntryPoint>> {
+        Err(no_call_graph("entryPoints"))
+    }
+
+    /// Every function in the workspace that is called from outside its
+    /// code, for files of `language`, in file and range order.
+    ///
+    /// The default is an `Unsupported` error.
+    fn list_entry_points(&self, _language: &str) -> SemanticResult<Vec<FunctionEntryPoints>> {
         Err(no_call_graph("entryPoints"))
     }
 

@@ -268,6 +268,19 @@ impl SemanticProvider for LazySemanticProvider {
         }
     }
 
+    fn list_entry_points(
+        &self,
+        language: &str,
+    ) -> SemanticResult<Vec<language_core::FunctionEntryPoints>> {
+        match self.get_or_init(language) {
+            Some(provider) => provider.list_entry_points(language),
+            None => Err(language_core::SemanticError::Unsupported {
+                operation: "entryPoints".to_string(),
+                reason: format!("{language} has no semantic analysis"),
+            }),
+        }
+    }
+
     fn resolve_module(
         &self,
         from_file: &Path,

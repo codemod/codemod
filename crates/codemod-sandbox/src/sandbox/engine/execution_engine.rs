@@ -524,6 +524,16 @@ where
             },
         })?;
 
+        // The step's semantic analysis, for the analyses `codemod:ast-grep`
+        // exports (`callGraph`, `join`, `crawl`, ...).
+        if let Some(provider) = &options.semantic_provider {
+            ctx.store_userdata(crate::ast_grep::ParseSemanticProvider(Arc::clone(provider))).map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to store ParseSemanticProvider: {:?}", e),
+                },
+            })?;
+        }
+
         ctx.store_userdata(llm_runtime_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store LlmRuntimeContext: {:?}", e),

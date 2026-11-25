@@ -21,6 +21,7 @@ pub use dataflow::{
 };
 pub use entry_points::{
     declared_entry_points, glob_matches, EntryPoint, EntryPointRule, FunctionEntry,
+    FunctionEntryPoints,
 };
 pub use error::{SemanticError, SemanticResult};
 pub use modules::{
