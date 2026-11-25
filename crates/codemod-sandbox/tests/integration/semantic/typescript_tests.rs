@@ -90,3 +90,51 @@ jssg_test! {
     target: "app.ts",
     scope: workspace,
 }
+
+// Module top level and JSX elements in the call graph. Fixtures come from the
+// debarrel and i18n reviews (gap D, visibility).
+
+jssg_test! {
+    name: test_callees_module_top_level_side_effects,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_callees_module_top_level.js",
+    fixture_dir: "typescript/side_effect_barrel",
+    target: "src/icons/register.ts",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_callees_module_top_level_calls_imported_function,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_callees_module_top_level.js",
+    fixture_dir: "typescript/side_effect_barrel",
+    target: "src/App.ts",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_callees_module_that_only_declares,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_callees_module_top_level.js",
+    fixture_dir: "typescript/side_effect_barrel",
+    target: "src/icons/Icon.ts",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_callees_jsx_element_is_its_component,
+    language: CodemodLang::Static(SupportLang::Tsx),
+    codemod: "tsx_callees_jsx_element.js",
+    fixture_dir: "typescript/jsx_callees",
+    target: "src/Toolbar.tsx",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_callees_jsx_member_tag,
+    language: CodemodLang::Static(SupportLang::Tsx),
+    codemod: "tsx_callees_jsx_element.js",
+    fixture_dir: "typescript/jsx_callees",
+    target: "src/Nav.tsx",
+    scope: workspace,
+}

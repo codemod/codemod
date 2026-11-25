@@ -1219,10 +1219,29 @@ impl<'s, 'a> Builder<'s, 'a> {
 
     /// `<Component />` calls `Component`.
     fn record_jsx(&mut self, id: NodeId, element: &JSXElement<'a>) {
-        let JSXElementName::IdentifierReference(ident) = &element.opening_element.name else {
-            return;
+        let (callee, callee_text) = match &element.opening_element.name {
+            JSXElementName::IdentifierReference(ident) => (
+                CalleeFact::Node(self.node(ident.span)),
+                ident.name.to_string(),
+            ),
+            // `<Tabs.Trigger>`: a method-style lookup on the object.
+            JSXElementName::MemberExpression(member) => {
+                let text = self.text(member.span);
+                match &member.object {
+                    JSXMemberExpressionObject::IdentifierReference(object) => (
+                        CalleeFact::Member {
+                            object: self.node(object.span),
+                            property: member.property.name.to_string(),
+                        },
+                        text,
+                    ),
+                    // `<A.B.C>`: reported, not resolved.
+                    _ => (CalleeFact::Node(self.node(member.span)), text),
+                }
+            }
+            // `<div>`, `<svg:path>`, `<this.X>`: not a component call.
+            _ => return,
         };
-        let callee = self.node(ident.span);
         let call_node = self.node(element.span);
         let function = self.enclosing_fn(id);
         self.flow
@@ -1231,8 +1250,8 @@ impl<'s, 'a> Builder<'s, 'a> {
         self.flow.calls.push(CallFact {
             range: range_of(element.span),
             function,
-            callee: CalleeFact::Node(callee),
-            callee_text: ident.name.to_string(),
+            callee,
+            callee_text,
             args: Vec::new(),
             is_new: false,
             is_jsx: true,

@@ -599,7 +599,11 @@ pub(crate) fn call_targets(
                     member_functions(host, origin, property, &mut functions);
                 }
             }
-            CallEdgeKind::Method
+            if call.is_jsx {
+                CallEdgeKind::Jsx
+            } else {
+                CallEdgeKind::Method
+            }
         }
         CalleeFact::Node(callee) => {
             let mut found = Vec::new();
@@ -652,6 +656,7 @@ pub(crate) fn callback_targets(
 
 fn unresolved_kind(call: &CallFact) -> CallEdgeKind {
     match &call.callee {
+        CalleeFact::Member { .. } if call.is_jsx => CallEdgeKind::Jsx,
         CalleeFact::Member { .. } => CallEdgeKind::Method,
         CalleeFact::Node(_) if call.is_new => CallEdgeKind::Constructor,
         CalleeFact::Node(_) if call.is_jsx => CallEdgeKind::Jsx,
@@ -660,8 +665,14 @@ fn unresolved_kind(call: &CallFact) -> CallEdgeKind {
 }
 
 /// The functions a syntax range stands for: a function or its name, a call
-/// (its callees), a reference to a function, or a declaration around one.
-fn functions_at(host: &dyn FlowHost, path: &Path, range: ByteRange) -> Vec<FunctionKey> {
+/// (its callees), a reference to a function, or, with outermost, the
+/// functions declared inside it.
+fn functions_at(
+    host: &dyn FlowHost,
+    path: &Path,
+    range: ByteRange,
+    outermost: bool,
+) -> Vec<FunctionKey> {
     let Some(flow) = host.flow(path) else {
         return Vec::new();
     };
@@ -700,6 +711,14 @@ fn functions_at(host: &dyn FlowHost, path: &Path, range: ByteRange) -> Vec<Funct
     }
 
     // export const f = () => {} asked about as a whole statement.
+    if !outermost {
+        return Vec::new();
+    }
+    outermost_functions(&flow, path, range)
+}
+
+/// The functions inside range that are not inside another one of them.
+fn outermost_functions(flow: &FileFlow, path: &Path, range: ByteRange) -> Vec<FunctionKey> {
     let inside: Vec<(usize, ByteRange)> = flow
         .functions
         .iter()
@@ -707,7 +726,7 @@ fn functions_at(host: &dyn FlowHost, path: &Path, range: ByteRange) -> Vec<Funct
         .filter(|(_, f)| f.range.is_within(&range))
         .map(|(index, f)| (index, f.range))
         .collect();
-    let outermost: Vec<FunctionKey> = inside
+    inside
         .iter()
         .filter(|(index, inner)| {
             !inside
@@ -715,14 +734,7 @@ fn functions_at(host: &dyn FlowHost, path: &Path, range: ByteRange) -> Vec<Funct
                 .any(|(other, outer)| other != index && inner.is_within(outer))
         })
         .map(|(index, _)| (path.to_path_buf(), Some(*index as u32)))
-        .collect();
-    if !outermost.is_empty() {
-        return outermost;
-    }
-
-    flow.function_at(range)
-        .map(|function| vec![(path.to_path_buf(), Some(function))])
-        .unwrap_or_default()
+        .collect()
 }
 
 /// Call-graph entries, grouped by file as they are found.
@@ -778,24 +790,122 @@ pub(crate) fn call_graph(
     options: CallGraphOptions,
 ) -> CallGraphResult {
     let path = host.canonical(path);
-    let start = functions_at(host, &path, range);
-    if start.is_empty() {
-        return CallGraphResult::default();
-    }
     match options.direction {
-        CallGraphDirection::Callees => callees(host, start, options),
-        CallGraphDirection::Callers => callers(host, start, options),
+        CallGraphDirection::Callees => {
+            // The whole module: the calls made while it is evaluated.
+            if is_whole_module(host, &path, range) {
+                return callees(host, vec![(path, None)], None, options);
+            }
+            // A call or JSX element: what it calls.
+            if let Some((function, call)) = call_at(host, &path, range) {
+                return callees(
+                    host,
+                    vec![(path, function)],
+                    Some(FirstStep::Call(call)),
+                    options,
+                );
+            }
+            let start = functions_at(host, &path, range, false);
+            if !start.is_empty() {
+                return callees(host, start, None, options);
+            }
+            let Some(flow) = host.flow(&path) else {
+                return CallGraphResult::default();
+            };
+            let enclosing = flow.function_at(range);
+            let calls_inside = flow
+                .calls
+                .iter()
+                .any(|call| call.function == enclosing && call.range.is_within(&range));
+            // `export const f = () => {}` as a whole statement: f.
+            if !calls_inside {
+                let declared = outermost_functions(&flow, &path, range);
+                if !declared.is_empty() {
+                    return callees(host, declared, None, options);
+                }
+            }
+            // Any other code (`<div>…</div>`, a block, a statement): the
+            // calls written inside it.
+            callees(
+                host,
+                vec![(path, enclosing)],
+                Some(FirstStep::Within(range)),
+                options,
+            )
+        }
+        CallGraphDirection::Callers => {
+            let mut start = functions_at(host, &path, range, true);
+            if start.is_empty() {
+                start = host
+                    .flow(&path)
+                    .and_then(|flow| flow.function_at(range))
+                    .map(|function| vec![(path.clone(), Some(function))])
+                    .unwrap_or_default();
+            }
+            if start.is_empty() {
+                return CallGraphResult::default();
+            }
+            callers(host, start, options)
+        }
     }
 }
 
+/// Where a callees walk starts inside its first function.
+#[derive(Clone, Copy)]
+enum FirstStep {
+    /// Only this call.
+    Call(u32),
+    /// Only the calls inside this range.
+    Within(ByteRange),
+}
+
+/// True when range covers all of the file's code (the program node).
+fn is_whole_module(host: &dyn FlowHost, path: &Path, range: ByteRange) -> bool {
+    let Some(content) = host.content(path) else {
+        return false;
+    };
+    let first = content.len() - content.trim_start().len();
+    let last = content.trim_end().len();
+    last > first && range.start as usize <= first && range.end as usize >= last
+}
+
+/// The call at range, with the function it is made from: the call or `new`
+/// expression itself, or for JSX the element, its opening tag or its name.
+fn call_at(host: &dyn FlowHost, path: &Path, range: ByteRange) -> Option<(Option<u32>, u32)> {
+    let flow = host.flow(path)?;
+    let found = flow
+        .exact(range)
+        .and_then(|node| flow.call_by_node.get(&node).copied())
+        .or_else(|| {
+            flow.calls
+                .iter()
+                .position(|call| {
+                    // The opening tag starts with the element; the tag name
+                    // right after its `<`.
+                    call.is_jsx
+                        && range.is_within(&call.range)
+                        && (range.start == call.range.start || range.start == call.range.start + 1)
+                })
+                .map(|index| index as u32)
+        })?;
+    Some((flow.calls[found as usize].function, found))
+}
+
+/// Walk from start. With first, the first step takes only some calls of the
+/// start function instead of all of them.
 fn callees(
     host: &dyn FlowHost,
     start: Vec<FunctionKey>,
+    first: Option<FirstStep>,
     options: CallGraphOptions,
 ) -> CallGraphResult {
     let mut entries = Entries::default();
     let mut truncated = false;
-    let mut visited: HashSet<FunctionKey> = start.iter().cloned().collect();
+    let mut visited: HashSet<FunctionKey> = if first.is_some() {
+        HashSet::new()
+    } else {
+        start.iter().cloned().collect()
+    };
     let mut reported: HashSet<FunctionKey> = HashSet::new();
     let mut files_seen: HashSet<PathBuf> = HashSet::new();
     let mut unparsed: Vec<UnparsedFile> = Vec::new();
@@ -821,7 +931,16 @@ fn callees(
                 }
             }
         }
-        for call in flow.calls.iter().filter(|call| call.function == function) {
+        let first_step = if depth == 0 { first } else { None };
+        for (index, call) in flow.calls.iter().enumerate() {
+            let wanted = match first_step {
+                None => true,
+                Some(FirstStep::Call(only)) => index as u32 == only,
+                Some(FirstStep::Within(range)) => call.range.is_within(&range),
+            };
+            if call.function != function || !wanted {
+                continue;
+            }
             let mut targets = call_targets(host, &path, &flow, call);
             if targets.is_empty() {
                 let unresolved = CallGraphEntry {
