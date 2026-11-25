@@ -40,9 +40,12 @@
 mod analyzer;
 mod db;
 mod error;
+pub mod flow;
+mod flow_host;
 mod provider;
 
 pub use error::PySemanticError;
+pub use flow_host::PyFlow;
 pub use provider::RuffSemanticProvider;
 
 // Re-export core types for convenience

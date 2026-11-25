@@ -97,13 +97,13 @@ export default function transform(root) {
     .root()
     .find({ rule: { pattern: "b" } });
   expectThrow(() => loose.flowsFrom(), "parsed from a string", "string root");
-  const python = parse("python", "a = b")
+  const rust = parse("rust", "fn a() { b(); }")
     .root()
     .find({ rule: { kind: "identifier" } });
   expectThrow(
-    () => python.callers(),
-    "JavaScript and TypeScript only, and this file is parsed as Python",
-    "python",
+    () => rust.callers(),
+    "JavaScript, TypeScript and Python only, and this file is parsed as Rust",
+    "rust",
   );
 
   return null;
