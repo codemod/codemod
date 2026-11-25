@@ -78,7 +78,8 @@ impl Engine {
         let callbacks = crate::engine::load_workflow(&record.workflow_path)
             .map(|loaded| loaded.built.callbacks)
             .unwrap_or_default();
-        let execution = self.begin_resumed(record, callbacks, NODE_HOST)?;
+        // Runs opened here never check for uncommitted changes.
+        let execution = self.begin_resumed(record, callbacks, NODE_HOST, false)?;
         let history = execution.context.store.load_steps(run_id)?;
         Ok(HostedRun::new(execution, history))
     }

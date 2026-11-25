@@ -388,7 +388,7 @@ A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>
 </ResponseField>
 
 <ResponseField name="--allow-dirty" type="boolean">
-  Let the run change a target that has uncommitted changes, or that is not in a git repository. Without it, the run checks just before it first changes the target: before a step writes, renames or deletes a file, and before a `shell`, `agent`, `installSkill` or git step, or a step whose code gets `fs` or `child_process`. An interactive run asks; an unattended one fails that step and writes nothing. A run that only reads (a check or a report) is never stopped by uncommitted changes. Dry runs and `workflow resume` are not checked.
+  Let the run change a target that has uncommitted changes, or that is not in a git repository. Without it, the run checks just before it first changes the target: before a step writes, renames or deletes a file, and before a `shell`, `agent` or `installSkill` step, a git step with `--managed-git`, or a step whose code gets `fs` or `child_process`. An interactive run asks; an unattended one fails that step and writes nothing. A run that only reads (a check or a report) is never stopped by uncommitted changes. Dry runs are not checked. `workflow resume` checks only a run that stopped before it first wrote (the changes a run made itself don't count); `workflow resume --allow-dirty` skips that.
 </ResponseField>
 
 <ResponseField name="--approve" type="boolean">
@@ -523,6 +523,10 @@ npx codemod workflow resume --id <ID> [--approve]
 
 <ResponseField name="--approve" type="boolean">
   Give the approval the run is waiting for, and any later ones. `--trigger-all` is accepted as an alias.
+</ResponseField>
+
+<ResponseField name="--allow-dirty" type="boolean">
+  For a run that stopped before it first wrote (for example at the check for uncommitted changes): write even if the target has uncommitted changes. A run that already wrote is not checked again.
 </ResponseField>
 
 <ResponseField name="--install-skill" type="boolean">

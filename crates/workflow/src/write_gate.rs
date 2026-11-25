@@ -10,13 +10,19 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+use butterflow_state::run_store::RunStore;
 
 use crate::interaction::{Approval, Decision, Interaction};
 
 /// Asks once per run; every later write gets the same answer.
 pub(crate) struct WriteGate {
     target: PathBuf,
+    /// The run whose record says whether the check is still to come
+    /// (`RunSettings::check_uncommitted`): the outermost one.
+    run_id: String,
+    store: Arc<dyn RunStore>,
     answer: Mutex<Option<Result<(), String>>>,
 }
 
@@ -29,11 +35,21 @@ enum TreeState {
 }
 
 impl WriteGate {
-    pub(crate) fn new(target: &Path) -> Self {
+    pub(crate) fn new(target: &Path, run_id: &str, store: Arc<dyn RunStore>) -> Self {
         Self {
             target: target.to_path_buf(),
+            run_id: run_id.to_string(),
+            store,
             answer: Mutex::new(None),
         }
+    }
+
+    /// Whether the run may write: it passed the check.
+    pub(crate) fn passed(&self) -> bool {
+        matches!(
+            *self.answer.lock().unwrap_or_else(|e| e.into_inner()),
+            Some(Ok(()))
+        )
     }
 
     /// `Ok` when the run may change the target: it has no uncommitted
@@ -63,8 +79,22 @@ impl WriteGate {
                 }
             }
         };
+        if result.is_ok() {
+            // Saved now, so a run killed after it writes is not checked
+            // again on resume (it made those changes itself).
+            self.mark_passed();
+        }
         *answer = Some(result.clone());
         result
+    }
+
+    fn mark_passed(&self) {
+        if let Ok(Some(mut record)) = self.store.get_run(&self.run_id) {
+            if record.settings.check_uncommitted {
+                record.settings.check_uncommitted = false;
+                let _ = self.store.put_run(&record);
+            }
+        }
     }
 }
 
