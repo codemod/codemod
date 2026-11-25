@@ -1787,7 +1787,13 @@ impl<'js> SgNodeRjs<'js> {
                 &ctx,
                 options,
                 method,
-                &["throughCalls", "maxDepth", "stopAt", "interprocedural"],
+                &[
+                    "throughCalls",
+                    "maxDepth",
+                    "stopAt",
+                    "interprocedural",
+                    "maxCallers",
+                ],
             )? {
                 if let Some(through_calls) = opts.get::<_, Option<bool>>("throughCalls")? {
                     flow_options.through_calls = through_calls;
@@ -1795,6 +1801,7 @@ impl<'js> SgNodeRjs<'js> {
                 if let Some(interprocedural) = opts.get::<_, Option<bool>>("interprocedural")? {
                     flow_options.interprocedural = interprocedural;
                 }
+                flow_options.max_callers = whole_number(&ctx, &opts, method, "maxCallers")?;
                 flow_options.max_depth = max_depth(&ctx, &opts, method)?;
                 flow_options.stop_at = stop_at(
                     &ctx,
@@ -2356,6 +2363,27 @@ fn query_options<'js>(
         }
     }
     Ok(Some(object))
+}
+
+/// A positive whole-number option, or absent.
+#[cfg(feature = "native")]
+fn whole_number<'js>(
+    ctx: &Ctx<'js>,
+    options: &rquickjs::Object<'js>,
+    method: &str,
+    key: &str,
+) -> Result<Option<u32>> {
+    let value: Value = options.get(key)?;
+    if value.is_undefined() || value.is_null() {
+        return Ok(None);
+    }
+    match value.as_number() {
+        Some(n) if n >= 1.0 && n.fract() == 0.0 && n <= u32::MAX as f64 => Ok(Some(n as u32)),
+        _ => Err(Exception::throw_range(
+            ctx,
+            &format!("{method}(options): {key} must be a whole number of at least 1"),
+        )),
+    }
 }
 
 /// `maxDepth`: a positive whole number, or absent.

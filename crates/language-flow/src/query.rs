@@ -1674,10 +1674,45 @@ struct WalkFile {
     step_at: HashMap<(u32, FlowEdgeKind, Option<u32>), u32>,
 }
 
-/// Where an interprocedural walk is: a file (index), a node, and the call
-/// the current function was entered through, if it was entered from a call
-/// site the walk came from. Leaving the function goes back to that call only.
-type WalkAt = (usize, u32, Option<(usize, u32)>);
+/// Calls an interprocedural walk remembers: entering a callee deeper than
+/// this treats the call as unknown (its result derived from its arguments).
+const MAX_CALL_STACK: usize = 4;
+/// Times a walk may leave a function it did not enter through a call
+/// (a parameter to every caller, a return to every call site).
+const MAX_ASCENTS: u8 = 3;
+/// (node, call context) pairs one interprocedural walk may visit. The
+/// contexts multiply the nodes, so without this a walk over a large
+/// workspace can run for a very long time; past it the answer is cut and
+/// `truncated` is set.
+pub(crate) const MAX_WALK_STATES: usize = 20_000;
+/// Call sites one such step fans out to, when the query does not say.
+pub(crate) const DEFAULT_MAX_CALLERS: u32 = 16;
+
+/// The calls an interprocedural walk came in through (innermost last), and
+/// how many times it has left a function it did not enter.
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
+struct CallContext {
+    stack: Vec<(usize, u32)>,
+    ascents: u8,
+}
+
+impl CallContext {
+    fn enter(&self, site: (usize, u32)) -> Option<CallContext> {
+        (self.stack.len() < MAX_CALL_STACK).then(|| {
+            let mut stack = self.stack.clone();
+            stack.push(site);
+            CallContext {
+                stack,
+                ascents: self.ascents,
+            }
+        })
+    }
+}
+
+/// Where an interprocedural walk is: a file (index), a node, and the calls
+/// it came in through. Leaving a function goes back to the call it was
+/// entered through, if any.
+type WalkAt = (usize, u32, CallContext);
 /// A step in a walk: file index, step index.
 type StepRef = (usize, u32);
 /// A queued node: where, depth, and the step it was reached by.
@@ -1691,7 +1726,7 @@ type NextStep = (
     Option<u32>,
     bool,
     bool,
-    Option<StepRef>,
+    CallContext,
 );
 
 struct Walk<'h> {
@@ -1858,6 +1893,9 @@ fn data_flow_interprocedural(
         truncated: false,
         step_count: 0,
     };
+    let max_callers = options.max_callers.unwrap_or(DEFAULT_MAX_CALLERS) as usize;
+    // A cap cut the answer short (it goes on with what it has).
+    let mut capped = false;
     let Some(file) = walk.open(&host.canonical(path)) else {
         return FlowResult::default();
     };
@@ -1865,10 +1903,28 @@ fn data_flow_interprocedural(
         return FlowResult::default();
     };
     let backward = walk.backward;
-    let mut seen: HashSet<WalkAt> = HashSet::from([(file, start, None)]);
-    let mut queue: VecDeque<Queued> = VecDeque::from([((file, start, None), 0, None)]);
+    let mut seen: HashSet<WalkAt> = HashSet::from([(file, start, CallContext::default())]);
+    let mut queue: VecDeque<Queued> =
+        VecDeque::from([((file, start, CallContext::default()), 0, None)]);
 
-    while let Some(((file, current, entered), depth, reached_by)) = queue.pop_front() {
+    // Leaving a function not entered through a call: where to, within the caps.
+    // Returns the call sites with their context, and whether a cap cut them.
+    let ascend = |walk: &mut Walk, file: usize, function: u32, context: &CallContext| {
+        if context.ascents >= MAX_ASCENTS {
+            return (Vec::new(), true);
+        }
+        let mut sites = walk.call_sites(file, function);
+        let cut = sites.len() > max_callers;
+        sites.truncate(max_callers);
+        let up = CallContext {
+            stack: Vec::new(),
+            ascents: context.ascents + 1,
+        };
+        let sites: Vec<_> = sites.into_iter().map(|site| (site, up.clone())).collect();
+        (sites, cut)
+    };
+
+    while let Some(((file, current, context), depth, reached_by)) = queue.pop_front() {
         if walk.truncated || options.max_depth.is_some_and(|max| depth >= max) {
             continue;
         }
@@ -1877,8 +1933,10 @@ fn data_flow_interprocedural(
         // (file, node, via, index, boundary, follow, entered call)
         let mut next: Vec<NextStep> = Vec::new();
 
-        // A call into the workspace: its result is what the callee returns.
-        let resolved_call = node.kind == FlowNodeKind::Call && {
+        // A call into the workspace: its result is what the callee returns
+        // (while the call stack has room; past that, the call is unknown).
+        let inner = context.enter((file, current));
+        let resolved_call = node.kind == FlowNodeKind::Call && inner.is_some() && {
             let targets = walk.targets(file, current);
             if backward {
                 for &(target_file, function) in &targets {
@@ -1893,7 +1951,7 @@ fn data_flow_interprocedural(
                                 None,
                                 is_boundary(target_flow.nodes[value as usize].kind),
                                 true,
-                                Some((file, current)),
+                                inner.clone().unwrap_or_default(),
                             ));
                         }
                     }
@@ -1906,11 +1964,21 @@ fn data_flow_interprocedural(
         // came in through, when it did).
         if backward && node.binding && node.kind == FlowNodeKind::Parameter {
             if let (Some(function), Some(position)) = (node.function, node.index) {
-                let sites = match entered {
-                    Some(site) => vec![site],
-                    None => walk.call_sites(file, function),
+                let sites = match context.stack.split_last() {
+                    Some((site, rest)) => vec![(
+                        *site,
+                        CallContext {
+                            stack: rest.to_vec(),
+                            ascents: context.ascents,
+                        },
+                    )],
+                    None => {
+                        let (sites, cut) = ascend(&mut walk, file, function, &context);
+                        capped |= cut;
+                        sites
+                    }
                 };
-                for (site_file, call_node) in sites {
+                for ((site_file, call_node), site_context) in sites {
                     let site_flow = Arc::clone(&walk.files[site_file].flow);
                     let call = &site_flow.calls[site_flow.call_by_node[&call_node] as usize];
                     if let Some(&argument) = call.args.get(position as usize) {
@@ -1923,7 +1991,7 @@ fn data_flow_interprocedural(
                             Some(position),
                             boundary,
                             true,
-                            None,
+                            site_context,
                         ));
                     }
                 }
@@ -1956,8 +2024,13 @@ fn data_flow_interprocedural(
                 }
             }
             if !backward && edge == FlowEdgeKind::Argument {
-                let targets = walk.targets(file, other);
-                if !targets.is_empty() {
+                let inner = context.enter((file, other));
+                let targets = if inner.is_some() {
+                    walk.targets(file, other)
+                } else {
+                    Vec::new()
+                };
+                if let (false, Some(inner)) = (targets.is_empty(), inner) {
                     // Into the callee's parameter, remembering the call.
                     let position = flow.call_by_node.get(&other).and_then(|c| {
                         flow.calls[*c as usize]
@@ -1976,7 +2049,7 @@ fn data_flow_interprocedural(
                                     Some(position as u32),
                                     false,
                                     true,
-                                    Some((file, other)),
+                                    inner.clone(),
                                 ));
                             }
                         }
@@ -1990,11 +2063,21 @@ fn data_flow_interprocedural(
                 let Some(&function) = flow.fn_by_node.get(&other) else {
                     continue;
                 };
-                let sites = match entered {
-                    Some(site) => vec![site],
-                    None => walk.call_sites(file, function),
+                let sites = match context.stack.split_last() {
+                    Some((site, rest)) => vec![(
+                        *site,
+                        CallContext {
+                            stack: rest.to_vec(),
+                            ascents: context.ascents,
+                        },
+                    )],
+                    None => {
+                        let (sites, cut) = ascend(&mut walk, file, function, &context);
+                        capped |= cut;
+                        sites
+                    }
                 };
-                for (site_file, call_node) in sites {
+                for ((site_file, call_node), site_context) in sites {
                     next.push((
                         site_file,
                         call_node,
@@ -2002,7 +2085,7 @@ fn data_flow_interprocedural(
                         None,
                         false,
                         true,
-                        None,
+                        site_context,
                     ));
                 }
                 continue;
@@ -2033,11 +2116,11 @@ fn data_flow_interprocedural(
                 index,
                 backward && is_boundary(n.kind),
                 follow,
-                entered,
+                context.clone(),
             ));
         }
 
-        for (to_file, to, via, index, boundary, follow, to_entered) in next {
+        for (to_file, to, via, index, boundary, follow, to_context) in next {
             // Parameters and calls are boundaries only when the walk cannot
             // go on through them.
             let boundary = boundary && {
@@ -2048,8 +2131,9 @@ fn data_flow_interprocedural(
                         let n = walk.files[to_file].flow.nodes[to as usize].clone();
                         match (n.function, n.binding) {
                             (Some(function), true) => {
-                                to_entered.is_none()
-                                    && walk.call_sites(to_file, function).is_empty()
+                                to_context.stack.is_empty()
+                                    && (to_context.ascents >= MAX_ASCENTS
+                                        || walk.call_sites(to_file, function).is_empty())
                             }
                             _ => true,
                         }
@@ -2062,8 +2146,15 @@ fn data_flow_interprocedural(
                 break;
             };
             let stop = !follow || options.stop_at.contains(via);
-            if !stop && seen.insert((to_file, to, to_entered)) {
-                queue.push_back(((to_file, to, to_entered), depth + 1, Some(step)));
+            if stop {
+                continue;
+            }
+            if seen.len() >= MAX_WALK_STATES {
+                capped = true;
+                continue;
+            }
+            if seen.insert((to_file, to, to_context.clone())) {
+                queue.push_back(((to_file, to, to_context), depth + 1, Some(step)));
             }
         }
     }
@@ -2078,7 +2169,7 @@ fn data_flow_interprocedural(
                 steps: f.steps,
             })
             .collect(),
-        truncated: walk.truncated,
+        truncated: walk.truncated || capped,
     }
 }
 

@@ -60,6 +60,9 @@ struct Totals {
     ip_samples: usize,
     ip_param_boundaries: (usize, usize),
     ip_steps: (usize, usize),
+    ip_sizes_back: Vec<usize>,
+    ip_sizes_forward: Vec<usize>,
+    ip_truncated: usize,
     ip_time: std::time::Duration,
 }
 
@@ -531,11 +534,48 @@ fn measure_interprocedural(
                 totals.ip_samples += 1;
                 totals.ip_param_boundaries.0 += count(&plain);
                 totals.ip_param_boundaries.1 += count(&ip);
-                totals.ip_steps.0 += plain.files.iter().map(|f| f.steps.len()).sum::<usize>();
-                totals.ip_steps.1 += ip.files.iter().map(|f| f.steps.len()).sum::<usize>();
+                let size = |r: &language_core::FlowResult| {
+                    r.files.iter().map(|f| f.steps.len()).sum::<usize>()
+                };
+                totals.ip_steps.0 += size(&plain);
+                totals.ip_steps.1 += size(&ip);
+                totals.ip_sizes_back.push(size(&ip));
+                totals.ip_truncated += usize::from(ip.truncated);
+                // The same argument, forward: where it goes.
+                let started = std::time::Instant::now();
+                let forward = crate::flow_query::data_flow(
+                    analyzer,
+                    file,
+                    range,
+                    FlowOptions {
+                        interprocedural: true,
+                        direction: language_core::FlowDirection::Forward,
+                        ..FlowOptions::default()
+                    },
+                );
+                totals.ip_time += started.elapsed();
+                totals.ip_sizes_forward.push(size(&forward));
+                totals.ip_truncated += usize::from(forward.truncated);
             }
         }
     }
+}
+
+/// "avg 12.3, p50 4, p95 40, max 900".
+fn distribution(sizes: &[usize]) -> String {
+    if sizes.is_empty() {
+        return "-".to_string();
+    }
+    let mut sorted = sizes.to_vec();
+    sorted.sort_unstable();
+    let at = |q: f64| sorted[((sorted.len() - 1) as f64 * q) as usize];
+    format!(
+        "avg {:.1}, p50 {}, p95 {}, max {}",
+        sorted.iter().sum::<usize>() as f64 / sorted.len() as f64,
+        at(0.5),
+        at(0.95),
+        sorted[sorted.len() - 1]
+    )
 }
 
 fn measure_repo(root: &Path, totals: &mut Totals) {
@@ -733,6 +773,13 @@ fn corpus_metric() {
         t.ip_steps.0 as f64 / t.ip_samples.max(1) as f64,
         t.ip_steps.1 as f64 / t.ip_samples.max(1) as f64,
         t.ip_time / t.ip_samples.max(1) as u32
+    );
+    let _ = writeln!(
+        out,
+        "interprocedural answer size: flowsFrom {}; flowsTo {}; truncated {}",
+        distribution(&t.ip_sizes_back),
+        distribution(&t.ip_sizes_forward),
+        t.ip_truncated
     );
     let _ = writeln!(out, "boundary steps by kind: {:?}", t.boundary_kinds);
     let _ = writeln!(out, "dead ends by kind: {:?}", t.dead_end_kinds);

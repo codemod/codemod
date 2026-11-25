@@ -2895,6 +2895,76 @@ console.log(x);
         assert_eq!(entry_names(&callees), ["thing", "View"]);
     }
 
+    /// A dense call graph (each function calls the next several times, the
+    /// last calls the first) multiplies call contexts. An interprocedural
+    /// walk over it must stop quickly, bounded and marked truncated.
+    #[test]
+    fn interprocedural_fan_out_terminates() {
+        let dir = TempDir::new().unwrap();
+        let count = 30;
+        let mut lib = String::new();
+        for i in 0..count {
+            let next = (i + 1) % count;
+            let calls: Vec<String> = (0..6).map(|_| format!("f{next}(x)")).collect();
+            lib.push_str(&format!(
+                "export function f{i}(x) {{ return {} + sink(x); }}\n",
+                calls.join(" + ")
+            ));
+        }
+        fs::write(dir.path().join("lib.js"), &lib).unwrap();
+        let main = dir.path().join("main.js");
+        let mut content = String::from("import { f0, f5, f9 } from './lib.js';\n");
+        for i in 0..20 {
+            content.push_str(&format!(
+                "const a{i} = f0(input{i}) + f5(a{i}) + f9(a{i});\n"
+            ));
+        }
+        fs::write(&main, &content).unwrap();
+        let analyzer = AccurateAnalyzer::new(dir.path().to_path_buf());
+        let range = range_of(&content, "input0");
+        for direction in [
+            language_core::FlowDirection::Forward,
+            language_core::FlowDirection::Backward,
+        ] {
+            let started = std::time::Instant::now();
+            let result = analyzer
+                .data_flow(
+                    &main,
+                    &content,
+                    range,
+                    FlowOptions {
+                        direction,
+                        interprocedural: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let steps: usize = result.files.iter().map(|f| f.steps.len()).sum();
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(20),
+                "{direction:?} took {:?}",
+                started.elapsed()
+            );
+            assert!(steps <= 50_000, "{direction:?}: {steps} steps");
+        }
+        // Backward from inside the cycle fans out to every caller.
+        let lib_path = dir.path().join("lib.js");
+        let started = std::time::Instant::now();
+        let result = analyzer
+            .data_flow(
+                &lib_path,
+                &lib,
+                range_of(&lib, "sink(x)"),
+                FlowOptions {
+                    interprocedural: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+        assert!(result.truncated, "the caps should have cut this answer");
+    }
+
     fn entry_names(result: &CallGraphResult) -> Vec<String> {
         result
             .files

@@ -191,6 +191,11 @@ pub struct FlowOptions {
     /// value out to the call sites). A value that enters a function through
     /// a call leaves it through that same call. Default: false.
     pub interprocedural: bool,
+    /// With `interprocedural`: call sites one step fans out to when the walk
+    /// leaves a function it did not enter through a call (a parameter to its
+    /// callers, a return to its call sites). More are cut and `truncated` is
+    /// set. None: the provider's default (16).
+    pub max_callers: Option<u32>,
 }
 
 impl Default for FlowOptions {
@@ -201,6 +206,7 @@ impl Default for FlowOptions {
             max_depth: None,
             stop_at: KindSet::default(),
             interprocedural: false,
+            max_callers: None,
         }
     }
 }
