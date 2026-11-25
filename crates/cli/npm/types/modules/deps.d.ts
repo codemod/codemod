@@ -42,17 +42,23 @@ declare module "codemod:deps" {
     readonly dir: string;
     /** Its package.json, relative to the target. */
     readonly manifest: string;
+    /**
+     * Whether it is one of the repository's packages: the root, or a
+     * workspace the root declares. Only `packages({ all: true })` and
+     * `packageOf(file, { all: true })` give packages that are not.
+     */
+    readonly member: boolean;
     /** Every declaration, in manifest order (dependencies, devDependencies, peerDependencies, optionalDependencies). */
     declarations(options?: KindsOption): Declaration[];
     /** The declaration of `name`: a runtime one (prod, optional, peer) before dev. */
     declaration(name: string, options?: KindsOption): Declaration | undefined;
     uses(name: string, options?: KindsOption): boolean;
     /** `dependencies().add(name, range, { to: this, kind })`. */
-    add(name: string, range: string, options?: { kind?: DependencyKind }): readonly Edit[];
+    add(name: string, range: string, options?: { kind?: DependencyKind }): EditResult;
     /** `dependencies().bump(name, range, { in: this, kinds })`. */
-    bump(name: string, range: RangeOrUpdate, options?: KindsOption): readonly Edit[];
-    remove(name: string, options?: KindsOption): readonly Edit[];
-    rename(from: string, to: string, options?: KindsOption & { range?: string }): readonly Edit[];
+    bump(name: string, range: RangeOrUpdate, options?: KindsOption): EditResult;
+    remove(name: string, options?: KindsOption): EditResult;
+    rename(from: string, to: string, options?: KindsOption & { range?: string }): EditResult;
     /** `name@version`, the name, or the dir when it has no name: what it becomes in a step's result. */
     toString(): string;
     toJSON(): string;
@@ -100,6 +106,33 @@ declare module "codemod:deps" {
   }
 
   /** What an edit changed. */
+  /** A declaration an edit left alone. */
+  export interface SkippedEdit {
+    /** Its package.json. */
+    readonly file: string;
+    /** Its package's dir. */
+    readonly package: string;
+    readonly name: string;
+    readonly kind: DependencyKind;
+    readonly range: string;
+    /**
+     * "peer": a peer dependency, which edits change only when `kinds` names
+     * "peer"; "workspace": a `workspace:` ref, which points at one of the
+     * repository's own packages and is not bumped, renamed, or overwritten by `add`.
+     */
+    readonly reason: "peer" | "workspace";
+  }
+
+  /**
+   * What an edit changed, as an array of `Edit`s, with what it left alone as
+   * `skipped`. In a step's result it is recorded as its edits (`toJSON`):
+   * return `result.skipped` to keep that too.
+   */
+  export type EditResult = readonly Edit[] & {
+    readonly skipped: readonly SkippedEdit[];
+    toJSON(): Edit[];
+  };
+
   export interface Edit {
     /** The file: a package.json, pnpm-workspace.yaml or .yarnrc.yml. */
     readonly file: string;
@@ -201,12 +234,20 @@ declare module "codemod:deps" {
   export interface Dependencies {
     /** The repository's package manager; null without a root package.json. */
     readonly packageManager: PackageManager | null;
-    /** The repository's packages: the root, then the workspaces it declares, by dir. */
-    packages(): Package[];
-    /** A package by dir or by name. */
+    /**
+     * The repository's packages: the root, then the workspaces it declares
+     * (`workspaces`, or pnpm-workspace.yaml's `packages`), by dir. Without a
+     * workspace declaration, only the root. `{ all: true }`: every
+     * package.json under the target (`.gitignore` respected, `node_modules` skipped).
+     */
+    packages(options?: { all?: boolean }): Package[];
+    /** A package by dir or by name, the repository's packages first; any package.json counts. */
     package(ref: string): Package | undefined;
-    /** The package that owns a file: its nearest package.json at or above it. */
-    packageOf(file: string): Package | undefined;
+    /**
+     * The package that owns a file: the nearest of the repository's packages
+     * at or above it; with `{ all: true }`, the nearest package.json.
+     */
+    packageOf(file: string, options?: { all?: boolean }): Package | undefined;
     /** Whether any of the repository's packages declares `name`. */
     uses(name: string, options?: KindsOption): boolean;
     /** Every declaration of `name` across the packages (or those `in`), by package dir. */
@@ -216,24 +257,35 @@ declare module "codemod:deps" {
 
     /**
      * Set the range of `name` everywhere it is declared (or `in`, of
-     * `kinds`). A catalog ref edits its catalog entry once; a workspace ref is
-     * left alone; an npm: alias keeps its target. The edits are the step's
-     * file changes: shown in a dry run, written when the step ends.
+     * `kinds`). Peer dependencies change only when `kinds` names "peer". A
+     * catalog ref edits its catalog entry once; a workspace ref is left
+     * alone; an npm: alias keeps its target. Peers and workspace refs it
+     * leaves are in the result's `skipped`. The edits are the step's file
+     * changes: shown in a dry run, written when the step ends.
      */
-    bump(name: string, range: RangeOrUpdate, options?: EditScope): readonly Edit[];
+    bump(name: string, range: RangeOrUpdate, options?: EditScope): EditResult;
     /** Declare `name` in a package (default: the root) and section (default: prod); already there, its range is set. */
     add(
       name: string,
       range: string,
       options?: { to?: PackageRef; kind?: DependencyKind },
-    ): readonly Edit[];
-    /** Remove `name` from every section that declares it (or those in `kinds`, `in`). */
-    remove(name: string, options?: EditScope): readonly Edit[];
-    /** Rename `from` to `to` where declared, keeping the section, and the range unless `range` is given. */
-    rename(from: string, to: string, options?: EditScope & { range?: string }): readonly Edit[];
+    ): EditResult;
+    /** Remove `name` from every section that declares it (or those in `kinds`, `in`); peers only when `kinds` names "peer". */
+    remove(name: string, options?: EditScope): EditResult;
+    /**
+     * Rename `from` to `to` where declared, keeping the section, and the
+     * range unless `range` is given; peers only when `kinds` names "peer",
+     * and never a workspace ref.
+     */
+    rename(from: string, to: string, options?: EditScope & { range?: string }): EditResult;
     /** Every edit made through this object, in order. */
     readonly edits: readonly Edit[];
-    /** Whether the lockfile is behind the manifests (loads the graph): then run `await step(install())`. */
+    /**
+     * Whether the lockfile is behind the manifests (loads the graph): then run
+     * `await step(install())`. yarn.lock keeps no workspace ranges, so on
+     * Yarn a changed range shows only in the step that changed it; added and
+     * removed dependencies show in later steps too.
+     */
     needsInstall(): boolean;
 
     /** Lockfiles read, relative to the target; empty when there is none. Loads the graph. */

@@ -59,6 +59,20 @@ pub struct Edit {
     pub renamed_from: Option<String>,
 }
 
+/// A declaration a change left alone, and why.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Skipped {
+    pub file: String,
+    pub package: String,
+    pub name: String,
+    pub kind: String,
+    pub range: String,
+    /// "workspace": a `workspace:` ref points at one of the repository's own
+    /// packages, so its range is not set and it is not renamed.
+    pub reason: String,
+}
+
 /// Files the changes may touch: the manifests of their packages and the
 /// files that define catalogs.
 pub fn files(project: &Project, changes: &[Change]) -> Vec<String> {
@@ -88,15 +102,30 @@ fn manifest_path(dir: &str) -> String {
     }
 }
 
+/// What [`apply`] gives: the files' new texts, what changed, and what it
+/// left alone.
+pub type Applied = (BTreeMap<String, String>, Vec<Edit>, Vec<Skipped>);
+
 /// The files' texts after the changes, and what changed. `texts` holds the
 /// current text of every file [`files`] names that exists.
 pub fn apply(
     project: &Project,
     changes: &[Change],
     texts: &BTreeMap<String, String>,
-) -> Result<(BTreeMap<String, String>, Vec<Edit>), String> {
+) -> Result<Applied, String> {
     let mut out = texts.clone();
     let mut edits = Vec::new();
+    let mut skipped = Vec::new();
+    let mut skip = |dir: &str, kind: Kind, name: &str, range: &str| {
+        skipped.push(Skipped {
+            file: manifest_path(dir),
+            package: dir.to_string(),
+            name: name.to_string(),
+            kind: kind.as_str().to_string(),
+            range: range.to_string(),
+            reason: "workspace".to_string(),
+        })
+    };
     let text_of = |out: &BTreeMap<String, String>, file: &str| -> Result<String, String> {
         out.get(file)
             .cloned()
@@ -127,6 +156,7 @@ pub fn apply(
                     continue;
                 };
                 if current.starts_with("workspace:") {
+                    skip(dir, *kind, name, &current);
                     continue;
                 }
                 if current.starts_with("catalog:") {
@@ -189,6 +219,12 @@ pub fn apply(
                 name,
                 range,
             } => {
+                if let Some(current) = declared(dir, *kind, name) {
+                    if current.starts_with("workspace:") {
+                        skip(dir, *kind, name, &current);
+                        continue;
+                    }
+                }
                 let file = manifest_path(dir);
                 let text = text_of(&out, &file)?;
                 let section = section(*kind).ok_or("no package.json section for that kind")?;
@@ -239,6 +275,10 @@ pub fn apply(
                 let Some(current) = declared(dir, *kind, from) else {
                     continue;
                 };
+                if current.starts_with("workspace:") {
+                    skip(dir, *kind, from, &current);
+                    continue;
+                }
                 // A catalog ref keeps pointing at the catalog: the new name gets an entry there.
                 if range.is_none() && current.starts_with("catalog:") {
                     if let Some(catalog) = project.catalog(&current) {
@@ -319,7 +359,7 @@ pub fn apply(
         }
     }
     out.retain(|file, text| texts.get(file) != Some(text));
-    Ok((out, edits))
+    Ok((out, edits, skipped))
 }
 
 fn set_catalog(
@@ -391,7 +431,7 @@ mod tests {
             set("packages/web", "react", "^19.0.0"),
             set("packages/api", "react", "^19.0.0"),
         ];
-        let (out, edits) = apply(&project, &changes, &files).unwrap();
+        let (out, edits, _) = apply(&project, &changes, &files).unwrap();
         assert_eq!(out.keys().collect::<Vec<_>>(), ["pnpm-workspace.yaml"]);
         assert!(out["pnpm-workspace.yaml"].contains("  react: ^19.0.0\n"));
         assert_eq!(edits.len(), 1);
@@ -404,7 +444,7 @@ mod tests {
     #[test]
     fn workspace_refs_are_left_alone_and_aliases_keep_their_target() {
         let (project, files) = fixture();
-        let (out, edits) = apply(
+        let (out, edits, skipped) = apply(
             &project,
             &[
                 set("packages/web", "shared", "^2.0.0"),
@@ -414,6 +454,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(edits.len(), 1);
+        assert_eq!(
+            skipped,
+            [Skipped {
+                file: "packages/web/package.json".into(),
+                package: "packages/web".into(),
+                name: "shared".into(),
+                kind: "prod".into(),
+                range: "workspace:*".into(),
+                reason: "workspace".into(),
+            }]
+        );
         assert!(out["packages/web/package.json"].contains("\"sw\": \"npm:string-width@^5.0.0\""));
         assert!(out["packages/web/package.json"].contains("\"shared\": \"workspace:*\""));
     }
@@ -428,14 +479,14 @@ mod tests {
             to: "preact".into(),
             range: None,
         };
-        let (out, _) = apply(&project, &[rename("packages/web")], &files).unwrap();
+        let (out, _, _) = apply(&project, &[rename("packages/web")], &files).unwrap();
         // api still uses react from the catalog.
         assert!(
             out["pnpm-workspace.yaml"].contains("  react: ^18.2.0\n  preact: ^18.2.0\n"),
             "{}",
             out["pnpm-workspace.yaml"]
         );
-        let (out, edits) = apply(
+        let (out, edits, _) = apply(
             &project,
             &[rename("packages/web"), rename("packages/api")],
             &files,
@@ -452,7 +503,7 @@ mod tests {
     #[test]
     fn adding_creates_the_section() {
         let (project, files) = fixture();
-        let (out, edits) = apply(
+        let (out, edits, _) = apply(
             &project,
             &[Change::Add {
                 dir: ".".into(),

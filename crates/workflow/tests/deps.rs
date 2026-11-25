@@ -111,11 +111,10 @@ fn bump_x_where_declared() {
 fn bump_through_a_pnpm_catalog() {
     let h = fixture("pnpm-catalogs");
     let edits = value(&h, r#"deps.bump("react", "^19.0.0")"#);
-    // web declares react from the catalog; shared's peer range is its own.
+    // web declares react from the catalog; shared's peer range is skipped.
     assert_eq!(
         edits,
         json!([
-            { "file": "packages/shared/package.json", "package": "packages/shared", "name": "react", "kind": "peer", "from": ">=17", "to": "^19.0.0" },
             { "file": "pnpm-workspace.yaml", "package": null, "name": "react", "kind": "catalog", "from": "^18.2.0", "to": "^19.0.0" },
         ])
     );
@@ -146,6 +145,106 @@ fn bump_only_some_kinds_or_with_a_function() {
     assert!(h
         .read("packages/shared/package.json")
         .contains("\"react\": \">=17\""));
+}
+
+#[test]
+fn edits_skip_peers_unless_kinds_names_them_and_say_what_they_skipped() {
+    let h = fixture("pnpm-catalogs");
+    assert_eq!(
+        value(
+            &h,
+            r#"(({ length, skipped }) => ({ length, skipped }))(deps.bump("react", "^19.0.0"))"#
+        ),
+        json!({
+            "length": 1,
+            "skipped": [{ "file": "packages/shared/package.json", "package": "packages/shared", "name": "react", "kind": "peer", "range": ">=17", "reason": "peer" }],
+        })
+    );
+    // Removing and renaming skip peers too.
+    assert_eq!(
+        value(
+            &h,
+            r#"[deps.remove("react").skipped.map((s) => s.reason), deps.rename("react", "preact").skipped.length]"#
+        ),
+        json!([["peer"], 1])
+    );
+    assert!(h
+        .read("packages/shared/package.json")
+        .contains("\"react\": \">=17\""));
+    // Naming "peer" edits them, and nothing is skipped.
+    assert_eq!(
+        value(
+            &h,
+            r#"(({ skipped, ...edits }) => [edits[0], skipped])(deps.bump("react", "^19.0.0", { kinds: ["peer"] }))"#
+        ),
+        json!([
+            { "file": "packages/shared/package.json", "package": "packages/shared", "name": "react", "kind": "peer", "from": ">=17", "to": "^19.0.0" },
+            [],
+        ])
+    );
+}
+
+#[test]
+fn edits_leave_workspace_refs_and_say_so() {
+    let h = fixture("pnpm-catalogs");
+    assert_eq!(
+        value(
+            &h,
+            r#"(({ length, skipped }) => ({ length, skipped }))(deps.bump("@demo/shared", "^2.0.0"))"#
+        ),
+        json!({
+            "length": 0,
+            "skipped": [{ "file": "packages/web/package.json", "package": "packages/web", "name": "@demo/shared", "kind": "prod", "range": "workspace:^", "reason": "workspace" }],
+        })
+    );
+    assert!(h
+        .read("packages/web/package.json")
+        .contains("\"@demo/shared\": \"workspace:^\""));
+    // In a step's result, only the edits are recorded.
+    assert_eq!(
+        value(&h, r#"deps.bump("@demo/shared", "^2.0.0")"#),
+        json!([])
+    );
+}
+
+#[test]
+fn without_workspaces_only_the_root_package_counts() {
+    let h = fixture("single");
+    h.write(
+        "examples/demo/package.json",
+        "{\n  \"name\": \"demo\",\n  \"dependencies\": {\n    \"left-pad\": \"^1.3.0\"\n  }\n}\n",
+    );
+    assert_eq!(
+        value(
+            &h,
+            r#"({
+              packages: deps.packages(),
+              all: deps.packages({ all: true }),
+              member: deps.packages({ all: true }).map((p) => p.member),
+              uses: deps.uses("left-pad"),
+              owner: deps.packageOf("examples/demo/index.js")?.dir,
+              nearest: deps.packageOf("examples/demo/index.js", { all: true })?.dir,
+            })"#
+        ),
+        json!({
+            "packages": ["single@1.0.0"],
+            "all": ["single@1.0.0", "demo"],
+            "member": [true, false],
+            "uses": false,
+            "owner": ".",
+            "nearest": "examples/demo",
+        })
+    );
+    // A package found with { all: true } can still be edited, by itself or by dir.
+    value(
+        &h,
+        r#"deps.packages({ all: true })[1].bump("left-pad", "^1.4.0")"#,
+    );
+    assert!(h
+        .read("examples/demo/package.json")
+        .contains("\"left-pad\": \"^1.4.0\""));
+    let edits = value(&h, r#"deps.remove("left-pad", { in: "examples/demo" })"#);
+    assert_eq!(edits[0]["from"], json!("^1.4.0"));
 }
 
 #[test]
@@ -407,6 +506,28 @@ fn needs_install_compares_the_manifests_with_the_lockfile() {
         json!([false, 1, true])
     );
     // The next step reads the edited manifest from disk: still behind the lockfile.
+    assert_eq!(value(&h, "deps.needsInstall()"), json!(true));
+}
+
+#[test]
+/// The documented limit on Yarn: yarn.lock keeps no workspace ranges, so the
+/// graph takes them from package.json. The step that bumps sees the change;
+/// a later step reads the bumped package.json and cannot.
+fn needs_install_on_yarn_sees_a_bumped_range_only_in_the_step_that_bumped_it() {
+    let h = fixture("yarn-berry");
+    assert_eq!(
+        value(
+            &h,
+            r#"[deps.needsInstall(), deps.bump("express", "^4.19.0").length, deps.needsInstall()]"#
+        ),
+        json!([false, 1, true])
+    );
+    assert_eq!(value(&h, "deps.needsInstall()"), json!(false));
+    // Added and removed dependencies show in later steps too.
+    assert_eq!(
+        value(&h, r#"deps.add("zod", "^3.0.0", { to: "app" }).length"#),
+        json!(1)
+    );
     assert_eq!(value(&h, "deps.needsInstall()"), json!(true));
 }
 

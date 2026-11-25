@@ -25,6 +25,8 @@ export default async function main() {
 }
 ```
 
+The repository's packages are the root `package.json` and the workspaces it declares. Without a workspace declaration that's the root alone, so a fixture's or an example's `package.json` doesn't make the repository "use" something; `dependencies().packages({ all: true })` lists every `package.json` when you want them.
+
 `resolved` is the range a declaration means: for `"react": "catalog:"` it is the catalog's entry, for `"@acme/ui": "workspace:^"` the local package's version. A range `semver` can't read (a git URL, `latest`) has `readable: false` and `semver.major` gives `null`.
 
 To scope a `forEachFile` callback to files whose package uses something, ask for the file's package:
@@ -53,10 +55,11 @@ await step("Update dependencies", () => {
 });
 ```
 
-Each edit returns what it changed: `{ file, package, name, kind, from, to }`.
+Each edit returns what it changed, `{ file, package, name, kind, from, to }`, and what it left alone as `skipped`.
 
 - A `catalog:` declaration is bumped in its catalog (`pnpm-workspace.yaml`, bun's `package.json`, or Yarn's `.yarnrc.yml`), once for every package that uses it.
-- A `workspace:` declaration points at one of your packages and is left alone.
+- Peer dependencies are left alone unless `kinds` names `"peer"`: a library's `"react": ">=17"` peer range stays when you bump React. They're listed in `skipped` with `reason: "peer"`.
+- A `workspace:` declaration points at one of your packages and is left alone (`reason: "workspace"`).
 - `bump` takes a function to decide per declaration: `deps.bump("lodash", (d) => semver.major(d.resolved ?? "") === 3 ? "^4.17.21" : undefined)`.
 - `{ kinds, in }` limit an edit to sections and packages: `deps.bump("react", "^19.0.0", { kinds: ["prod", "dev"], in: "apps/web" })`.
 
@@ -69,13 +72,17 @@ Edits change the `package.json` files, not the lockfile. `install()` is a step t
 ```ts
 import { dependencies, install } from "codemod/deps";
 
-await step(() => dependencies().bump("react", "^19.0.0"));
-if (await step(() => dependencies().needsInstall())) {
-  await step(install());
-}
+const behind = await step(() => {
+  const deps = dependencies();
+  deps.bump("react", "^19.0.0");
+  return deps.needsInstall();
+});
+if (behind) await step(install());
 ```
 
-It only refreshes the lockfile by default; pass `install({ lockfileOnly: false })` to install. A dry run doesn't run it. It fails with a message, instead of hanging, when the package manager isn't installed or the registry can't be reached.
+Ask `needsInstall()` in the step that edits: `yarn.lock` keeps no ranges for your own packages, so on Yarn a later step can't see a changed range.
+
+It only refreshes the lockfile by default; pass `install({ lockfileOnly: false })` to install. A dry run doesn't run it. It fails with a message, instead of hanging, when the package manager isn't installed or the registry can't be reached. In Codemod's cloud runs, which reach only `registry.npmjs.org` and GitHub unless your organization allows more hosts, the error names the registry the install needed, such as Yarn's `registry.yarnpkg.com`.
 
 ## Ask the lockfile
 
