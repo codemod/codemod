@@ -346,6 +346,22 @@ fn method_of(flow: &FileFlow, class_node: u32, name: &str) -> Option<u32> {
         .map(|(_, function)| *function)
 }
 
+/// The values stored in a class field by its initializer.
+fn field_values(flow: &FileFlow, class_node: u32, name: &str) -> Vec<u32> {
+    flow.class_fields
+        .get(&class_node)
+        .into_iter()
+        .flatten()
+        .filter(|(field, _)| field == name)
+        .flat_map(|(_, node)| {
+            flow.in_edges[*node as usize]
+                .iter()
+                .filter(|(_, edge)| *edge == FlowEdgeKind::Store)
+                .map(|(value, _)| *value)
+        })
+        .collect()
+}
+
 /// The functions an origin stands for when it is called.
 fn functions_of(origin: &Origin, out: &mut Vec<(PathBuf, u32)>) {
     let Origin::Node(path, flow, node) = origin else {
@@ -442,11 +458,20 @@ pub(crate) fn call_targets(
     let via = match &call.callee {
         CalleeFact::Member { object, property } => {
             if flow.nodes[*object as usize].kind == FlowNodeKind::This {
-                let method = flow
-                    .class_of(call.function)
-                    .and_then(|class| method_of(flow, class, property));
+                let class = flow.class_of(call.function);
+                let method = class.and_then(|class| method_of(flow, class, property));
                 if let Some(function) = method {
                     functions.push((path.to_path_buf(), function));
+                } else if let Some(class) = class {
+                    // `run = bound(fn)`, `handler = existing`: a field whose
+                    // value is a function.
+                    let mut found = Vec::new();
+                    for value in field_values(flow, class, property) {
+                        origins(host, path, flow, value, &mut seen, &mut found);
+                    }
+                    for origin in &found {
+                        functions_of(origin, &mut functions);
+                    }
                 }
             } else {
                 let mut found = Vec::new();

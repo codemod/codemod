@@ -126,6 +126,14 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_flow_destructuring_assignment_and_class_fields,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "js_flow_destructuring_and_fields.js",
+    fixture_dir: "javascript/dataflow",
+    target: "patterns.js",
+}
+
+jssg_test! {
     name: test_definition_resolve_external_false,
     language: CodemodLang::Static(SupportLang::JavaScript),
     codemod: "js_definition_resolve_external.js",

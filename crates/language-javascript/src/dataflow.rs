@@ -172,6 +172,9 @@ pub struct FileFlow {
     pub object_members: FxHashMap<u32, Vec<(String, u32)>>,
     /// Class node -> (method name, function).
     pub class_methods: FxHashMap<u32, Vec<(String, u32)>>,
+    /// Class node -> (field name, the field's node). The initializer flows
+    /// into the field's node with a `store` edge.
+    pub class_fields: FxHashMap<u32, Vec<(String, u32)>>,
     pub loops: Vec<ByteRange>,
     /// Syntax the builder saw but does not model, by what it is. Values that
     /// pass through it are not connected to where they go. Used to measure
@@ -334,6 +337,14 @@ struct Builder<'s, 'a> {
     /// Innermost enclosing function by syntax node id, not counting the node.
     enclosing: Vec<u32>,
     binding_by_symbol: Vec<u32>,
+}
+
+/// A class member's name: `m`, or `#m` for a private member.
+fn class_key(key: &PropertyKey<'_>) -> Option<String> {
+    match key {
+        PropertyKey::PrivateIdentifier(private) => Some(format!("#{}", private.name)),
+        other => other.static_name().map(|name| name.to_string()),
+    }
 }
 
 fn range_of(span: Span) -> ByteRange {
@@ -522,14 +533,12 @@ impl<'s, 'a> Builder<'s, 'a> {
                     .key
                     .static_name()
                     .map(|name| (name.to_string(), range_of(property.key.span()))),
-                AstKind::MethodDefinition(method) => method
-                    .key
-                    .static_name()
-                    .map(|name| (name.to_string(), range_of(method.key.span()))),
-                AstKind::PropertyDefinition(property) => property
-                    .key
-                    .static_name()
-                    .map(|name| (name.to_string(), range_of(property.key.span()))),
+                AstKind::MethodDefinition(method) => {
+                    class_key(&method.key).map(|name| (name, range_of(method.key.span())))
+                }
+                AstKind::PropertyDefinition(property) => {
+                    class_key(&property.key).map(|name| (name, range_of(property.key.span())))
+                }
                 AstKind::AssignmentExpression(assignment) => assignment
                     .left
                     .get_identifier_name()
@@ -564,12 +573,19 @@ impl<'s, 'a> Builder<'s, 'a> {
                 self.flow.functions[index as usize].name.clone();
             self.flow.nodes[flow_node as usize].function = parent;
 
-            if let AstKind::MethodDefinition(method) = nodes.parent_kind(node.id()) {
+            let member_name = match nodes.parent_kind(node.id()) {
+                AstKind::MethodDefinition(method) => Some(class_key(&method.key)),
+                // `handle = () => {}`: an arrow-function field is a method
+                // whose `this` is the instance.
+                AstKind::PropertyDefinition(property) => Some(class_key(&property.key)),
+                _ => None,
+            };
+            if let Some(member_name) = member_name {
                 let class_span = nodes.ancestors(node.id()).find_map(|a| match a.kind() {
                     AstKind::Class(class) => Some(class.span),
                     _ => None,
                 });
-                if let (Some(class_span), Some(name)) = (class_span, method.key.static_name()) {
+                if let (Some(class_span), Some(name)) = (class_span, member_name) {
                     let class_node = self.node(class_span);
                     self.flow.functions[index as usize].class_node = Some(class_node);
                     self.flow
@@ -691,6 +707,177 @@ impl<'s, 'a> Builder<'s, 'a> {
         }
     }
 
+    /// Edges from a value into the targets of an assignment pattern:
+    /// `[a, b] = v`, `({ p, q: r = 1, ...rest } = v)`, `[o.p] = v`.
+    fn bind_target(&mut self, target: &AssignmentTarget<'a>, from: u32, kind: FlowEdgeKind) {
+        match target {
+            AssignmentTarget::AssignmentTargetIdentifier(ident) => {
+                if let Some(binding) = self.binding_of(ident) {
+                    self.edge(from, binding, kind);
+                }
+            }
+            AssignmentTarget::StaticMemberExpression(_)
+            | AssignmentTarget::ComputedMemberExpression(_)
+            | AssignmentTarget::PrivateFieldExpression(_) => {
+                let node = self.node(target.span());
+                self.edge(from, node, FlowEdgeKind::Store);
+            }
+            AssignmentTarget::ArrayAssignmentTarget(array) => {
+                for element in array.elements.iter().flatten() {
+                    self.bind_target_default(element, from, FlowEdgeKind::Element);
+                }
+                if let Some(rest) = &array.rest {
+                    self.bind_target(&rest.target, from, FlowEdgeKind::Capture);
+                }
+            }
+            AssignmentTarget::ObjectAssignmentTarget(object) => {
+                for property in &object.properties {
+                    match property {
+                        AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(short) => {
+                            if let Some(binding) = self.binding_of(&short.binding) {
+                                self.edge(from, binding, FlowEdgeKind::Property);
+                                if let Some(init) = &short.init {
+                                    let value = self.node(init.span());
+                                    self.edge(value, binding, FlowEdgeKind::Assign);
+                                }
+                            }
+                        }
+                        AssignmentTargetProperty::AssignmentTargetPropertyProperty(long) => {
+                            self.bind_target_default(&long.binding, from, FlowEdgeKind::Property);
+                        }
+                    }
+                }
+                if let Some(rest) = &object.rest {
+                    self.bind_target(&rest.target, from, FlowEdgeKind::Capture);
+                }
+            }
+            // `(x as T) = v` and other TypeScript wrappers.
+            _ => self.skip("assignment-target"),
+        }
+    }
+
+    fn bind_target_default(
+        &mut self,
+        target: &AssignmentTargetMaybeDefault<'a>,
+        from: u32,
+        kind: FlowEdgeKind,
+    ) {
+        match target {
+            AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(with_default) => {
+                self.bind_target(&with_default.binding, from, kind);
+                let value = self.node(with_default.init.span());
+                self.bind_target(&with_default.binding, value, FlowEdgeKind::Assign);
+            }
+            other => {
+                if let Some(target) = other.as_assignment_target() {
+                    self.bind_target(target, from, kind);
+                }
+            }
+        }
+    }
+
+    /// Mutations made by an assignment pattern: each identifier is rebound,
+    /// each member target is a property write.
+    fn target_mutations(&mut self, target: &AssignmentTarget<'a>, span: Span, at: NodeId) {
+        match target {
+            AssignmentTarget::AssignmentTargetIdentifier(ident) => {
+                let binding = self.binding_of(ident);
+                self.mutation(
+                    binding,
+                    span,
+                    MutationKind::Reassign,
+                    MutationConfidence::Definite,
+                    None,
+                    at,
+                );
+            }
+            AssignmentTarget::StaticMemberExpression(member) => {
+                let binding = self.root_binding(&member.object);
+                let name = Some(member.property.name.to_string());
+                self.mutation(
+                    binding,
+                    span,
+                    MutationKind::PropertyWrite,
+                    MutationConfidence::Definite,
+                    name,
+                    at,
+                );
+            }
+            AssignmentTarget::ComputedMemberExpression(member) => {
+                let binding = self.root_binding(&member.object);
+                let name = member.static_property_name().map(|name| name.to_string());
+                self.mutation(
+                    binding,
+                    span,
+                    MutationKind::PropertyWrite,
+                    MutationConfidence::Definite,
+                    name,
+                    at,
+                );
+            }
+            AssignmentTarget::PrivateFieldExpression(member) => {
+                let binding = self.root_binding(&member.object);
+                let name = Some(member.field.name.to_string());
+                self.mutation(
+                    binding,
+                    span,
+                    MutationKind::PropertyWrite,
+                    MutationConfidence::Definite,
+                    name,
+                    at,
+                );
+            }
+            AssignmentTarget::ArrayAssignmentTarget(array) => {
+                for element in array.elements.iter().flatten() {
+                    let inner = match element {
+                        AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) => {
+                            Some(&d.binding)
+                        }
+                        other => other.as_assignment_target(),
+                    };
+                    if let Some(inner) = inner {
+                        self.target_mutations(inner, span, at);
+                    }
+                }
+                if let Some(rest) = &array.rest {
+                    self.target_mutations(&rest.target, span, at);
+                }
+            }
+            AssignmentTarget::ObjectAssignmentTarget(object) => {
+                for property in &object.properties {
+                    match property {
+                        AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(short) => {
+                            let binding = self.binding_of(&short.binding);
+                            self.mutation(
+                                binding,
+                                span,
+                                MutationKind::Reassign,
+                                MutationConfidence::Definite,
+                                None,
+                                at,
+                            );
+                        }
+                        AssignmentTargetProperty::AssignmentTargetPropertyProperty(long) => {
+                            let inner = match &long.binding {
+                                AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) => {
+                                    Some(&d.binding)
+                                }
+                                other => other.as_assignment_target(),
+                            };
+                            if let Some(inner) = inner {
+                                self.target_mutations(inner, span, at);
+                            }
+                        }
+                    }
+                }
+                if let Some(rest) = &object.rest {
+                    self.target_mutations(&rest.target, span, at);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn collect_expressions(&mut self) {
         let nodes = self.semantic.nodes();
         for node in nodes.iter() {
@@ -702,6 +889,15 @@ impl<'s, 'a> Builder<'s, 'a> {
                 | AstKind::WhileStatement(_)
                 | AstKind::DoWhileStatement(_) => {
                     self.flow.loops.push(range_of(kind.span()));
+                    // `for (x of xs)`, `for ([k, v] of entries)`: the loop rebinds x.
+                    let left = match kind {
+                        AstKind::ForOfStatement(for_of) => Some(&for_of.left),
+                        AstKind::ForInStatement(for_in) => Some(&for_in.left),
+                        _ => None,
+                    };
+                    if let Some(target) = left.and_then(|left| left.as_assignment_target()) {
+                        self.target_mutations(target, target.span(), node.id());
+                    }
                     continue;
                 }
                 _ => {}
@@ -906,6 +1102,15 @@ impl<'s, 'a> Builder<'s, 'a> {
                     property: name.to_string(),
                 }
             }
+            // `this.#method()`.
+            Expression::PrivateFieldExpression(member) if !is_new => {
+                let object = self.node(member.object.span());
+                self.edge(object, call_node, FlowEdgeKind::Receiver);
+                CalleeFact::Member {
+                    object,
+                    property: format!("#{}", member.field.name),
+                }
+            }
             other => CalleeFact::Node(self.node(other.span())),
         };
 
@@ -991,10 +1196,12 @@ impl<'s, 'a> Builder<'s, 'a> {
                 MutationKind::PropertyWrite,
                 Some(member.field.name.to_string()),
             ),
-            _ => {
-                self.skip("destructuring-assignment");
-                (None, MutationKind::Reassign, None)
+            AssignmentTarget::ArrayAssignmentTarget(_)
+            | AssignmentTarget::ObjectAssignmentTarget(_) => {
+                self.target_mutations(&assignment.left, assignment.span, id);
+                return;
             }
+            _ => (None, MutationKind::Reassign, None),
         };
         if let AssignmentTarget::StaticMemberExpression(member) = &assignment.left {
             if self.is_global(&member.object, "exports")
@@ -1039,20 +1246,7 @@ impl<'s, 'a> Builder<'s, 'a> {
                 }
                 let whole = self.node(assignment.span);
                 self.edge(index, whole, FlowEdgeKind::Alias);
-                match &assignment.left {
-                    AssignmentTarget::AssignmentTargetIdentifier(ident) => {
-                        if let Some(binding) = self.binding_of(ident) {
-                            self.edge(index, binding, FlowEdgeKind::Assign);
-                        }
-                    }
-                    AssignmentTarget::StaticMemberExpression(_)
-                    | AssignmentTarget::ComputedMemberExpression(_)
-                    | AssignmentTarget::PrivateFieldExpression(_) => {
-                        let target = self.node(assignment.left.span());
-                        self.edge(index, target, FlowEdgeKind::Store);
-                    }
-                    _ => {}
-                }
+                self.bind_target(&assignment.left, index, FlowEdgeKind::Assign);
             }
             AstKind::CallExpression(call) => {
                 if call.callee.span() != span {
@@ -1168,6 +1362,13 @@ impl<'s, 'a> Builder<'s, 'a> {
                 let whole = self.node(attribute.span);
                 self.edge(index, whole, FlowEdgeKind::JsxAttribute);
             }
+            // `class C { items = []; }`: the value is stored in the field.
+            AstKind::PropertyDefinition(property)
+                if property.value.as_ref().is_some_and(|v| v.span() == span) =>
+            {
+                let field = self.class_field(parent.id(), property);
+                self.edge(index, field, FlowEdgeKind::Store);
+            }
             AstKind::JSXOpeningElement(_) => {
                 if matches!(
                     node.kind(),
@@ -1187,6 +1388,8 @@ impl<'s, 'a> Builder<'s, 'a> {
                     for declarator in &declaration.declarations {
                         self.bind_pattern(&declarator.id, index, FlowEdgeKind::Element);
                     }
+                } else if let Some(target) = for_of.left.as_assignment_target() {
+                    self.bind_target(target, index, FlowEdgeKind::Element);
                 }
             }
             // Positions where a value is used for control, or that are a
@@ -1217,7 +1420,14 @@ impl<'s, 'a> Builder<'s, 'a> {
             | AstKind::ExportDefaultDeclaration(_)
             | AstKind::Directive(_)
             | AstKind::JSXMemberExpression(_)
-            | AstKind::JSXClosingElement(_) => {}
+            | AstKind::JSXClosingElement(_)
+            // Assignment patterns are linked from the assignment.
+            | AstKind::ArrayAssignmentTarget(_)
+            | AstKind::ObjectAssignmentTarget(_)
+            | AstKind::AssignmentTargetWithDefault(_)
+            | AstKind::AssignmentTargetPropertyIdentifier(_)
+            | AstKind::AssignmentTargetPropertyProperty(_)
+            | AstKind::AssignmentTargetRest(_) => {}
             AstKind::Class(class)
                 if class.super_class.as_ref().is_some_and(|s| s.span() == span) =>
             {
@@ -1231,6 +1441,29 @@ impl<'s, 'a> Builder<'s, 'a> {
                 }
             }
         }
+    }
+
+    /// The node for a class field, registered on its class.
+    fn class_field(&mut self, id: NodeId, property: &PropertyDefinition<'a>) -> u32 {
+        let name = class_key(&property.key);
+        let function = self.enclosing_fn(id);
+        let field = self.describe(property.span, FlowNodeKind::Member, name.clone(), function);
+        let class_span = self
+            .semantic
+            .nodes()
+            .ancestors(id)
+            .find_map(|a| match a.kind() {
+                AstKind::Class(class) => Some(class.span),
+                _ => None,
+            });
+        if let (Some(class_span), Some(name)) = (class_span, name) {
+            let class_node = self.node(class_span);
+            let fields = self.flow.class_fields.entry(class_node).or_default();
+            if !fields.iter().any(|(_, node)| *node == field) {
+                fields.push((name, field));
+            }
+        }
+        field
     }
 
     fn link_return(&mut self, from: NodeId, index: u32) {
@@ -1353,6 +1586,104 @@ mod tests {
             files.len(),
             bytes as f64 / 1e6,
         );
+    }
+
+    fn sources(flow: &FileFlow, node: u32) -> Vec<(FlowEdgeKind, String)> {
+        flow.in_edges[node as usize]
+            .iter()
+            .map(|(from, kind)| {
+                let n = &flow.nodes[*from as usize];
+                (
+                    *kind,
+                    n.name
+                        .clone()
+                        .unwrap_or_else(|| n.kind.as_str().to_string()),
+                )
+            })
+            .collect()
+    }
+
+    fn binding(flow: &FileFlow, name: &str) -> u32 {
+        flow.nodes
+            .iter()
+            .position(|n| n.binding && n.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("no binding {name}")) as u32
+    }
+
+    #[test]
+    fn destructuring_assignment_targets() {
+        let source = "let a, b, c, d, rest;\n[a, [b] = fallback] = pair();\n({ c, x: d = 5, ...rest } = obj);\n[o.p, this.q] = vals;\nfor ([a] of entries) {}";
+        let flow = flow(source);
+        let a = sources(&flow, binding(&flow, "a"));
+        assert!(
+            a.contains(&(FlowEdgeKind::Element, "pair".to_string())),
+            "{a:?}"
+        );
+        assert!(
+            a.contains(&(FlowEdgeKind::Element, "entries".to_string())),
+            "{a:?}"
+        );
+        let b = sources(&flow, binding(&flow, "b"));
+        assert!(
+            b.contains(&(FlowEdgeKind::Element, "pair".to_string())),
+            "{b:?}"
+        );
+        assert!(
+            b.contains(&(FlowEdgeKind::Element, "fallback".to_string())),
+            "{b:?}"
+        );
+        let c = sources(&flow, binding(&flow, "c"));
+        assert_eq!(c, [(FlowEdgeKind::Property, "obj".to_string())]);
+        let d = sources(&flow, binding(&flow, "d"));
+        assert!(
+            d.contains(&(FlowEdgeKind::Property, "obj".to_string())),
+            "{d:?}"
+        );
+        assert!(
+            d.contains(&(FlowEdgeKind::Assign, "literal".to_string())),
+            "{d:?}"
+        );
+        let rest = sources(&flow, binding(&flow, "rest"));
+        assert_eq!(rest, [(FlowEdgeKind::Capture, "obj".to_string())]);
+        let vals = node_at(&flow, source, "vals");
+        let stores: Vec<_> = flow.out_edges[vals as usize]
+            .iter()
+            .filter(|(_, kind)| *kind == FlowEdgeKind::Store)
+            .map(|(to, _)| flow.nodes[*to as usize].name.clone().unwrap())
+            .collect();
+        assert_eq!(stores, ["p", "q"]);
+        let rebinds = flow
+            .mutations
+            .iter()
+            .filter(|m| m.kind == MutationKind::Reassign)
+            .count();
+        // a, b, c, d, rest, and a again in the loop.
+        assert_eq!(rebinds, 6);
+        assert!(flow.skipped.is_empty(), "{:?}", flow.skipped);
+    }
+
+    #[test]
+    fn class_fields_store_their_initializer() {
+        let source = "class Store {\n  items = [];\n  #count = start;\n  static shared = make();\n  onClick = () => this.items.push(1);\n}";
+        let flow = flow(source);
+        let class = node_at(&flow, source, source);
+        let fields: Vec<&str> = flow.class_fields[&class]
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(fields, ["items", "#count", "shared", "onClick"]);
+        let items = flow.class_fields[&class][0].1;
+        assert_eq!(
+            sources(&flow, items),
+            [(FlowEdgeKind::Store, "array".to_string())]
+        );
+        // An arrow-function field is a method.
+        let methods: Vec<&str> = flow.class_methods[&class]
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(methods, ["onClick"]);
+        assert!(flow.skipped.is_empty(), "{:?}", flow.skipped);
     }
 
     #[test]
