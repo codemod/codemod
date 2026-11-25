@@ -19,6 +19,33 @@ To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha wor
 
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
 
+<Update label="Unreleased" description="On engine/code-first">
+**Breaking changes**
+
+- **`dependencyGraph()` is replaced by `dependencies()`.** Call it inside a step. It reads the `package.json` files without a lockfile, and reads the lockfiles the first time you ask a lockfile question. The graph methods (`nodes`, `node`, `chains`, `dependents`, `workspaces`, `lockfiles`, `skipped`) are on the same object. `codemod workflow upgrade` rewrites old calls.
+
+  ```ts
+  // before
+  import { dependencyGraph } from "codemod/deps";
+  const chains = await step(dependencyGraph((g) => g.chains({ to: g.nodes("moment") })));
+
+  // after
+  import { dependencies } from "codemod/deps";
+  const chains = await step(() => dependencies().chains({ to: "moment" }));
+  ```
+
+**New**
+
+- `dependencies()` answers the manifest questions: `uses`, `declarations` (with `catalog:` and `workspace:` refs resolved), `packages`, `packageOf(file)`, `packageManager` and `catalogs`.
+- Edits: `bump`, `add`, `remove` and `rename` change `package.json` files and catalogs where a dependency is declared, keeping their formatting.
+- `install()`, a step that runs the repository's package manager to refresh the lockfile.
+- `semver`: `gte`, `lte`, `minVersion`, `major`, `coerce`, `maxSatisfying` and `validRange`.
+- `chains({ to })` takes package names. A node's `local` narrows `dir` to a string.
+- Step results record objects with `toJSON()` as their JSON, and the step's type says so.
+
+See [Dependencies](/community/workflows/dependencies).
+</Update>
+
 <Update label="2.0.0-alpha.9" description="November 25, 2026">
 ```bash
 npx codemod@2.0.0-alpha.9 --version   # codemod 2.0.0-alpha.9

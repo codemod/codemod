@@ -6,7 +6,7 @@
 // returns one `Report` (see ./lib/report.ts). When a check fails, the run
 // fails with the report as its output and exits 2.
 
-import { dependencyGraph, semver } from "codemod/deps";
+import { dependencies, semver } from "codemod/deps";
 import { forEachFile, step } from "codemod/workflow";
 import { type Check, type Finding, finish } from "./lib/report.ts";
 
@@ -46,52 +46,50 @@ const ALLOWED_LINES = [/\b1\.x\b/];
 const RUST_TEST_MODULE = /^\s*#\[cfg\(test\)\]\s*\n\s*(?:pub(?:\(\w+\))?\s+)?mod\s/m;
 
 export default async function main() {
-  const crates = await step(
-    "Single-version crates",
-    dependencyGraph((g): Check => {
-      const check = {
-        id: "single-version-crates",
-        title: `One version of ${SINGLE_VERSION_CRATES.join(", ")} in ${ROOT_CRATE}`,
+  const crates = await step("Single-version crates", (): Check => {
+    const g = dependencies();
+    const check = {
+      id: "single-version-crates",
+      title: `One version of ${SINGLE_VERSION_CRATES.join(", ")} in ${ROOT_CRATE}`,
+    };
+    const root = g.workspaces().find((ws) => ws.ecosystem === "cargo" && ws.name === ROOT_CRATE);
+    if (!root) {
+      const where = g.lockfiles.join(", ") || "no lockfile";
+      return {
+        ...check,
+        status: "fail",
+        findings: [{ message: `No ${ROOT_CRATE} crate in ${where}` }],
       };
-      const root = g.workspaces().find((ws) => ws.ecosystem === "cargo" && ws.name === ROOT_CRATE);
-      if (!root) {
-        const where = g.lockfiles.join(", ") || "no lockfile";
-        return {
-          ...check,
-          status: "fail",
-          findings: [{ message: `No ${ROOT_CRATE} crate in ${where}` }],
-        };
-      }
+    }
 
-      const metrics: Record<string, number> = {};
-      const findings: Finding[] = [];
-      for (const name of SINGLE_VERSION_CRATES) {
-        // Versions the root crate reaches, newest first, each with its shortest chain.
-        const reached = g
-          .nodes(name)
-          .filter((node) => node.ecosystem === "cargo")
-          .map((node) => ({ node, chain: g.chains({ from: root, to: node })[0] }))
-          .filter((found) => found.chain)
-          .sort((a, b) => semver.compare(b.node.version, a.node.version, { ecosystem: "cargo" }));
-        metrics[`${name}_versions`] = reached.length;
+    const metrics: Record<string, number> = {};
+    const findings: Finding[] = [];
+    for (const name of SINGLE_VERSION_CRATES) {
+      // Versions the root crate reaches, newest first, each with its shortest chain.
+      const reached = g
+        .nodes(name)
+        .filter((node) => node.ecosystem === "cargo")
+        .map((node) => ({ node, chain: g.chains({ from: root, to: node })[0] }))
+        .filter((found) => found.chain)
+        .sort((a, b) => semver.compare(b.node.version, a.node.version, { ecosystem: "cargo" }));
+      metrics[`${name}_versions`] = reached.length;
 
-        // The newest version stays; every other one is an extra.
-        const kept = reached[0]?.node.version;
-        for (const { node, chain } of reached.slice(1)) {
-          const via = chain.map((crate) => crate.name).join(" > ");
-          // Every crate that depends on this exact version, third-party ones included.
-          const pulledBy = node
-            .installedBy({ includeThirdParty: true })
-            .map((edge) => String(edge.from));
-          findings.push({
-            message: `${node} next to ${name}@${kept}: ${via} (pulled in by ${pulledBy.join(", ")})`,
-            file: "Cargo.lock",
-          });
-        }
+      // The newest version stays; every other one is an extra.
+      const kept = reached[0]?.node.version;
+      for (const { node, chain } of reached.slice(1)) {
+        const via = chain.map((crate) => crate.name).join(" > ");
+        // Every crate that depends on this exact version, third-party ones included.
+        const pulledBy = node
+          .installedBy({ includeThirdParty: true })
+          .map((edge) => String(edge.from));
+        findings.push({
+          message: `${node} next to ${name}@${kept}: ${via} (pulled in by ${pulledBy.join(", ")})`,
+          file: "Cargo.lock",
+        });
       }
-      return { ...check, status: findings.length ? "fail" : "pass", metrics, findings };
-    }),
-  );
+    }
+    return { ...check, status: findings.length ? "fail" : "pass", metrics, findings };
+  });
 
   const pins = await step(
     "codemod@latest pins",
