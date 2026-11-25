@@ -45,8 +45,11 @@ pub(crate) struct StepIsolates {
 }
 
 impl StepIsolates {
-    pub fn new(task: &TaskContext<'_>) -> Result<Self, String> {
-        writes_itself(task, &task.run.services.capabilities)?;
+    /// `code`: the step's module, to tell whether it may write by itself.
+    pub fn new(task: &TaskContext<'_>, code: Option<&str>) -> Result<Self, String> {
+        if code.is_none_or(|code| code_may_write(task, code)) {
+            writes_itself(task, &task.run.services.capabilities)?;
+        }
         let resolver = OxcResolver::new(task.run.bundle_dir.clone(), None)
             .map_err(|e| format!("cannot resolve imports from the workflow directory: {e}"))?;
         Ok(Self {
@@ -183,10 +186,72 @@ pub(crate) fn capabilities(
 pub(crate) fn capabilities_for_code(
     task: &TaskContext<'_>,
     requested: &[String],
+    code: Option<&str>,
 ) -> Result<HashSet<LlrtSupportedModules>, String> {
     let granted = capabilities(task, requested)?;
-    writes_itself(task, &granted)?;
+    if code.is_none_or(|code| code_may_write(task, code)) {
+        writes_itself(task, &granted)?;
+    }
     Ok(granted)
+}
+
+/// Whether a step's module, or a local file it imports (followed from the
+/// workflow's directory), imports `fs` or `child_process`: only then can its
+/// code change files without the engine. A text scan, on the safe side.
+fn code_may_write(task: &TaskContext<'_>, code: &str) -> bool {
+    let mut pending: Vec<(std::path::PathBuf, String)> =
+        vec![(task.run.bundle_dir.join("__step.ts"), code.to_string())];
+    let mut seen = std::collections::HashSet::new();
+    while let Some((path, text)) = pending.pop() {
+        for specifier in import_specifiers(&text) {
+            let bare = specifier.strip_prefix("node:").unwrap_or(&specifier);
+            if matches!(bare, "fs" | "fs/promises" | "child_process") {
+                return true;
+            }
+            if !(specifier.starts_with("./") || specifier.starts_with("../")) {
+                continue;
+            }
+            let base = path.parent().unwrap_or(std::path::Path::new("."));
+            let file = base.join(&specifier);
+            let candidates = [
+                file.clone(),
+                file.with_extension("ts"),
+                file.join("index.ts"),
+            ];
+            let Some(found) = candidates.into_iter().find(|c| c.is_file()) else {
+                continue;
+            };
+            if seen.insert(found.clone()) {
+                if let Ok(text) = std::fs::read_to_string(&found) {
+                    pending.push((found, text));
+                }
+            }
+        }
+    }
+    false
+}
+
+/// `from "x"`, `import "x"`, `import("x")` and `require("x")` specifiers.
+fn import_specifiers(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for marker in ["from ", "import ", "import(", "require("] {
+        let mut rest = text;
+        while let Some(i) = rest.find(marker) {
+            rest = &rest[i + marker.len()..];
+            let trimmed = rest.trim_start();
+            let Some(quote) = trimmed
+                .chars()
+                .next()
+                .filter(|c| matches!(c, '"' | '\'' | '`'))
+            else {
+                continue;
+            };
+            if let Some(end) = trimmed[1..].find(quote) {
+                out.push(trimmed[1..1 + end].to_string());
+            }
+        }
+    }
+    out
 }
 
 /// Code with `fs` or `child_process` may change files without the engine:

@@ -152,8 +152,17 @@ impl Worker {
             }
         }
 
-        let (resolver, loader, globals) = module_builder.builder.build();
-        let (codemod_resolver, loader) = crate::with_codemod_modules!(loader, llm: fetch);
+        // A dry run with `fs` granted: a curated fs that reads the disk and
+        // keeps writes in memory, so code that writes reports still runs.
+        let dry_fs = options.dry_run && options.capabilities.contains(&LlrtSupportedModules::Fs);
+        let (mut resolver, loader, globals) = module_builder.builder.build();
+        let (codemod_resolver, mut loader) = crate::with_codemod_modules!(loader, llm: fetch);
+        if dry_fs {
+            resolver = resolver.add_name("fs").add_name("fs/promises");
+            loader = loader
+                .with_module("fs", super::curated_fs::CuratedFsModule)
+                .with_module("fs/promises", super::curated_fs::CuratedFsPromisesModule);
+        }
         let codemod_resolver = codemod_resolver.providing(options.codemod_modules.clone());
 
         let mut memory_resolver = BuiltinResolver::default();
@@ -218,6 +227,17 @@ impl Worker {
                     .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(hooks_for_ctx.clone())
                     .map_err(|e| fail(format!("{e:?}")))?;
+                if dry_fs {
+                    let memory_root: vfs::VfsPath = vfs::MemoryFS::new().into();
+                    let cfg = super::curated_fs::CuratedFsConfig::new(
+                        target.to_string_lossy().into_owned(),
+                        memory_root,
+                    )
+                    .with_fetcher(Arc::new(super::execution_engine::DryRunDiskFetcher {
+                        target_directory: target.clone(),
+                    }));
+                    ctx.store_userdata(cfg).map_err(|e| fail(format!("{e:?}")))?;
+                }
                 if let Some(language) = &options.default_language {
                     ctx.store_userdata(DefaultParseLanguage(language.clone()))
                         .map_err(|e| fail(format!("{e:?}")))?;
