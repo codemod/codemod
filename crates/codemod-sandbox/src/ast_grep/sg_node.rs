@@ -330,6 +330,159 @@ impl<'js> SgRootRjs<'js> {
         }
     }
 
+    // Model facts (experimental): the hooks the model toolkit is built on.
+
+    /// The workspace's source files, as absolute paths.
+    #[qjs(rename = "workspaceFiles")]
+    pub fn workspace_files(&self, ctx: Ctx<'js>) -> Result<Vec<String>> {
+        #[cfg(not(feature = "native"))]
+        {
+            return Err(Exception::throw_message(
+                &ctx,
+                &not_in_wasm("workspaceFiles"),
+            ));
+        }
+        #[cfg(feature = "native")]
+        {
+            let (provider, _) = self.module_query(&ctx, "workspaceFiles")?;
+            let files = provider
+                .workspace_files()
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
+            Ok(files
+                .into_iter()
+                .map(|file| file.to_string_lossy().to_string())
+                .collect())
+        }
+    }
+
+    /// The root of another workspace file, with this root's semantic
+    /// analysis. Null when the file cannot be read or is not source code.
+    #[qjs(rename = "openFile")]
+    pub fn open_file(&self, ctx: Ctx<'js>, path: String) -> Result<Value<'js>> {
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = path;
+            return Err(Exception::throw_message(&ctx, &not_in_wasm("openFile")));
+        }
+        #[cfg(feature = "native")]
+        {
+            let _ = self.module_query(&ctx, "openFile")?;
+            let file = std::path::PathBuf::from(&path);
+            if file == file_path_of(&self.inner) {
+                return SgRootRjs {
+                    inner: Arc::clone(&self.inner),
+                    _phantom: PhantomData,
+                }
+                .into_js(&ctx);
+            }
+            let (Ok(content), Ok(lang)) = (
+                std::fs::read_to_string(&file),
+                Lang::from_str(&detect_language_from_path(&file)),
+            ) else {
+                return Ok(Value::new_null(ctx));
+            };
+            match SgRootRjs::try_new_with_semantic(
+                AstGrep::new(content, lang),
+                Some(path),
+                self.inner.semantic_provider.clone(),
+                self.inner.current_file_path.clone(),
+                self.inner.target_directory.as_deref(),
+            ) {
+                Ok(root) => root.into_js(&ctx),
+                Err(_) => Ok(Value::new_null(ctx)),
+            }
+        }
+    }
+
+    /// Replace the facts `model` stated about `file`. `facts` is JSON: an
+    /// array of facts (see `language_core::ModelFact`).
+    #[qjs(rename = "setModelFacts")]
+    pub fn set_model_facts(
+        &self,
+        ctx: Ctx<'js>,
+        model: String,
+        file: String,
+        facts: String,
+    ) -> Result<()> {
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = (model, file, facts);
+            return Err(Exception::throw_message(
+                &ctx,
+                &not_in_wasm("setModelFacts"),
+            ));
+        }
+        #[cfg(feature = "native")]
+        {
+            let (provider, _) = self.module_query(&ctx, "setModelFacts")?;
+            let facts: Vec<language_core::ModelFact> =
+                serde_json::from_str(&facts).map_err(|e| {
+                    Exception::throw_type(&ctx, &format!("setModelFacts({model}): bad facts: {e}"))
+                })?;
+            provider
+                .set_model_facts(&model, std::path::Path::new(&file), facts)
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))
+        }
+    }
+
+    /// Every model fact the analysis holds, as JSON: an array of
+    /// `{ model, file, facts }`.
+    #[qjs(rename = "modelFacts")]
+    pub fn model_facts(&self, ctx: Ctx<'js>) -> Result<String> {
+        #[cfg(not(feature = "native"))]
+        {
+            return Err(Exception::throw_message(&ctx, &not_in_wasm("modelFacts")));
+        }
+        #[cfg(feature = "native")]
+        {
+            let (provider, _) = self.module_query(&ctx, "modelFacts")?;
+            let facts = provider
+                .model_facts()
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
+            serde_json::to_string(&facts)
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))
+        }
+    }
+
+    /// Drop one model's facts, or every model's.
+    #[qjs(rename = "clearModelFacts")]
+    pub fn clear_model_facts(&self, ctx: Ctx<'js>, model: Opt<String>) -> Result<()> {
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = model;
+            return Err(Exception::throw_message(
+                &ctx,
+                &not_in_wasm("clearModelFacts"),
+            ));
+        }
+        #[cfg(feature = "native")]
+        {
+            let (provider, _) = self.module_query(&ctx, "clearModelFacts")?;
+            provider
+                .clear_model_facts(model.0.as_deref())
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))
+        }
+    }
+
+    /// Every channel end models declared, as JSON: an array of
+    /// `{ model, side, protocol, key, node, open, matches }`.
+    #[qjs(rename = "channels")]
+    pub fn channels(&self, ctx: Ctx<'js>) -> Result<String> {
+        #[cfg(not(feature = "native"))]
+        {
+            return Err(Exception::throw_message(&ctx, &not_in_wasm("channels")));
+        }
+        #[cfg(feature = "native")]
+        {
+            let (provider, _) = self.module_query(&ctx, "channels")?;
+            let channels = provider
+                .channels()
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
+            serde_json::to_string(&channels)
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))
+        }
+    }
+
     /// Whether importing this module runs code: a call made at module top
     /// level (`program.callees()`), an `import "./x"` side-effect import, or
     /// a top-level write to an object's member (`registry.x = …`,
@@ -1692,6 +1845,31 @@ impl<'js> SgNodeRjs<'js> {
 
     /// Get type information for the symbol at this node's position.
     ///
+    /// The labels models put on this node: `[{ label, model }]`. Empty
+    /// without semantic analysis or models.
+    #[qjs(rename = "tags")]
+    pub fn tags(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        let result = rquickjs::Array::new(ctx.clone())?;
+        #[cfg(feature = "native")]
+        if let (Some(provider), Some(filename)) =
+            (&self.root.semantic_provider, &self.root.filename)
+        {
+            let byte_range = self.inner_node.range();
+            let range =
+                language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
+            let tags = provider
+                .node_tags(std::path::Path::new(filename), range)
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
+            for (index, (label, model)) in tags.into_iter().enumerate() {
+                let object = rquickjs::Object::new(ctx.clone())?;
+                object.set("label", label)?;
+                object.set("model", model)?;
+                result.set(index, object)?;
+            }
+        }
+        result.into_js(&ctx)
+    }
+
     /// TODO: Currently, this is not implemented by any of the semantic providers. So it's not publicly available.
     ///
     /// Returns null if:
@@ -1766,8 +1944,9 @@ impl<'js> SgNodeRjs<'js> {
                 &ctx,
                 options,
                 method,
-                &["throughCalls", "maxDepth", "stopAt"],
+                &["throughCalls", "maxDepth", "stopAt", "models"],
             )? {
+                flow_options.without_models = opts.get::<_, Option<bool>>("models")? == Some(false);
                 if let Some(through_calls) = opts.get::<_, Option<bool>>("throughCalls")? {
                     flow_options.through_calls = through_calls;
                 }
@@ -1805,7 +1984,13 @@ impl<'js> SgNodeRjs<'js> {
             for (index, (at, step, node, root)) in steps.into_iter().enumerate() {
                 let object = rquickjs::Object::new(ctx.clone())?;
                 objects.insert(at, object.clone());
-                links.push((object.clone(), step.from.map(|from| (at.0, from as usize))));
+                links.push((
+                    object.clone(),
+                    step.from.map(|from| {
+                        let file = step.from_file.map_or(at.0, |file| file as usize);
+                        (file, from as usize)
+                    }),
+                ));
                 object.set("node", node)?;
                 object.set(
                     "root",
@@ -1820,6 +2005,9 @@ impl<'js> SgNodeRjs<'js> {
                 object.set("index", or_null(&ctx, step.index)?)?;
                 object.set("depth", step.depth)?;
                 object.set("boundary", step.boundary)?;
+                object.set("models", step.models.clone())?;
+                object.set("channel", or_null(&ctx, step.channel.clone())?)?;
+                object.set("tags", step.tags.clone())?;
                 result.set(index, object)?;
             }
             for (object, from) in links {
@@ -1861,9 +2049,14 @@ impl<'js> SgNodeRjs<'js> {
                 ..Default::default()
             };
             let method = if callees { "callees" } else { "callers" };
-            if let Some(opts) =
-                query_options(&ctx, options, method, &["transitive", "maxDepth", "stopAt"])?
-            {
+            if let Some(opts) = query_options(
+                &ctx,
+                options,
+                method,
+                &["transitive", "maxDepth", "stopAt", "models"],
+            )? {
+                graph_options.without_models =
+                    opts.get::<_, Option<bool>>("models")? == Some(false);
                 graph_options.transitive =
                     opts.get::<_, Option<bool>>("transitive")?.unwrap_or(false);
                 graph_options.max_depth = max_depth(&ctx, &opts, method)?;
@@ -1914,6 +2107,8 @@ impl<'js> SgNodeRjs<'js> {
                 object.set("resolved", entry.resolved)?;
                 object.set("via", entry.via.as_str())?;
                 object.set("depth", entry.depth)?;
+                object.set("models", entry.models.clone())?;
+                object.set("channel", or_null(&ctx, entry.channel.clone())?)?;
 
                 let call_site = entry.call_site.as_ref().and_then(|(path, call_range)| {
                     let content = match contents.get(path.as_path()) {

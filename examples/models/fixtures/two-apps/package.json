@@ -1,0 +1,5 @@
+{
+  "name": "two-apps",
+  "private": true,
+  "workspaces": ["web", "api"]
+}

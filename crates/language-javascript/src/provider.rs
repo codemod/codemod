@@ -272,6 +272,41 @@ impl SemanticProvider for OxcSemanticProvider {
         Ok(self.workspace("importers")?.importers(target))
     }
 
+    fn set_model_facts(
+        &self,
+        model: &str,
+        file: &Path,
+        facts: Vec<language_core::ModelFact>,
+    ) -> SemanticResult<()> {
+        self.workspace("setModelFacts")?
+            .set_model_facts(model, file, facts);
+        Ok(())
+    }
+
+    fn model_facts(&self) -> SemanticResult<Vec<language_core::ModelFileFacts>> {
+        Ok(self.workspace("modelFacts")?.model_facts())
+    }
+
+    fn clear_model_facts(&self, model: Option<&str>) -> SemanticResult<()> {
+        self.workspace("clearModelFacts")?.clear_model_facts(model);
+        Ok(())
+    }
+
+    fn channels(&self) -> SemanticResult<Vec<language_core::ChannelReport>> {
+        Ok(self.workspace("channels")?.channels())
+    }
+
+    fn node_tags(&self, file: &Path, range: ByteRange) -> SemanticResult<Vec<(String, String)>> {
+        match &self.analyzer {
+            AnalyzerKind::WorkspaceScope(analyzer) => Ok(analyzer.node_tags(file, range)),
+            AnalyzerKind::FileScope(_) => Ok(Vec::new()),
+        }
+    }
+
+    fn workspace_files(&self) -> SemanticResult<Vec<PathBuf>> {
+        Ok(self.workspace("workspaceFiles")?.source_files())
+    }
+
     fn get_definition(
         &self,
         file_path: &Path,
@@ -409,7 +444,7 @@ impl OxcSemanticProvider {
             AnalyzerKind::WorkspaceScope(analyzer) => Ok(analyzer),
             AnalyzerKind::FileScope(_) => Err(SemanticError::Unsupported {
                 operation: operation.to_string(),
-                reason: "module resolution needs workspace scope: set `semanticAnalysis: \"workspace\"` \
+                reason: "this needs workspace scope: set `semanticAnalysis: \"workspace\"` \
                          on the step (`semantic_analysis: workspace` in workflow.yaml, \
                          `--semantic-workspace <dir>` with `codemod jssg run`)"
                     .to_string(),

@@ -1,0 +1,11 @@
+{
+  "name": "@codemod-models/next-app-routes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Model: Next.js App Router route handlers are entry points and HTTP consumers",
+  "type": "module",
+  "exports": "./model.ts",
+  "peerDependencies": {
+    "@jssg/models": "*"
+  }
+}

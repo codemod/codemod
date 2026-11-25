@@ -189,6 +189,45 @@ pub trait SemanticProvider: Send + Sync {
         Err(unsupported("importers"))
     }
 
+    /// Replace the facts `model` stated about `file` (see [`crate::ModelFact`]).
+    /// The provider merges them into data-flow and call-graph answers.
+    ///
+    /// The default is an `Unsupported` error.
+    fn set_model_facts(
+        &self,
+        _model: &str,
+        _file: &Path,
+        _facts: Vec<crate::ModelFact>,
+    ) -> SemanticResult<()> {
+        Err(no_models("setModelFacts"))
+    }
+
+    /// Every model fact the provider holds, grouped by model and file.
+    fn model_facts(&self) -> SemanticResult<Vec<crate::ModelFileFacts>> {
+        Err(no_models("modelFacts"))
+    }
+
+    /// Drop one model's facts, or all of them.
+    fn clear_model_facts(&self, _model: Option<&str>) -> SemanticResult<()> {
+        Err(no_models("clearModelFacts"))
+    }
+
+    /// Every channel end models declared, with how many ends on the other
+    /// side it was joined to.
+    fn channels(&self) -> SemanticResult<Vec<crate::ChannelReport>> {
+        Err(no_models("channels"))
+    }
+
+    /// The labels models put on the node at `range`: (label, model).
+    fn node_tags(&self, _file: &Path, _range: ByteRange) -> SemanticResult<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
+
+    /// The source files of the workspace, for running models over them.
+    fn workspace_files(&self) -> SemanticResult<Vec<PathBuf>> {
+        Err(no_models("workspaceFiles"))
+    }
+
     /// Notify the provider that a file has been processed.
     ///
     /// This is called after each file is processed during codemod execution.
@@ -214,6 +253,15 @@ pub trait SemanticProvider: Send + Sync {
 
     /// Get the current provider mode.
     fn mode(&self) -> ProviderMode;
+}
+
+fn no_models(operation: &str) -> SemanticError {
+    SemanticError::Unsupported {
+        operation: operation.to_string(),
+        reason: "this semantic provider does not take model facts (they need JavaScript or \
+                 TypeScript in workspace scope)"
+            .to_string(),
+    }
 }
 
 fn unsupported(operation: &str) -> SemanticError {

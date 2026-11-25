@@ -159,6 +159,11 @@ str_enum! {
         JsxChild => "jsx-child",
         /// The value is returned from the function.
         Return => "return",
+        /// A model says the value goes there (`flows(from, to)`).
+        Model => "model",
+        /// The value crosses a channel a model declared: an HTTP request's
+        /// path parameter into the route handler's `params`.
+        Channel => "channel",
     }
 }
 
@@ -185,6 +190,8 @@ pub struct FlowOptions {
     /// (`flowsTo({ stopAt: ["jsx-child"] })`: the first sink, not every
     /// element around it).
     pub stop_at: KindSet<FlowEdgeKind>,
+    /// Leave out what models added (`models: false`).
+    pub without_models: bool,
 }
 
 impl Default for FlowOptions {
@@ -194,6 +201,7 @@ impl Default for FlowOptions {
             through_calls: true,
             max_depth: None,
             stop_at: KindSet::default(),
+            without_models: false,
         }
     }
 }
@@ -219,6 +227,20 @@ pub struct FlowStep {
     /// `steps`. None for a step reached directly from the queried node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<u32>,
+    /// When `from` is a step in another file (the value crossed a model's
+    /// edge): that file's index in the result's `files`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_file: Option<u32>,
+    /// The models whose facts made this step's edge. Empty for an edge the
+    /// analysis found in the code.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
+    /// For a `channel` edge: the channel's key, for people.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    /// Labels models put on this node (`source:user-input`, `sink:sql`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// Steps in one file, with its content so callers can build a syntax tree.
@@ -257,6 +279,8 @@ pub struct CallGraphOptions {
     /// With `transitive`: report an entry reached by one of these edges,
     /// but do not walk past it (`stopAt: ["callback"]`).
     pub stop_at: KindSet<CallEdgeKind>,
+    /// Leave out what models added (`models: false`).
+    pub without_models: bool,
 }
 
 str_enum! {
@@ -273,6 +297,14 @@ str_enum! {
         Callback => "callback",
         /// `<Component />`.
         Jsx => "jsx",
+        /// A model says the call happens (`invokes(from, to)`).
+        Model => "model",
+        /// The two ends of a channel a model declared: an HTTP request and
+        /// the route handler that answers it.
+        Channel => "channel",
+        /// A model says code outside the workspace calls the function. The
+        /// entry stands for that caller; its node is the function itself.
+        Entry => "entry",
     }
 }
 
@@ -297,6 +329,13 @@ pub struct CallGraphEntry {
     /// function at depth 1, a caller found at the previous depth deeper).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callee: Option<FunctionRef>,
+    /// The models whose facts made this edge. Empty for an edge the
+    /// analysis found in the code.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
+    /// For a `channel` edge: the channel's key; for an `entry`: its label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
 
 /// A function in the workspace, by file and range.

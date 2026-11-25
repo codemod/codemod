@@ -7,6 +7,10 @@
 //! ```
 //!
 //! Every directory directly under `DATAFLOW_CORPUS_DIR` is one workspace.
+//!
+//! `DATAFLOW_MODEL_MANIFEST=file.json` loads model facts (the manifest the
+//! model toolkit's `exportManifest` writes) into the workspace named by its
+//! `repo` before measuring, to compare the numbers with and without models.
 //! The report covers:
 //!
 //! - call sites: resolved to a workspace function, only callbacks found, or
@@ -55,6 +59,12 @@ struct Totals {
     named_callers_known: usize,
     named_unknown_why: BTreeMap<&'static str, usize>,
     blocking_names: HashMap<String, usize>,
+    /// Named functions with callers known and not one caller: they look unused.
+    named_no_caller: usize,
+    no_caller_names: Vec<String>,
+    /// Named functions a model says something calls (an entry, a channel, an invoke).
+    named_model_called: usize,
+    model_facts: usize,
 }
 
 /// Globals whose methods are the platform's, never workspace functions:
@@ -328,6 +338,8 @@ fn measure_callers_known(
     files: &[(PathBuf, std::sync::Arc<FileFlow>)],
     totals: &mut Totals,
 ) {
+    let models = analyzer.models();
+    let mut called: HashSet<(PathBuf, u32)> = HashSet::new();
     let mut names: HashSet<String> = HashSet::new();
     let mut escaped: HashMap<(PathBuf, u32), &'static str> = HashMap::new();
     let mut escape = |functions: Vec<(PathBuf, u32)>, why: &'static str| {
@@ -337,7 +349,12 @@ fn measure_callers_known(
     };
     for (file, flow) in files {
         for call in &flow.calls {
-            if !call_targets(analyzer, file, flow, call).is_empty() {
+            let targets = call_targets(analyzer, file, flow, call);
+            let callbacks = callback_targets(analyzer, file, flow, call, &targets);
+            for (path, function, _) in targets.iter().chain(&callbacks) {
+                called.insert((path.clone(), *function));
+            }
+            if !targets.is_empty() {
                 continue;
             }
             if let Some(name) = plausible_name(analyzer, file, flow, call) {
@@ -377,18 +394,34 @@ fn measure_callers_known(
         for (index, function) in flow.functions.iter().enumerate() {
             totals.functions += 1;
             let key = (file.clone(), index as u32);
+            // A model that names the function's caller (the framework, the
+            // other end of a channel) accounts for where its value went.
+            let model_called = models.as_ref().is_some_and(|models| models.explains(&key));
             let why = if function.name.as_deref().is_some_and(|n| names.contains(n)) {
                 *totals
                     .blocking_names
                     .entry(function.name.as_deref().unwrap_or("").to_string())
                     .or_default() += 1;
                 Some("an unresolved call uses its name")
+            } else if model_called {
+                None
             } else {
                 escaped.get(&key).copied()
             };
             let named = function.name.is_some();
             if named {
                 totals.named_functions += 1;
+                if model_called {
+                    totals.named_model_called += 1;
+                }
+                if why.is_none() && !model_called && !called.contains(&key) {
+                    totals.named_no_caller += 1;
+                    totals.no_caller_names.push(format!(
+                        "{}:{}",
+                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        function.name.as_deref().unwrap_or("")
+                    ));
+                }
             }
             match why {
                 None => {
@@ -464,8 +497,48 @@ fn write_edges(
     std::fs::write(out, text).unwrap();
 }
 
+/// Load a model manifest (paths relative to the workspace root) into the
+/// analyzer, when it is for this workspace. Returns the number of facts.
+fn load_manifest(analyzer: &AccurateAnalyzer, root: &Path) -> usize {
+    let Ok(path) = std::env::var("DATAFLOW_MODEL_MANIFEST") else {
+        return 0;
+    };
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let repo = manifest["repo"].as_str().unwrap_or_default();
+    if !root.file_name().is_some_and(|name| name == repo) {
+        return 0;
+    }
+    fn absolute(value: &mut serde_json::Value, root: &Path) {
+        match value {
+            serde_json::Value::Array(items) => items.iter_mut().for_each(|v| absolute(v, root)),
+            serde_json::Value::Object(object) => {
+                for (key, inner) in object.iter_mut() {
+                    match inner {
+                        serde_json::Value::String(file) if key == "file" => {
+                            *file = root.join(&*file).to_string_lossy().to_string();
+                        }
+                        _ => absolute(inner, root),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut files = manifest["files"].clone();
+    absolute(&mut files, root);
+    let files: Vec<language_core::ModelFileFacts> = serde_json::from_value(files).unwrap();
+    let mut count = 0;
+    for file in files {
+        count += file.facts.len();
+        analyzer.set_model_facts(&file.model, &file.file, file.facts);
+    }
+    count
+}
+
 fn measure_repo(root: &Path, totals: &mut Totals) {
     let analyzer = AccurateAnalyzer::new(root.to_path_buf());
+    totals.model_facts += load_manifest(&analyzer, root);
     let files = analyzer.workspace_files();
     let failures = analyzer.parse_failures();
     totals.parse_failures += failures.len();
@@ -614,6 +687,24 @@ fn corpus_metric() {
             "  {count:>7} {}  {why}",
             percent(*count, t.named_functions)
         );
+    }
+    let _ = writeln!(
+        out,
+        "model facts loaded: {}  named functions a model gives a caller: {}",
+        t.model_facts, t.named_model_called
+    );
+    let _ = writeln!(
+        out,
+        "named functions with callers known and no caller at all (they look unused): {} of {} ({})",
+        t.named_no_caller,
+        t.named_functions,
+        percent(t.named_no_caller, t.named_functions)
+    );
+    if std::env::var("DATAFLOW_CORPUS_SAMPLES").is_ok() {
+        let mut names = t.no_caller_names.clone();
+        names.sort();
+        names.truncate(60);
+        let _ = writeln!(out, "  {names:?}");
     }
     if std::env::var("DATAFLOW_CORPUS_SAMPLES").is_ok() {
         let _ = writeln!(

@@ -1,0 +1,5 @@
+{
+  "name": "web",
+  "private": true,
+  "dependencies": { "axios": "^1.7.0", "react": "^19.0.0" }
+}

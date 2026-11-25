@@ -266,6 +266,53 @@ impl SemanticProvider for LazySemanticProvider {
         }
     }
 
+    fn set_model_facts(
+        &self,
+        model: &str,
+        file: &Path,
+        facts: Vec<language_core::ModelFact>,
+    ) -> SemanticResult<()> {
+        match self.get_or_init(Self::detect_language(file)) {
+            Some(provider) => provider.set_model_facts(model, file, facts),
+            None => Err(unsupported_language("setModelFacts", file)),
+        }
+    }
+
+    fn model_facts(&self) -> SemanticResult<Vec<language_core::ModelFileFacts>> {
+        match self.get_or_init("typescript") {
+            Some(provider) => provider.model_facts(),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn clear_model_facts(&self, model: Option<&str>) -> SemanticResult<()> {
+        match self.get_or_init("typescript") {
+            Some(provider) => provider.clear_model_facts(model),
+            None => Ok(()),
+        }
+    }
+
+    fn channels(&self) -> SemanticResult<Vec<language_core::ChannelReport>> {
+        match self.get_or_init("typescript") {
+            Some(provider) => provider.channels(),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn workspace_files(&self) -> SemanticResult<Vec<std::path::PathBuf>> {
+        match self.get_or_init("typescript") {
+            Some(provider) => provider.workspace_files(),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn node_tags(&self, file: &Path, range: ByteRange) -> SemanticResult<Vec<(String, String)>> {
+        match self.get_or_init(Self::detect_language(file)) {
+            Some(provider) => provider.node_tags(file, range),
+            None => Ok(Vec::new()),
+        }
+    }
+
     fn notify_file_processed(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
         let lang = Self::detect_language(file_path);
         match self.get_or_init(lang) {

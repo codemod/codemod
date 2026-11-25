@@ -1,0 +1,12 @@
+entry http "GET /api/users/[id]" route.ts:5 `async function GET(request: Request, { params...`
+tag source:user-input,http:request route.ts:5 `request`
+tag source:user-input,http:route-params route.ts:5 `params`
+consume http GET /api/users/{id} route.ts:5 `async function GET(request: Request, { params...` sends response=route.ts:9 `user` receives id=route.ts:5 `params`
+entry http "PATCH /api/users/[id]" route.ts:12 `async function PATCH(request: Request, contex...`
+tag source:user-input,http:request route.ts:12 `request`
+tag source:user-input,http:route-params route.ts:13 `context.params`
+consume http PATCH /api/users/{id} route.ts:12 `async function PATCH(request: Request, contex...` sends response=route.ts:15 `updateUser(id, body.name)` receives id=route.ts:13 `context.params`, body=route.ts:14 `request.json()`
+entry http "DELETE /api/users/[id]" route.ts:18 `async (_request: Request, { params }: Context...`
+tag source:user-input,http:request route.ts:18 `_request`
+tag source:user-input,http:route-params route.ts:18 `params`
+consume http DELETE /api/users/{id} route.ts:18 `async (_request: Request, { params }: Context...` receives id=route.ts:18 `params`

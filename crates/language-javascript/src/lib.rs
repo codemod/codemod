@@ -47,6 +47,7 @@ mod dataflow;
 mod error;
 mod flow_query;
 mod lightweight;
+mod model_facts;
 mod oxc_adapter;
 mod provider;
 mod vfs_fs;

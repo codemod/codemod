@@ -1,0 +1,11 @@
+{
+  "name": "@codemod-models/http-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Model: fetch() and axios-style calls are HTTP producers",
+  "type": "module",
+  "exports": "./model.ts",
+  "peerDependencies": {
+    "@jssg/models": "*"
+  }
+}

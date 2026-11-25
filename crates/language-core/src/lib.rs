@@ -6,6 +6,7 @@
 mod dataflow;
 mod error;
 pub mod filesystem;
+mod models;
 mod modules;
 mod noop;
 mod provider;
@@ -18,6 +19,10 @@ pub use dataflow::{
     MutationOptions, MutationsResult, UnparsedFile,
 };
 pub use error::{SemanticError, SemanticResult};
+pub use models::{
+    match_keys, ChannelFact, ChannelKey, ChannelReport, ChannelSide, KeyMatch, KeyPart, ModelFact,
+    ModelFileFacts, ModelNode, ModelPort,
+};
 pub use modules::{
     ImportKind, Importer, ImportersFile, ImportersResult, SpecifierOptions, SpecifierStyle,
 };
