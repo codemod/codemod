@@ -2708,9 +2708,10 @@ export default async function main() {{
     h.bundle_file("data.txt", "secret\n");
     let report = h.start(&workflow(r#", capabilities: ["fs"]"#), Value::Null);
     assert_eq!(output(&report).unwrap()["outputs"], json!(["secret"]));
-    // A dry run installs no file system, whatever was granted.
+    // A dry run gets a curated fs: it reads the target, keeps writes in
+    // memory, and refuses paths outside the target (the bundle here).
     let error = output(&h.dry_run(&workflow(r#", capabilities: ["fs"]"#))).unwrap_err();
-    assert!(error.contains("fs"), "{error}");
+    assert!(error.contains("EACCES"), "{error}");
 
     let error =
         output(&h.start(&workflow(r#", capabilities: ["disk"]"#), Value::Null)).unwrap_err();

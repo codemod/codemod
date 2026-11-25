@@ -74,7 +74,7 @@ fn call_with(
         .ok_or_else(|| format!("unknown function '{callback}'"))?;
     let captures = serde_json::to_string(captures).map_err(|e| e.to_string())?;
     let args = args.map(Value::to_string);
-    let isolates = StepIsolates::new(task)?;
+    let isolates = StepIsolates::new(task, Some(module))?;
     let options = isolates.worker_options(task, None);
     let name = module_name(task, callback);
     let workflow_path = task.run.workflow_path.clone();
