@@ -7,60 +7,47 @@ Codemod workflows we run on this repo, with the codemod CLI itself.
 | [`workflows/health.ts`](workflows/health.ts) | `single-version-crates`: `codemod` links one version of each crate in `SINGLE_VERSION_CRATES` (crossterm). `latest-pins`: no `codemod@latest` in docs, CLI/MCP messages, `init` templates or the npm README. |
 
 ```bash
-# from the repo root
-npx codemod@2.0.0-alpha.7 workflow run -w .codemod/workflows/health.ts --target . --dry-run
+# from the repo root, with the CLI you are working on
+cargo run -p codemod -- workflow run -w .codemod/workflows/health.ts --target . --no-interactive
+
+# or with a published CLI (2.0.0-alpha.8 or later: the report needs fail())
+npx codemod@2.0.0-alpha.8 workflow run -w .codemod/workflows/health.ts --target .
 
 # or from .codemod/
 npm install
-npm run health      # the run above
+npm run health      # the run above, with the CLI in package.json
 npm test            # tests/health.test.ts on tests/fixtures/{pass,duplicate-crate,latest-pin}
 npm run validate
 ```
 
-The checks only read, so `--dry-run` is just to keep the run out of the run store and skip the dirty-tree check.
+The checks only read, so a real run is fine on a tree with uncommitted changes: the CLI checks for
+them only before a run first writes.
+
+CI runs both in `.github/workflows/maintenance.yml` ("Repo health"), with the CLI built from the same
+commit (`CODEMOD_BINARY` points the tests at it).
 
 ## The report
 
 Every workflow here returns one `Report` ([`workflows/lib/report.ts`](workflows/lib/report.ts)):
 checks with `status` (`pass` / `warn` / `fail`), `metrics` and `findings` (`message`, `file`, `line`, `url`).
-`finish(report)` prints it as one `::codemod-report::{…}` line, then throws when a check failed, so the
-run exits 1 and `run_finished.error` names the failed checks.
+`finish(report)` returns it, and when a check failed it calls `fail()` from `codemod/workflow` with the
+report as the output: the run ends `failed`, exits 2, `run_finished.error` names the failed checks, and
+the report is still the run's output:
 
-Why a printed line: `--format jsonl` has no event with the workflow's return value, and a failed run
-stores `output: null`, so the log line is the only place a failing run's report survives. The local
-dashboard (`dash run`) reads it from the `run_log` event.
+- `--format jsonl`: `run_finished.output`;
+- `codemod workflow status --id <id> --format json`: `output`;
+- tests: `runWorkflow(...).output`;
+- text: the last line, `Output: {…}`.
+
+The local dashboard (`dash run`) reads it from `run_finished.output`.
 
 ## What `health.ts` replaces
 
-`single-version-crates` replaces `scripts/check-single-crossterm.sh`, which `cargo tree -p codemod`s
+`single-version-crates` replaced `scripts/check-single-crossterm.sh`, which `cargo tree -p codemod`ed
 for crossterm versions. It reads `Cargo.lock` instead (no Rust toolchain needed), covers any crate in
 the list, and names the chain that pulls in each extra version, e.g.
 `crossterm@0.28.1 next to crossterm@0.29.0: codemod > ratatui > crossterm (pulled in by ratatui@0.29.0)`.
+`Cargo.lock` holds every target's dependencies, so it is at least as strict as `cargo tree` on one host.
 
-The script is still what CI and the agent docs run (`.github/workflows/ci.yml` "Check terminal
-dependency graph", `AGENTS.md`, `crates/cli/AGENTS.md`, `.agents/skills/codemod-{cli-tui,rust-workspace}`).
-To switch, add this job to `.github/workflows/ci.yml`, drop the step from `rust-test`, point those docs
-at `npm run health` and delete the script. The job fails today: `latest-pins` has findings in `docs/`
-to fix first.
-
-```yaml
-  repo-health:
-    name: Repo health
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Health checks
-        run: npx codemod@2.0.0-alpha.7 workflow run -w .codemod/workflows/health.ts --target . --dry-run --no-interactive
-      - name: Workflow tests
-        working-directory: .codemod
-        run: npm ci && npm test
-```
-
-`latest-pins` skips Rust test modules (`#[cfg(test)]` followed by `mod`), as
-`crates/cli/src/utils/cli_command.rs`'s `no_message_points_at_codemod_latest` test does, except that
-test stops at the file's *first* `#[cfg(test)]`, so it skips most of `commands/harness_adapter.rs`
-(whose first one is on a single function at line 47).
+`latest-pins` skips Rust test code (`#[cfg(test)]` modules), like `crates/cli/src/utils/cli_command.rs`'s
+`no_message_points_at_codemod_latest` test, and lines that say `@latest` is 1.x.

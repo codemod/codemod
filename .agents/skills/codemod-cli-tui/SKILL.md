@@ -33,5 +33,5 @@ description: Use when changing Codemod CLI commands, terminal UI, workflow comma
 
 - Rust CLI: `cargo test -p codemod`
 - npm wrapper: `pnpm --filter codemod test`
-- Terminal dependency graph: `bash ./scripts/check-single-crossterm.sh`
+- Terminal dependency graph: `cargo run -p codemod -- workflow run -w .codemod/workflows/health.ts --target . --no-interactive`
 - Report UI build: `pnpm --filter codemod-report-ui build`

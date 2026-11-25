@@ -1,16 +1,17 @@
 // Repo health checks for codemod/codemod, run with the codemod CLI itself.
 //
-//   npx codemod@2.0.0-alpha.7 workflow run -w .codemod/workflows/health.ts --target . --dry-run
+//   npx codemod@2.0.0-alpha.8 workflow run -w .codemod/workflows/health.ts --target .
 //
 // Read-only: each check is a step that returns a `Check`, and the workflow
-// returns one `Report` (see ./lib/report.ts). The run exits 1 when a check fails.
+// returns one `Report` (see ./lib/report.ts). When a check fails, the run
+// fails with the report as its output and exits 2.
 
 import { dependencyGraph, semver } from "codemod/deps";
 import { forEachFile, step } from "codemod/workflow";
 import { type Check, type Finding, finish } from "./lib/report.ts";
 
 // ── 1. Single-version crates ────────────────────────────────────────────
-// Replaces scripts/check-single-crossterm.sh (CI "Rust Test" job): two
+// Replaced scripts/check-single-crossterm.sh (CI: maintenance.yml): two
 // versions of a terminal crate in one binary fight over the terminal.
 
 /** Crates the `codemod` binary must link exactly one version of. */
@@ -55,7 +56,11 @@ export default async function main() {
       const root = g.workspaces().find((ws) => ws.ecosystem === "cargo" && ws.name === ROOT_CRATE);
       if (!root) {
         const where = g.lockfiles.join(", ") || "no lockfile";
-        return { ...check, status: "fail", findings: [{ message: `No ${ROOT_CRATE} crate in ${where}` }] };
+        return {
+          ...check,
+          status: "fail",
+          findings: [{ message: `No ${ROOT_CRATE} crate in ${where}` }],
+        };
       }
 
       const metrics: Record<string, number> = {};
@@ -75,7 +80,9 @@ export default async function main() {
         for (const { node, chain } of reached.slice(1)) {
           const via = chain.map((crate) => crate.name).join(" > ");
           // Every crate that depends on this exact version, third-party ones included.
-          const pulledBy = node.installedBy({ includeThirdParty: true }).map((edge) => String(edge.from));
+          const pulledBy = node
+            .installedBy({ includeThirdParty: true })
+            .map((edge) => String(edge.from));
           findings.push({
             message: `${node} next to ${name}@${kept}: ${via} (pulled in by ${pulledBy.join(", ")})`,
             file: "Cargo.lock",
@@ -95,7 +102,11 @@ export default async function main() {
       text.split("\n").forEach((line, index) => {
         if (ALLOWED_LINES.some((allowed) => allowed.test(line))) return;
         for (const match of line.matchAll(LATEST_PIN)) {
-          found.push({ message: `\`${match[0]}\` installs 1.x; pin the v2 version`, file: file.path, line: index + 1 });
+          found.push({
+            message: `\`${match[0]}\` installs 1.x; pin the v2 version`,
+            file: file.path,
+            line: index + 1,
+          });
         }
       });
       return found.length ? found : undefined;

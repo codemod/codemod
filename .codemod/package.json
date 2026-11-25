@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "health": "codemod workflow run -w workflows/health.ts --target .. --dry-run --no-interactive",
+    "health": "codemod workflow run -w workflows/health.ts --target .. --no-interactive",
     "test": "node --test \"tests/**/*.test.ts\"",
     "validate": "codemod workflow validate -w workflows/health.ts"
   },

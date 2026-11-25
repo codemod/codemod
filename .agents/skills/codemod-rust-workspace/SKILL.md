@@ -36,4 +36,4 @@ description: Use when working on Codemod's Rust workspace, including workflow en
 - Workspace: `cargo test`
 - Format: `cargo fmt --check`
 - Lint: `cargo clippy --tests --no-deps -- -D warnings`
-- CI parity for terminal dependencies: `bash ./scripts/check-single-crossterm.sh`
+- CI parity for terminal dependencies: `cargo run -p codemod -- workflow run -w .codemod/workflows/health.ts --target . --no-interactive`
