@@ -140,6 +140,12 @@ pub trait Interaction: Send + Sync {
     fn pick_agent(&self, _ask: &Ask, choices: &[AgentChoice]) -> Option<String> {
         self.choose_agent(choices)
     }
+
+    /// Ask a person to pick one of `options` for a `choose(...)` step;
+    /// `None` when nobody can answer (the step takes its default).
+    fn choose(&self, _ask: &Ask, _message: &str, _options: &[String]) -> Option<String> {
+        None
+    }
 }
 
 /// Answers without asking: manual approvals are deferred, capability

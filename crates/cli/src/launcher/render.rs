@@ -354,16 +354,21 @@ pub fn run(frame: &mut Frame, view: &RunView) {
     match &view.modal {
         Some(Modal::Approval { approval, .. }) => approval_modal(frame, approval),
         Some(Modal::Agent {
-            choices, selected, ..
+            choices,
+            selected,
+            question,
+            ..
         }) => {
             let mut lines = vec![
-                Line::raw("A step needs a coding agent. Which one should run it?"),
+                Line::raw(question.clone().unwrap_or_else(|| {
+                    "A step needs a coding agent. Which one should run it?".to_string()
+                })),
                 Line::raw(""),
             ];
             let rows = choices
                 .iter()
                 .map(|c| c.label.clone())
-                .chain(std::iter::once("Built-in agent".to_string()));
+                .chain(question.is_none().then(|| "Built-in agent".to_string()));
             for (i, label) in rows.enumerate() {
                 lines.push(if i == *selected {
                     Line::styled(format!("› {label}"), bold().fg(Color::Cyan))
@@ -371,7 +376,12 @@ pub fn run(frame: &mut Frame, view: &RunView) {
                     Line::raw(format!("  {label}"))
                 });
             }
-            modal(frame, " Coding agent ", lines, Color::Cyan);
+            let title = if question.is_some() {
+                " Choose "
+            } else {
+                " Coding agent "
+            };
+            modal(frame, title, lines, Color::Cyan);
         }
         Some(Modal::ConfirmStop { .. }) => modal(
             frame,

@@ -91,6 +91,8 @@ pub enum Modal {
         choices: Vec<AgentChoice>,
         selected: usize,
         reply: Sender<Option<String>>,
+        /// Set for a `choose(...)` step: the question, and no built-in row.
+        question: Option<String>,
     },
     /// Stop the run? A question it waits on stays open until the answer.
     ConfirmStop { pending: Option<Box<Modal>> },
@@ -379,6 +381,29 @@ impl RunView {
             choices: choices.into_iter().filter(|c| c.available).collect(),
             selected: 0,
             reply,
+            question: None,
+        });
+    }
+
+    /// A `choose(...)` step's question.
+    pub fn ask_choice(
+        &mut self,
+        question: String,
+        options: Vec<String>,
+        reply: Sender<Option<String>>,
+    ) {
+        self.modal = Some(Modal::Agent {
+            choices: options
+                .into_iter()
+                .map(|o| AgentChoice {
+                    name: o.clone(),
+                    label: o,
+                    available: true,
+                })
+                .collect(),
+            selected: 0,
+            reply,
+            question: Some(question),
         });
     }
 
@@ -460,14 +485,16 @@ impl RunView {
                 choices,
                 mut selected,
                 reply,
+                question,
             }) => {
-                // The last row is the built-in agent.
-                let rows = choices.len() + 1;
+                // The last row is the built-in agent (not for a choice).
+                let rows = choices.len() + usize::from(question.is_none());
                 if quit {
                     self.confirm_stop(Some(Modal::Agent {
                         choices,
                         selected,
                         reply,
+                        question,
                     }));
                     return Action::None;
                 }
@@ -488,6 +515,7 @@ impl RunView {
                     choices,
                     selected,
                     reply,
+                    question,
                 });
                 Action::None
             }

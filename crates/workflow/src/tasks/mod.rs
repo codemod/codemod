@@ -17,6 +17,7 @@ mod agent;
 mod approval;
 mod ast_grep;
 pub(crate) mod changes;
+mod choose;
 mod codemod;
 mod dependency_graph;
 pub(crate) mod for_each_file;
@@ -226,6 +227,7 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         "agent" => agent::run(task, parse(content)?),
         "installSkill" => install_skill::run(task, content),
         "approval" => approval::run(task, parse(content)?),
+        "choose" => choose::run(task, parse(content)?),
         "sleep" => wait::sleep(task, parse(content)?),
         "waitForEvent" => wait::for_event(task, parse(content)?),
         "branch" => git::branch(task, parse(content)?),

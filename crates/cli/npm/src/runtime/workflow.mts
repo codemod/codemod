@@ -34,6 +34,7 @@ export const {
   agent,
   installSkill,
   approval,
+  choose,
 } = createTasks({ callbackId });
 
 /** The run's orchestrator, for what only the workflow body may call. */

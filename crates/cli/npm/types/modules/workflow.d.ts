@@ -986,6 +986,24 @@ declare module "codemod:workflow" {
    */
   export function approval(message: string): Task<{ approved: true }>;
 
+  /**
+   * Asks a person to pick one of `options`; the step's result is the option
+   * picked. Interactive runs ask; unattended runs (`--no-interactive`,
+   * `--control stdio`) take `default`, else the first option. Recorded like
+   * any step, so a resume does not ask again.
+   *
+   * @experimental
+   * @example
+   * ```ts
+   * const mode = await step("Mode", choose("How should we migrate?", ["codemod", "agent"]));
+   * ```
+   */
+  export function choose<const Option extends string>(
+    message: string,
+    options: readonly Option[],
+    opts?: { default?: NoInfer<Option> },
+  ): Task<Option>;
+
   /** What `fail()` takes besides its message. */
   export interface FailOptions {
     /**
