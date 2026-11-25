@@ -131,6 +131,24 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_flow_builtin_models_promise_and_array_callbacks,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_flow_builtin_models.js",
+    fixture_dir: "typescript/builtin_models",
+    target: "src/models.ts",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_flow_dynamic_import_then,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_flow_builtin_models.js",
+    fixture_dir: "typescript/builtin_models",
+    target: "src/consumer.ts",
+    scope: workspace,
+}
+
+jssg_test! {
     name: test_callees_jsx_member_tag,
     language: CodemodLang::Static(SupportLang::Tsx),
     codemod: "tsx_callees_jsx_element.js",

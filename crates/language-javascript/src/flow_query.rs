@@ -87,6 +87,17 @@ pub(crate) fn data_flow(
             if backward && (edge == FlowEdgeKind::Return || (call_edge && !options.through_calls)) {
                 continue;
             }
+            // A builtin model's edge goes through a call (`p.then(cb)`).
+            if !options.through_calls {
+                let pair = if backward {
+                    (other, current)
+                } else {
+                    (current, other)
+                };
+                if flow.model_edges.contains(&pair) {
+                    continue;
+                }
+            }
             let node = &flow.nodes[other as usize];
             // A call is one step per argument position the value arrives at.
             let index = if edge == FlowEdgeKind::Argument {
@@ -305,6 +316,20 @@ fn origins(
                 continue;
             }
             _ => {}
+        }
+        // `await import("./m")`, `import("./m").then((ns) => …)`: the
+        // module's namespace (the promise of it stands for it too:
+        // `.then(({ f }) => …)` destructures it).
+        if let Some(specifier) = flow.dynamic_imports.get(&current) {
+            out.push(Origin::Namespace(path.to_path_buf(), specifier.clone()));
+            continue;
+        }
+        for &(source, edge) in &flow.in_edges[current as usize] {
+            if edge == FlowEdgeKind::Derive {
+                if let Some(specifier) = flow.dynamic_imports.get(&source) {
+                    out.push(Origin::Namespace(path.to_path_buf(), specifier.clone()));
+                }
+            }
         }
         // `obj.f`, `ns.f`, `require("./m").f`, `const { f } = obj`: the
         // property of whatever the object may be.

@@ -20,7 +20,7 @@ use oxc::parser::Parser;
 use oxc::semantic::{AstNode, NodeId, Semantic, SemanticBuilder, SymbolFlags, SymbolId};
 use oxc::span::{GetSpan, SourceType, Span};
 use parking_lot::RwLock;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -78,6 +78,10 @@ const PURE_METHODS: &[&str] = &[
     "toSpliced",
     "with",
     "hasOwnProperty",
+    "forEach",
+    "then",
+    "catch",
+    "finally",
 ];
 
 /// A node of the value-flow graph.
@@ -183,6 +187,12 @@ pub struct FileFlow {
     /// The key of a `property` edge into a destructured binding:
     /// `const { f: g } = o` gives (o, g) -> "f".
     pub property_keys: FxHashMap<(u32, u32), String>,
+    /// `import("m")` node -> "m".
+    pub dynamic_imports: FxHashMap<u32, String>,
+    /// Edges that come from a builtin method model (`.then(cb)`,
+    /// `.map(cb)`, …) rather than from syntax: they go through a call, so
+    /// `throughCalls: false` does not follow them.
+    pub model_edges: FxHashSet<(u32, u32)>,
     pub loops: Vec<ByteRange>,
     /// Syntax the builder saw but does not model, by what it is. Values that
     /// pass through it are not connected to where they go. Used to measure
@@ -326,12 +336,90 @@ pub(crate) fn facts_from_semantic(semantic: &Semantic<'_>, content: &str) -> Fil
         fn_ast: Vec::new(),
         enclosing: Vec::new(),
         binding_by_symbol: vec![NONE; semantic.scoping().symbols_len()],
+        modelling: false,
+        callback_returns: Vec::new(),
     };
     builder.collect_functions();
     builder.collect_bindings();
     builder.collect_expressions();
+    builder.link_callback_returns();
     builder.flow
 }
+
+/// What a builtin method does with the callbacks it is given, as data.
+/// Matched by method name on any receiver, like [`MUTATING_METHODS`]: the
+/// analysis has no types.
+struct MethodModel {
+    name: &'static str,
+    /// (argument, parameter, edge): the receiver's value reaches parameter
+    /// `parameter` of the callback passed at `argument`.
+    receiver_to_callback: &'static [(usize, usize, FlowEdgeKind)],
+    /// (argument, edge): the return values of the callback at `argument`
+    /// make the call's result.
+    callback_to_result: &'static [(usize, FlowEdgeKind)],
+    /// `reduce`: the callback's return values and the initial value (the
+    /// argument after the callback) reach the callback's parameter 0.
+    accumulator: bool,
+}
+
+const fn model(
+    name: &'static str,
+    receiver_to_callback: &'static [(usize, usize, FlowEdgeKind)],
+    callback_to_result: &'static [(usize, FlowEdgeKind)],
+) -> MethodModel {
+    MethodModel {
+        name,
+        receiver_to_callback,
+        callback_to_result,
+        accumulator: false,
+    }
+}
+
+const EACH: &[(usize, usize, FlowEdgeKind)] = &[(0, 0, FlowEdgeKind::Element)];
+
+const METHOD_MODELS: &[MethodModel] = &[
+    // Promise.prototype: the resolved value is the callback's parameter;
+    // what the callbacks return is what the new promise resolves to.
+    model(
+        "then",
+        &[(0, 0, FlowEdgeKind::Derive)],
+        &[(0, FlowEdgeKind::Derive), (1, FlowEdgeKind::Derive)],
+    ),
+    model("catch", &[], &[(0, FlowEdgeKind::Derive)]),
+    // Array.prototype (and Map/Set forEach): elements are parameter 0.
+    model("map", EACH, &[(0, FlowEdgeKind::Capture)]),
+    model("flatMap", EACH, &[(0, FlowEdgeKind::Capture)]),
+    model("forEach", EACH, &[]),
+    model("filter", EACH, &[]),
+    model("find", EACH, &[]),
+    model("findLast", EACH, &[]),
+    model("findIndex", EACH, &[]),
+    model("findLastIndex", EACH, &[]),
+    model("some", EACH, &[]),
+    model("every", EACH, &[]),
+    model(
+        "sort",
+        &[(0, 0, FlowEdgeKind::Element), (0, 1, FlowEdgeKind::Element)],
+        &[],
+    ),
+    model(
+        "toSorted",
+        &[(0, 0, FlowEdgeKind::Element), (0, 1, FlowEdgeKind::Element)],
+        &[],
+    ),
+    MethodModel {
+        name: "reduce",
+        receiver_to_callback: &[(0, 1, FlowEdgeKind::Element)],
+        callback_to_result: &[(0, FlowEdgeKind::Alias)],
+        accumulator: true,
+    },
+    MethodModel {
+        name: "reduceRight",
+        receiver_to_callback: &[(0, 1, FlowEdgeKind::Element)],
+        callback_to_result: &[(0, FlowEdgeKind::Alias)],
+        accumulator: true,
+    },
+];
 
 /// No entry, in the builder's id-indexed tables.
 const NONE: u32 = u32::MAX;
@@ -351,6 +439,11 @@ struct Builder<'s, 'a> {
     /// Innermost enclosing function by syntax node id, not counting the node.
     enclosing: Vec<u32>,
     binding_by_symbol: Vec<u32>,
+    /// Edges made now come from a builtin model (see [`FileFlow::model_edges`]).
+    modelling: bool,
+    /// (callback function node, target, edge): link the callback's return
+    /// values to target once every return is known.
+    callback_returns: Vec<(u32, u32, FlowEdgeKind)>,
 }
 
 /// A class member's name: `m`, or `#m` for a private member.
@@ -424,6 +517,77 @@ impl<'s, 'a> Builder<'s, 'a> {
         }
         self.flow.out_edges[from as usize].push((to, kind));
         self.flow.in_edges[to as usize].push((from, kind));
+        if self.modelling {
+            self.flow.model_edges.insert((from, to));
+        }
+    }
+
+    /// Apply a builtin method model to `receiver.name(arguments)`.
+    fn apply_model(&mut self, name: &str, receiver: u32, arguments: &[Argument<'a>], call: u32) {
+        let Some(model) = METHOD_MODELS.iter().find(|m| m.name == name) else {
+            return;
+        };
+        // Only callbacks written inline: a named function's parameters
+        // belong to all its callers (interprocedural, not modelled here).
+        let callback = |index: usize| -> Option<(&FormalParameters<'a>, Span)> {
+            match arguments
+                .get(index)?
+                .as_expression()?
+                .get_inner_expression()
+            {
+                Expression::ArrowFunctionExpression(arrow) => Some((&arrow.params, arrow.span)),
+                Expression::FunctionExpression(function) => Some((&function.params, function.span)),
+                _ => None,
+            }
+        };
+        self.modelling = true;
+        for &(argument, parameter, kind) in model.receiver_to_callback {
+            if let Some(param) = callback(argument).and_then(|(p, _)| p.items.get(parameter)) {
+                self.bind_pattern(&param.pattern, receiver, kind);
+            }
+        }
+        for &(argument, kind) in model.callback_to_result {
+            if let Some((_, span)) = callback(argument) {
+                let function = self.node(span);
+                self.callback_returns.push((function, call, kind));
+            }
+        }
+        if model.accumulator {
+            if let Some((params, span)) = callback(0) {
+                if let Some(first) = params.items.first() {
+                    let function = self.node(span);
+                    // The accumulator's binding: link returns to it later.
+                    if let BindingPatternKind::BindingIdentifier(ident) = &first.pattern.kind {
+                        if let Some(binding) = self.binding_for_symbol(ident.symbol_id()) {
+                            self.callback_returns
+                                .push((function, binding, FlowEdgeKind::Assign));
+                        }
+                    }
+                    if let Some(initial) = arguments.get(1).and_then(|a| a.as_expression()) {
+                        let initial = self.node(initial.span());
+                        self.bind_pattern(&first.pattern, initial, FlowEdgeKind::Assign);
+                    }
+                }
+            }
+        }
+        self.modelling = false;
+    }
+
+    /// Link the return values of modelled callbacks (after every return
+    /// edge exists).
+    fn link_callback_returns(&mut self) {
+        self.modelling = true;
+        for (function, target, kind) in std::mem::take(&mut self.callback_returns) {
+            let returns: Vec<u32> = self.flow.in_edges[function as usize]
+                .iter()
+                .filter(|(_, edge)| *edge == FlowEdgeKind::Return)
+                .map(|(value, _)| *value)
+                .collect();
+            for value in returns {
+                self.edge(value, target, kind);
+            }
+        }
+        self.modelling = false;
     }
 
     fn text(&self, span: Span) -> String {
@@ -1104,9 +1268,21 @@ impl<'s, 'a> Builder<'s, 'a> {
             | AstKind::TSSatisfiesExpression(_)
             | AstKind::TSNonNullExpression(_)
             | AstKind::TSTypeAssertion(_)
-            | AstKind::ImportExpression(_)
             | AstKind::JSXExpressionContainer(_)
             | AstKind::JSXSpreadAttribute(_) => (FlowNodeKind::Expression, None),
+            // import("m"): the module's namespace, once it resolves.
+            AstKind::ImportExpression(import) => {
+                if let Expression::StringLiteral(source) = &import.source {
+                    let node = self.node(import.span);
+                    self.flow
+                        .dynamic_imports
+                        .insert(node, source.value.to_string());
+                }
+                (
+                    FlowNodeKind::Expression,
+                    Some(self.text(import.source.span())),
+                )
+            }
             _ => return None,
         })
     }
@@ -1144,6 +1320,7 @@ impl<'s, 'a> Builder<'s, 'a> {
                 self.edge(object, call_node, FlowEdgeKind::Receiver);
 
                 let name = member.property.name.as_str();
+                self.apply_model(name, object, arguments, call_node);
                 if !PURE_METHODS.contains(&name) {
                     let confidence = if MUTATING_METHODS.contains(&name) {
                         MutationConfidence::Likely
