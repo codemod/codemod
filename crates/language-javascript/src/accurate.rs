@@ -172,7 +172,13 @@ pub struct AccurateAnalyzer {
     /// Workspace packages by name, read on the first bare specifier the
     /// resolver cannot find (no `node_modules`, or an unbuilt `dist/`).
     workspace_packages: RwLock<Option<Arc<WorkspacePackages>>>,
+    /// `resolve_import` answers by (importing directory, specifier, name). Emptied
+    /// whenever a file gets new content, since exports may have moved.
+    import_targets: RwLock<HashMap<ImportKey, Option<(PathBuf, ByteRange)>>>,
 }
+
+/// Importing file's directory, module specifier, export name.
+type ImportKey = (PathBuf, String, String);
 
 impl AccurateAnalyzer {
     /// Create a new accurate analyzer for a workspace.
@@ -230,6 +236,7 @@ impl AccurateAnalyzer {
             canonical_paths: RwLock::new(HashMap::new()),
             unreadable_files: RwLock::new(HashSet::new()),
             workspace_packages: RwLock::new(None),
+            import_targets: RwLock::new(HashMap::new()),
         }
     }
 
@@ -586,6 +593,8 @@ impl AccurateAnalyzer {
         self.cache
             .insert(canonical.clone(), file_symbols, content.to_string());
         self.indexed_files.write().insert(canonical);
+        // New content may move exports.
+        self.import_targets.write().clear();
         Ok(())
     }
 
@@ -1442,6 +1451,7 @@ impl AccurateAnalyzer {
         self.flow_everywhere.store(false, Ordering::Relaxed);
         self.canonical_paths.write().clear();
         self.unreadable_files.write().clear();
+        self.import_targets.write().clear();
         *self.workspace_packages.write() = None;
     }
 
@@ -1526,11 +1536,25 @@ impl FlowHost for AccurateAnalyzer {
         specifier: &str,
         export_name: &str,
     ) -> Option<(PathBuf, ByteRange)> {
-        let module = self.resolve_module(specifier, from).ok()?;
-        match self.resolve_export(&module, export_name, &mut HashSet::new())? {
-            ExportTarget::Symbol { path, symbol } => Some((path, symbol.range)),
-            ExportTarget::Site { path, range, .. } => Some((path, range)),
+        // Resolution depends on the importing file's directory only.
+        let key = (
+            from.parent().unwrap_or(&self.workspace_root).to_path_buf(),
+            specifier.to_string(),
+            export_name.to_string(),
+        );
+        if let Some(found) = self.import_targets.read().get(&key) {
+            return found.clone();
         }
+        let found = self
+            .resolve_module(specifier, from)
+            .ok()
+            .and_then(|module| self.resolve_export(&module, export_name, &mut HashSet::new()))
+            .map(|target| match target {
+                ExportTarget::Symbol { path, symbol } => (path, symbol.range),
+                ExportTarget::Site { path, range, .. } => (path, range),
+            });
+        self.import_targets.write().insert(key, found.clone());
+        found
     }
 
     fn module_path(&self, from: &Path, specifier: &str) -> Option<PathBuf> {
@@ -2689,6 +2713,44 @@ console.log(x);
     fn range_of(source: &str, needle: &str) -> ByteRange {
         let start = source.find(needle).unwrap() as u32;
         ByteRange::new(start, start + needle.len() as u32)
+    }
+
+    #[test]
+    fn callees_follow_an_export_that_moves_during_the_run() {
+        let dir = TempDir::new().unwrap();
+        let lib = dir.path().join("lib.js");
+        fs::write(&lib, "export function target() {}\n").unwrap();
+        let a = dir.path().join("a.js");
+        let a_src = "import { target } from './lib.js';\nexport function first() { target(); }\n";
+        fs::write(&a, a_src).unwrap();
+        let analyzer = AccurateAnalyzer::new(dir.path().to_path_buf());
+        let callees = |analyzer: &AccurateAnalyzer| {
+            let result = analyzer
+                .call_graph(
+                    &a,
+                    a_src,
+                    range_of(a_src, "first"),
+                    CallGraphOptions::default(),
+                )
+                .unwrap();
+            let resolved: Vec<bool> = result
+                .files
+                .iter()
+                .flat_map(|f| f.entries.iter().map(|e| e.resolved))
+                .collect();
+            (entry_names(&result), resolved)
+        };
+        assert_eq!(callees(&analyzer), (vec!["target".to_string()], vec![true]));
+
+        // lib.js stops exporting target; another function now sits where
+        // target's name was, so a remembered answer would resolve to it.
+        let edited = "export function zzzzzz() {}\n";
+        fs::write(&lib, edited).unwrap();
+        analyzer.process_file(&lib, edited).unwrap();
+        assert_eq!(
+            callees(&analyzer),
+            (vec!["target".to_string()], vec![false])
+        );
     }
 
     #[test]
