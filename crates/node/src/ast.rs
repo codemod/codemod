@@ -410,6 +410,36 @@ impl SgNode {
         Vec::new()
     }
 
+    /// Always empty: roots parsed in Node have no semantic provider.
+    #[napi]
+    pub fn flows_from(&self, _options: Option<Value>) -> Vec<Value> {
+        Vec::new()
+    }
+
+    /// Always empty: roots parsed in Node have no semantic provider.
+    #[napi]
+    pub fn flows_to(&self, _options: Option<Value>) -> Vec<Value> {
+        Vec::new()
+    }
+
+    /// Always empty: roots parsed in Node have no semantic provider.
+    #[napi]
+    pub fn callees(&self, _options: Option<Value>) -> Vec<Value> {
+        Vec::new()
+    }
+
+    /// Always empty: roots parsed in Node have no semantic provider.
+    #[napi]
+    pub fn callers(&self, _options: Option<Value>) -> Vec<Value> {
+        Vec::new()
+    }
+
+    /// Always empty: roots parsed in Node have no semantic provider.
+    #[napi]
+    pub fn mutations(&self, _options: Option<Value>) -> Vec<Value> {
+        Vec::new()
+    }
+
     #[napi]
     pub fn type_info(&self) -> Option<String> {
         None

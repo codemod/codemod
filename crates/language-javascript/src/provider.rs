@@ -3,7 +3,8 @@
 use crate::accurate::{AccurateAnalyzer, WorkspaceWalker};
 use crate::lightweight::LightweightAnalyzer;
 use language_core::{
-    filesystem, ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
+    filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult,
+    FlowOptions, FlowResult, MutationOptions, MutationsResult, ProviderMode, ReferencesResult,
     SemanticProvider, SemanticResult,
 };
 use std::path::{Path, PathBuf};
@@ -279,6 +280,57 @@ impl SemanticProvider for OxcSemanticProvider {
         // For now, return None (type info not available)
         // Future: could integrate with oxc's type inference or use TypeScript server
         Ok(None)
+    }
+
+    fn get_data_flow(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+        options: FlowOptions,
+    ) -> SemanticResult<FlowResult> {
+        let content = self.read_file(file_path)?;
+        match &self.analyzer {
+            AnalyzerKind::FileScope(analyzer) => {
+                analyzer.data_flow(file_path, &content, range, options)
+            }
+            AnalyzerKind::WorkspaceScope(analyzer) => {
+                analyzer.data_flow(file_path, &content, range, options)
+            }
+        }
+    }
+
+    fn get_call_graph(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+        options: CallGraphOptions,
+    ) -> SemanticResult<CallGraphResult> {
+        let content = self.read_file(file_path)?;
+        match &self.analyzer {
+            AnalyzerKind::FileScope(analyzer) => {
+                analyzer.call_graph(file_path, &content, range, options)
+            }
+            AnalyzerKind::WorkspaceScope(analyzer) => {
+                analyzer.call_graph(file_path, &content, range, options)
+            }
+        }
+    }
+
+    fn get_mutations(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+        options: MutationOptions,
+    ) -> SemanticResult<MutationsResult> {
+        let content = self.read_file(file_path)?;
+        match &self.analyzer {
+            AnalyzerKind::FileScope(analyzer) => {
+                analyzer.mutations(file_path, &content, range, options)
+            }
+            AnalyzerKind::WorkspaceScope(analyzer) => {
+                analyzer.mutations(file_path, &content, range, options)
+            }
+        }
     }
 
     fn notify_file_processed(&self, file_path: &Path, content: &str) -> SemanticResult<()> {

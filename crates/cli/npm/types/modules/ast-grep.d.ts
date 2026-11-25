@@ -88,6 +88,84 @@ declare module "codemod:ast-grep" {
      * @returns An array of file references, each with a root and nodes
      */
     references(): Array<FileReferences<M>>;
+
+    // Data flow and call graph (experimental; JavaScript and TypeScript only)
+
+    /**
+     * Follow this node's value backward: what it is computed from.
+     *
+     * Steps come nearest first. A step with `boundary: true` is where the
+     * analysis stops because the value comes from outside the module's own
+     * code: a parameter, an import, a global, `this`, or a call result.
+     * The answer is a "may" answer: a variable assigned in two places has
+     * both as sources. Flow stays inside the node's file.
+     *
+     * Returns an empty array when no semantic provider is configured.
+     *
+     * @experimental
+     * @example
+     * ```ts
+     * // Where does the second argument of query() come from?
+     * const arg = call.field("arguments")!.children().filter((n) => n.isNamed())[1];
+     * const fromRequest = arg.flowsFrom().some((s) => s.kind === "parameter" && s.name === "req");
+     * ```
+     */
+    flowsFrom(options?: FlowOptions): Array<FlowStep<M>>;
+
+    /**
+     * Follow this node's value forward: the variables, calls, returns,
+     * property writes and JSX attributes it reaches.
+     *
+     * A step with `via: "argument"` is a call that receives the value, and
+     * `index` is the argument position.
+     *
+     * @experimental
+     * @example
+     * ```ts
+     * // Every call that receives a value derived from req.body
+     * const calls = root.root().findAll({ rule: { pattern: "req.body" } })
+     *   .flatMap((body) => body.flowsTo())
+     *   .filter((step) => step.via === "argument")
+     *   .map((step) => step.node);
+     * ```
+     */
+    flowsTo(options?: FlowOptions): Array<FlowStep<M>>;
+
+    /**
+     * Functions called from the function at this node (a function, its name,
+     * or a call, which answers for the functions it calls).
+     *
+     * A call whose callee is not a function in the workspace (a library, a
+     * builtin, a value the analysis lost track of) comes back with
+     * `resolved: false` and the call as its `node`. In file scope, imported
+     * functions are unresolved.
+     *
+     * @experimental
+     */
+    callees(options?: CallGraphOptions): Array<CallGraphEntry<M>>;
+
+    /**
+     * Functions that call the function at this node. `node` is the calling
+     * function, or the call itself when it is made from top-level code.
+     * Needs workspace scope to see callers in other files.
+     *
+     * @experimental
+     */
+    callers(options?: CallGraphOptions): Array<CallGraphEntry<M>>;
+
+    /**
+     * Places that change the variable at this node, or the object it holds:
+     * reassignments, property writes, mutating method calls, and calls it is
+     * passed to.
+     *
+     * @experimental
+     * @example
+     * ```ts
+     * // Is `items` changed after the audit() call?
+     * const changed = items.mutations({ after: auditCall }).some((m) => m.confidence !== "maybe");
+     * ```
+     */
+    mutations(options?: MutationOptions<M>): Array<Mutation<M>>;
   }
   /** Represents the parsed tree of code. */
   export class SgRoot<M extends TypesMap = TypesMap> {
@@ -439,6 +517,140 @@ declare module "codemod:ast-grep" {
     root: SgRoot<M>;
     /** Array of SgNode objects for each reference in this file */
     nodes: Array<SgNode<M>>;
+  }
+
+  /** What a step of a data-flow answer is. */
+  export type FlowNodeKind =
+    | "variable"
+    | "parameter"
+    | "import"
+    | "reference"
+    | "function"
+    | "class"
+    | "call"
+    | "member"
+    | "literal"
+    | "global"
+    | "this"
+    | "object"
+    | "array"
+    | "jsx"
+    | "jsx-attribute"
+    | "expression";
+
+  /**
+   * How a value gets from one step to the next.
+   * - 'assign': initializer or assignment into a variable
+   * - 'read': a variable read by a reference
+   * - 'alias': the same value under another expression (`(x)`, `a ?? b`, `c ? a : b`)
+   * - 'property' / 'element': part of the value (`x.p`, `const { p } = x`, `x[i]`)
+   * - 'argument' / 'receiver': the value is passed to, or is the receiver of, a call
+   * - 'derive': computed from the value (`x + 1`, a template literal, `await x`)
+   * - 'capture': stored in a new object or array
+   * - 'store': written to a property (`o.p = x`)
+   * - 'jsx-attribute' / 'jsx-child': the value is passed to a JSX element
+   * - 'return': the value is returned from the function
+   */
+  export type FlowEdgeKind =
+    | "assign"
+    | "read"
+    | "alias"
+    | "property"
+    | "element"
+    | "argument"
+    | "receiver"
+    | "derive"
+    | "capture"
+    | "store"
+    | "jsx-attribute"
+    | "jsx-child"
+    | "return";
+
+  export interface FlowOptions {
+    /**
+     * Treat a call's result as derived from its arguments and receiver.
+     * This is the safe assumption for calls the analysis cannot see into.
+     * @default true
+     */
+    throughCalls?: boolean;
+    /** Stop after this many steps from the node. */
+    maxDepth?: number;
+  }
+
+  export interface FlowStep<M extends TypesMap = TypesMap> {
+    node: SgNode<M>;
+    root: SgRoot<M>;
+    kind: FlowNodeKind;
+    /** The edge that reached this step. */
+    via: FlowEdgeKind;
+    /** Variable, property, attribute or callee name, when the step has one. */
+    name: string | null;
+    /** Parameter position, or argument position when `via` is 'argument'. */
+    index: number | null;
+    /** Number of edges from the queried node. */
+    depth: number;
+    /** The value comes from outside the analyzed code; the trail ends here. */
+    boundary: boolean;
+  }
+
+  export interface CallGraphOptions {
+    /** Follow calls of calls. @default false */
+    transitive?: boolean;
+    maxDepth?: number;
+  }
+
+  /**
+   * Why the call graph has an edge.
+   * - 'callback': the function is passed to a call the analysis cannot see
+   *   into (`items.map(f)`, `setTimeout(f)`) and is assumed to be called
+   * - 'jsx': `<Component />`
+   */
+  export type CallEdgeKind = "direct" | "method" | "constructor" | "callback" | "jsx";
+
+  export interface CallGraphEntry<M extends TypesMap = TypesMap> {
+    /** The function; for an unresolved call, the call. */
+    node: SgNode<M>;
+    root: SgRoot<M>;
+    /** Function name, or the callee's text for an unresolved call. */
+    name: string | null;
+    /** False when the callee is not a function in the workspace. */
+    resolved: boolean;
+    via: CallEdgeKind;
+    /** Number of calls from the queried function. */
+    depth: number;
+    /** The call that made this edge. */
+    callSite: { node: SgNode<M>; root: SgRoot<M> } | null;
+  }
+
+  export interface MutationOptions<M extends TypesMap = TypesMap> {
+    /** Only mutations that can run after this node (same file). */
+    after?: SgNode<M>;
+  }
+
+  export type MutationKind =
+    | "reassign"
+    | "update"
+    | "property-write"
+    | "delete"
+    | "method-call"
+    | "escape";
+
+  export interface Mutation<M extends TypesMap = TypesMap> {
+    node: SgNode<M>;
+    root: SgRoot<M>;
+    kind: MutationKind;
+    /**
+     * - 'definite': a write in the syntax
+     * - 'likely': a method known to mutate its receiver (`push`, `set`, ...)
+     * - 'maybe': a call the analysis has no summary for
+     */
+    confidence: "definite" | "likely" | "maybe";
+    /** Property or method name. */
+    name: string | null;
+    /** In a nested function: runs whenever that function is called. */
+    deferred: boolean;
+    /** Through another variable that holds the same value. */
+    viaAlias: boolean;
   }
 
   /**

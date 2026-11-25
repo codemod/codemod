@@ -1,0 +1,762 @@
+//! Queries over [FileFlow] facts: value flow, mutations and the call graph.
+//!
+//! Value flow and mutations stay inside one module. The call graph crosses
+//! modules: an imported callee is resolved by the host, which is the same
+//! import/re-export resolution that answers go-to-definition.
+
+use crate::dataflow::{CallFact, CalleeFact, FileFlow};
+use language_core::{
+    ByteRange, CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
+    CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
+    FlowResult, FlowStep, Mutation, MutationKind, MutationOptions, MutationsResult,
+};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// Most steps or call-graph entries one query returns.
+const RESULT_LIMIT: usize = 50_000;
+
+/// What the queries need from an analyzer.
+pub(crate) trait FlowHost {
+    /// The path files are cached under.
+    fn canonical(&self, path: &Path) -> PathBuf;
+    /// Facts for a file, built on first use.
+    fn flow(&self, path: &Path) -> Option<Arc<FileFlow>>;
+    fn content(&self, path: &Path) -> Option<String>;
+    /// Where the export export_name of the module specifier (imported
+    /// from the file from) is declared: the declaring file and the range of
+    /// the declaration's name, or of the export site when it has no name.
+    fn resolve_import(
+        &self,
+        from: &Path,
+        specifier: &str,
+        export_name: &str,
+    ) -> Option<(PathBuf, ByteRange)>;
+    /// Every file a "who calls this" query has to look at.
+    fn workspace_files(&self) -> Vec<PathBuf>;
+}
+
+pub(crate) fn data_flow(
+    host: &dyn FlowHost,
+    path: &Path,
+    range: ByteRange,
+    options: FlowOptions,
+) -> FlowResult {
+    let path = host.canonical(path);
+    let (Some(flow), Some(content)) = (host.flow(&path), host.content(&path)) else {
+        return FlowResult::default();
+    };
+    let Some(start) = flow.locate(range) else {
+        return FlowResult::default();
+    };
+
+    let backward = options.direction == FlowDirection::Backward;
+    let mut steps = Vec::new();
+    let mut truncated = false;
+    let mut seen_nodes = HashSet::from([start]);
+    let mut seen_steps = HashSet::new();
+    let mut queue = VecDeque::from([(start, 0u32)]);
+
+    while let Some((current, depth)) = queue.pop_front() {
+        if options.max_depth.is_some_and(|max| depth >= max) {
+            continue;
+        }
+        let edges = if backward {
+            &flow.in_edges[current as usize]
+        } else {
+            &flow.out_edges[current as usize]
+        };
+        for &(other, edge) in edges {
+            let call_edge = matches!(edge, FlowEdgeKind::Argument | FlowEdgeKind::Receiver);
+            if backward && (edge == FlowEdgeKind::Return || (call_edge && !options.through_calls)) {
+                continue;
+            }
+            let node = &flow.nodes[other as usize];
+            // A call is one step per argument position the value arrives at.
+            let index = if edge == FlowEdgeKind::Argument {
+                let (call, argument) = if backward {
+                    (current, other)
+                } else {
+                    (other, current)
+                };
+                flow.call_by_node
+                    .get(&call)
+                    .and_then(|c| {
+                        flow.calls[*c as usize]
+                            .args
+                            .iter()
+                            .position(|a| *a == argument)
+                    })
+                    .map(|position| position as u32)
+            } else {
+                node.index
+            };
+            if seen_steps.insert((other, edge, index)) {
+                if steps.len() >= RESULT_LIMIT {
+                    truncated = true;
+                    break;
+                }
+                steps.push(FlowStep {
+                    range: node.range,
+                    kind: node.kind,
+                    via: edge,
+                    name: node.name.clone(),
+                    index,
+                    depth: depth + 1,
+                    boundary: backward
+                        && matches!(
+                            node.kind,
+                            FlowNodeKind::Parameter
+                                | FlowNodeKind::Import
+                                | FlowNodeKind::Global
+                                | FlowNodeKind::This
+                                | FlowNodeKind::Call
+                        ),
+                });
+            }
+            // A returned or stored value leaves the function or goes into the
+            // heap: reported, not followed.
+            let stop = !backward
+                && (matches!(edge, FlowEdgeKind::Return | FlowEdgeKind::Store)
+                    || (call_edge && !options.through_calls));
+            if !stop && seen_nodes.insert(other) {
+                queue.push_back((other, depth + 1));
+            }
+        }
+    }
+
+    FlowResult {
+        files: vec![FileFlowSteps {
+            file_path: path,
+            content,
+            steps,
+        }],
+        truncated,
+    }
+}
+
+/// Bindings that may hold the same value as start, start included: the ones
+/// its value is copied into, and the ones it was copied from. The two walks
+/// are separate, so two sources of one binding are not aliases of each other.
+fn aliases(flow: &FileFlow, start: u32) -> HashSet<u32> {
+    let mut bindings = HashSet::from([start]);
+    for edges in [&flow.out_edges, &flow.in_edges] {
+        let mut seen = HashSet::from([start]);
+        let mut stack = vec![start];
+        while let Some(current) = stack.pop() {
+            for &(other, edge) in &edges[current as usize] {
+                if !matches!(
+                    edge,
+                    FlowEdgeKind::Read | FlowEdgeKind::Assign | FlowEdgeKind::Alias
+                ) || !seen.insert(other)
+                {
+                    continue;
+                }
+                if flow.nodes[other as usize].binding {
+                    bindings.insert(other);
+                }
+                stack.push(other);
+            }
+        }
+    }
+    bindings
+}
+
+pub(crate) fn mutations(
+    host: &dyn FlowHost,
+    path: &Path,
+    range: ByteRange,
+    options: MutationOptions,
+) -> MutationsResult {
+    let path = host.canonical(path);
+    let Some(flow) = host.flow(&path) else {
+        return MutationsResult::default();
+    };
+    let Some(mut binding) = flow.locate(range) else {
+        return MutationsResult::default();
+    };
+    if !flow.nodes[binding as usize].binding {
+        let read = flow.in_edges[binding as usize]
+            .iter()
+            .find(|(_, edge)| *edge == FlowEdgeKind::Read);
+        match read {
+            Some((declared, _)) => binding = *declared,
+            None => return MutationsResult::default(),
+        }
+    }
+
+    let aliases = aliases(&flow, binding);
+    let after_function = options.after.and_then(|after| flow.function_at(after));
+    let mut found: Vec<Mutation> = Vec::new();
+
+    for fact in &flow.mutations {
+        if !aliases.contains(&fact.binding) {
+            continue;
+        }
+        let via_alias = fact.binding != binding;
+        let rebinds = fact.kind == MutationKind::Reassign
+            || (fact.kind == MutationKind::Update && fact.name.is_none());
+        // Rebinding another name leaves this binding's value alone.
+        if via_alias && rebinds {
+            continue;
+        }
+        let home = flow.nodes[fact.binding as usize].function;
+        let deferred = fact.function != home;
+
+        if let Some(after) = options.after {
+            let later = fact.range.start >= after.end;
+            let same_loop = flow
+                .loops
+                .iter()
+                .any(|l| after.is_within(l) && fact.range.is_within(l));
+            // A closure can run at any time, unless the point asked about
+            // is inside that same closure.
+            let any_time = deferred && fact.function != after_function;
+            if !(later || same_loop || any_time) {
+                continue;
+            }
+        }
+        found.push(Mutation {
+            range: fact.range,
+            kind: fact.kind,
+            confidence: fact.confidence,
+            name: fact.name.clone(),
+            deferred,
+            via_alias,
+        });
+    }
+
+    found.sort_by_key(|m| (m.range.start, m.range.end));
+    MutationsResult { mutations: found }
+}
+
+/// A function: its file and index, or None for a module's top-level code.
+type FunctionKey = (PathBuf, Option<u32>);
+
+/// Where a callee expression's value comes from.
+enum Origin {
+    /// A function, class, object literal or call result.
+    Node(PathBuf, Arc<FileFlow>, u32),
+    /// import * as ns from specifier, seen from a file.
+    Namespace(PathBuf, String),
+}
+
+/// Follow a value back to the functions, classes and objects it may be,
+/// through local aliases and imports.
+fn origins(
+    host: &dyn FlowHost,
+    path: &Path,
+    flow: &Arc<FileFlow>,
+    start: u32,
+    seen: &mut HashSet<(PathBuf, u32)>,
+    out: &mut Vec<Origin>,
+) {
+    let mut stack = vec![start];
+    while let Some(current) = stack.pop() {
+        if !seen.insert((path.to_path_buf(), current)) {
+            continue;
+        }
+        match flow.nodes[current as usize].kind {
+            FlowNodeKind::Function
+            | FlowNodeKind::Class
+            | FlowNodeKind::Object
+            | FlowNodeKind::Call => {
+                out.push(Origin::Node(path.to_path_buf(), Arc::clone(flow), current));
+                continue;
+            }
+            FlowNodeKind::Import => {
+                if let Some(import) = flow.imports.get(&current) {
+                    if import.namespace {
+                        out.push(Origin::Namespace(path.to_path_buf(), import.module.clone()));
+                    } else if let Some((target, range)) =
+                        host.resolve_import(path, &import.module, &import.name)
+                    {
+                        origins_at(host, &target, range, seen, out);
+                    }
+                }
+                continue;
+            }
+            _ => {}
+        }
+        for &(source, edge) in &flow.in_edges[current as usize] {
+            if matches!(
+                edge,
+                FlowEdgeKind::Read | FlowEdgeKind::Assign | FlowEdgeKind::Alias
+            ) {
+                stack.push(source);
+            }
+        }
+    }
+}
+
+/// Origins of a declaration in another file: its binding, or, for an export
+/// site with no name (export default () => {}), the values written there.
+fn origins_at(
+    host: &dyn FlowHost,
+    path: &Path,
+    range: ByteRange,
+    seen: &mut HashSet<(PathBuf, u32)>,
+    out: &mut Vec<Origin>,
+) {
+    let Some(flow) = host.flow(path) else {
+        return;
+    };
+    if let Some(node) = flow.exact(range) {
+        origins(host, path, &flow, node, seen, out);
+        return;
+    }
+    let inside: Vec<(u32, ByteRange)> = flow
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| {
+            n.range.is_within(&range)
+                && matches!(
+                    n.kind,
+                    FlowNodeKind::Function | FlowNodeKind::Class | FlowNodeKind::Object
+                )
+        })
+        .map(|(index, n)| (index as u32, n.range))
+        .collect();
+    for (index, node_range) in &inside {
+        let nested = inside
+            .iter()
+            .any(|(other, outer)| other != index && node_range.is_within(outer));
+        if !nested {
+            origins(host, path, &flow, *index, seen, out);
+        }
+    }
+}
+
+fn method_of(flow: &FileFlow, class_node: u32, name: &str) -> Option<u32> {
+    flow.class_methods
+        .get(&class_node)?
+        .iter()
+        .find(|(method, _)| method == name)
+        .map(|(_, function)| *function)
+}
+
+/// The functions an origin stands for when it is called.
+fn functions_of(origin: &Origin, out: &mut Vec<(PathBuf, u32)>) {
+    let Origin::Node(path, flow, node) = origin else {
+        return;
+    };
+    match flow.nodes[*node as usize].kind {
+        FlowNodeKind::Function => {
+            if let Some(function) = flow.fn_by_node.get(node) {
+                out.push((path.clone(), *function));
+            }
+        }
+        FlowNodeKind::Class => {
+            if let Some(function) = method_of(flow, *node, "constructor") {
+                out.push((path.clone(), function));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The functions origin.property(…) may call.
+fn member_functions(
+    host: &dyn FlowHost,
+    origin: &Origin,
+    property: &str,
+    out: &mut Vec<(PathBuf, u32)>,
+) {
+    let mut found = Vec::new();
+    let mut seen = HashSet::new();
+    match origin {
+        Origin::Namespace(from, specifier) => {
+            if let Some((target, range)) = host.resolve_import(from, specifier, property) {
+                origins_at(host, &target, range, &mut seen, &mut found);
+            }
+        }
+        Origin::Node(path, flow, node) => match flow.nodes[*node as usize].kind {
+            FlowNodeKind::Object => {
+                let member = flow
+                    .object_members
+                    .get(node)
+                    .and_then(|members| members.iter().find(|(name, _)| name == property));
+                if let Some((_, value)) = member {
+                    origins(host, path, flow, *value, &mut seen, &mut found);
+                }
+            }
+            FlowNodeKind::Class => {
+                if let Some(function) = method_of(flow, *node, property) {
+                    out.push((path.clone(), function));
+                }
+            }
+            // new C().method()
+            FlowNodeKind::Call => {
+                let constructed = flow
+                    .call_by_node
+                    .get(node)
+                    .map(|call| &flow.calls[*call as usize])
+                    .filter(|call| call.is_new);
+                if let Some(CallFact {
+                    callee: CalleeFact::Node(callee),
+                    ..
+                }) = constructed
+                {
+                    let mut classes = Vec::new();
+                    origins(host, path, flow, *callee, &mut seen, &mut classes);
+                    for class in &classes {
+                        if let Origin::Node(class_path, class_flow, class_node) = class {
+                            if class_flow.nodes[*class_node as usize].kind == FlowNodeKind::Class {
+                                if let Some(function) = method_of(class_flow, *class_node, property)
+                                {
+                                    out.push((class_path.clone(), function));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        },
+    }
+    for origin in &found {
+        functions_of(origin, out);
+    }
+}
+
+/// The workspace functions a call may call.
+fn call_targets(
+    host: &dyn FlowHost,
+    path: &Path,
+    flow: &Arc<FileFlow>,
+    call: &CallFact,
+) -> Vec<(PathBuf, u32, CallEdgeKind)> {
+    let mut functions = Vec::new();
+    let mut seen = HashSet::new();
+    let via = match &call.callee {
+        CalleeFact::Member { object, property } => {
+            if flow.nodes[*object as usize].kind == FlowNodeKind::This {
+                let method = flow
+                    .class_of(call.function)
+                    .and_then(|class| method_of(flow, class, property));
+                if let Some(function) = method {
+                    functions.push((path.to_path_buf(), function));
+                }
+            } else {
+                let mut found = Vec::new();
+                origins(host, path, flow, *object, &mut seen, &mut found);
+                for origin in &found {
+                    member_functions(host, origin, property, &mut functions);
+                }
+            }
+            CallEdgeKind::Method
+        }
+        CalleeFact::Node(callee) => {
+            let mut found = Vec::new();
+            origins(host, path, flow, *callee, &mut seen, &mut found);
+            for origin in &found {
+                functions_of(origin, &mut functions);
+            }
+            if call.is_new {
+                CallEdgeKind::Constructor
+            } else if call.is_jsx {
+                CallEdgeKind::Jsx
+            } else {
+                CallEdgeKind::Direct
+            }
+        }
+    };
+    functions.dedup();
+    functions
+        .into_iter()
+        .map(|(path, function)| (path, function, via))
+        .collect()
+}
+
+/// Functions handed to a call the analysis cannot see into. They are
+/// assumed to be called: items.map(f), setTimeout(f), app.get("/", f).
+fn callback_targets(
+    host: &dyn FlowHost,
+    path: &Path,
+    flow: &Arc<FileFlow>,
+    call: &CallFact,
+) -> Vec<(PathBuf, u32, CallEdgeKind)> {
+    let mut functions = Vec::new();
+    let mut seen = HashSet::new();
+    for argument in &call.args {
+        let mut found = Vec::new();
+        origins(host, path, flow, *argument, &mut seen, &mut found);
+        for origin in &found {
+            if let Origin::Node(_, origin_flow, node) = origin {
+                if origin_flow.nodes[*node as usize].kind == FlowNodeKind::Function {
+                    functions_of(origin, &mut functions);
+                }
+            }
+        }
+    }
+    functions
+        .into_iter()
+        .map(|(path, function)| (path, function, CallEdgeKind::Callback))
+        .collect()
+}
+
+fn unresolved_kind(call: &CallFact) -> CallEdgeKind {
+    match &call.callee {
+        CalleeFact::Member { .. } => CallEdgeKind::Method,
+        CalleeFact::Node(_) if call.is_new => CallEdgeKind::Constructor,
+        CalleeFact::Node(_) if call.is_jsx => CallEdgeKind::Jsx,
+        CalleeFact::Node(_) => CallEdgeKind::Direct,
+    }
+}
+
+/// The functions a syntax range stands for: a function or its name, a call
+/// (its callees), a reference to a function, or a declaration around one.
+fn functions_at(host: &dyn FlowHost, path: &Path, range: ByteRange) -> Vec<FunctionKey> {
+    let Some(flow) = host.flow(path) else {
+        return Vec::new();
+    };
+    let named: Vec<FunctionKey> = flow
+        .functions
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.range == range || f.name_range == Some(range))
+        .map(|(index, _)| (path.to_path_buf(), Some(index as u32)))
+        .collect();
+    if !named.is_empty() {
+        return named;
+    }
+
+    if let Some(node) = flow.exact(range) {
+        let mut functions = Vec::new();
+        if let Some(call) = flow.call_by_node.get(&node) {
+            for (target, function, _) in
+                call_targets(host, path, &flow, &flow.calls[*call as usize])
+            {
+                functions.push((target, function));
+            }
+        } else {
+            let mut found = Vec::new();
+            origins(host, path, &flow, node, &mut HashSet::new(), &mut found);
+            for origin in &found {
+                functions_of(origin, &mut functions);
+            }
+        }
+        if !functions.is_empty() {
+            return functions
+                .into_iter()
+                .map(|(path, function)| (path, Some(function)))
+                .collect();
+        }
+    }
+
+    // export const f = () => {} asked about as a whole statement.
+    let inside: Vec<(usize, ByteRange)> = flow
+        .functions
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.range.is_within(&range))
+        .map(|(index, f)| (index, f.range))
+        .collect();
+    let outermost: Vec<FunctionKey> = inside
+        .iter()
+        .filter(|(index, inner)| {
+            !inside
+                .iter()
+                .any(|(other, outer)| other != index && inner.is_within(outer))
+        })
+        .map(|(index, _)| (path.to_path_buf(), Some(*index as u32)))
+        .collect();
+    if !outermost.is_empty() {
+        return outermost;
+    }
+
+    flow.function_at(range)
+        .map(|function| vec![(path.to_path_buf(), Some(function))])
+        .unwrap_or_default()
+}
+
+/// Call-graph entries, grouped by file as they are found.
+#[derive(Default)]
+struct Entries {
+    files: Vec<(PathBuf, Vec<CallGraphEntry>)>,
+    count: usize,
+}
+
+impl Entries {
+    fn push(&mut self, path: &Path, entry: CallGraphEntry) -> bool {
+        if self.count >= RESULT_LIMIT {
+            return false;
+        }
+        self.count += 1;
+        match self.files.iter_mut().find(|(file, _)| file == path) {
+            Some((_, entries)) => entries.push(entry),
+            None => self.files.push((path.to_path_buf(), vec![entry])),
+        }
+        true
+    }
+
+    fn finish(self, host: &dyn FlowHost, truncated: bool) -> CallGraphResult {
+        CallGraphResult {
+            files: self
+                .files
+                .into_iter()
+                .filter_map(|(file_path, entries)| {
+                    Some(CallGraphFile {
+                        content: host.content(&file_path)?,
+                        file_path,
+                        entries,
+                    })
+                })
+                .collect(),
+            truncated,
+        }
+    }
+}
+
+pub(crate) fn call_graph(
+    host: &dyn FlowHost,
+    path: &Path,
+    range: ByteRange,
+    options: CallGraphOptions,
+) -> CallGraphResult {
+    let path = host.canonical(path);
+    let start = functions_at(host, &path, range);
+    if start.is_empty() {
+        return CallGraphResult::default();
+    }
+    match options.direction {
+        CallGraphDirection::Callees => callees(host, start, options),
+        CallGraphDirection::Callers => callers(host, start, options),
+    }
+}
+
+fn callees(
+    host: &dyn FlowHost,
+    start: Vec<FunctionKey>,
+    options: CallGraphOptions,
+) -> CallGraphResult {
+    let mut entries = Entries::default();
+    let mut truncated = false;
+    let mut visited: HashSet<FunctionKey> = start.iter().cloned().collect();
+    let mut reported: HashSet<FunctionKey> = HashSet::new();
+    let mut queue: VecDeque<(FunctionKey, u32)> = start.into_iter().map(|key| (key, 0)).collect();
+
+    'walk: while let Some(((path, function), depth)) = queue.pop_front() {
+        if options.max_depth.is_some_and(|max| depth >= max) {
+            continue;
+        }
+        let Some(flow) = host.flow(&path) else {
+            continue;
+        };
+        for call in flow.calls.iter().filter(|call| call.function == function) {
+            let mut targets = call_targets(host, &path, &flow, call);
+            if targets.is_empty() {
+                let unresolved = CallGraphEntry {
+                    range: call.range,
+                    name: Some(call.callee_text.clone()),
+                    resolved: false,
+                    via: unresolved_kind(call),
+                    depth: depth + 1,
+                    call_site: Some((path.clone(), call.range)),
+                };
+                if !entries.push(&path, unresolved) {
+                    truncated = true;
+                    break 'walk;
+                }
+                targets = callback_targets(host, &path, &flow, call);
+            }
+            for (target_path, target, via) in targets {
+                let key = (target_path.clone(), Some(target));
+                if !reported.insert(key.clone()) {
+                    continue;
+                }
+                let Some(target_flow) = host.flow(&target_path) else {
+                    continue;
+                };
+                let fact = &target_flow.functions[target as usize];
+                let entry = CallGraphEntry {
+                    range: fact.range,
+                    name: fact.name.clone(),
+                    resolved: true,
+                    via,
+                    depth: depth + 1,
+                    call_site: Some((path.clone(), call.range)),
+                };
+                if !entries.push(&target_path, entry) {
+                    truncated = true;
+                    break 'walk;
+                }
+                if options.transitive && visited.insert(key.clone()) {
+                    queue.push_back((key, depth + 1));
+                }
+            }
+        }
+    }
+    entries.finish(host, truncated)
+}
+
+fn callers(
+    host: &dyn FlowHost,
+    start: Vec<FunctionKey>,
+    options: CallGraphOptions,
+) -> CallGraphResult {
+    // Every call in the workspace, by the function it may call.
+    let mut calls_of: HashMap<FunctionKey, Vec<(PathBuf, u32, CallEdgeKind)>> = HashMap::new();
+    for file in host.workspace_files() {
+        let Some(flow) = host.flow(&file) else {
+            continue;
+        };
+        for (index, call) in flow.calls.iter().enumerate() {
+            let mut targets = call_targets(host, &file, &flow, call);
+            if targets.is_empty() {
+                targets = callback_targets(host, &file, &flow, call);
+            }
+            for (target_path, target, via) in targets {
+                calls_of
+                    .entry((target_path, Some(target)))
+                    .or_default()
+                    .push((file.clone(), index as u32, via));
+            }
+        }
+    }
+
+    let mut entries = Entries::default();
+    let mut truncated = false;
+    let mut visited: HashSet<FunctionKey> = start.iter().cloned().collect();
+    let mut reported: HashSet<(PathBuf, u32)> = HashSet::new();
+    let mut queue: VecDeque<(FunctionKey, u32)> = start.into_iter().map(|key| (key, 0)).collect();
+
+    'walk: while let Some((key, depth)) = queue.pop_front() {
+        if options.max_depth.is_some_and(|max| depth >= max) {
+            continue;
+        }
+        for (file, call_index, via) in calls_of.get(&key).into_iter().flatten() {
+            if !reported.insert((file.clone(), *call_index)) {
+                continue;
+            }
+            let Some(flow) = host.flow(file) else {
+                continue;
+            };
+            let call = &flow.calls[*call_index as usize];
+            let caller = call.function.map(|f| &flow.functions[f as usize]);
+            let entry = CallGraphEntry {
+                range: caller.map_or(call.range, |f| f.range),
+                name: Some(
+                    caller
+                        .map(|f| f.name.clone().unwrap_or_else(|| "<anonymous>".to_string()))
+                        .unwrap_or_else(|| "<module>".to_string()),
+                ),
+                resolved: true,
+                via: *via,
+                depth: depth + 1,
+                call_site: Some((file.clone(), call.range)),
+            };
+            if !entries.push(file, entry) {
+                truncated = true;
+                break 'walk;
+            }
+            let caller_key = (file.clone(), call.function);
+            if options.transitive && call.function.is_some() && visited.insert(caller_key.clone()) {
+                queue.push_back((caller_key, depth + 1));
+            }
+        }
+    }
+    entries.finish(host, truncated)
+}

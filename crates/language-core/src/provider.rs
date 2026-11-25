@@ -1,6 +1,9 @@
 //! Core trait for semantic analysis providers.
 
-use crate::{ByteRange, DefinitionOptions, DefinitionResult, ReferencesResult, SemanticResult};
+use crate::{
+    ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult, FlowOptions,
+    FlowResult, MutationOptions, MutationsResult, ReferencesResult, SemanticResult,
+};
 use std::path::Path;
 
 /// Provider mode determines the analysis strategy.
@@ -96,6 +99,44 @@ pub trait SemanticProvider: Send + Sync {
     /// * `Ok(None)` - Type information not available
     /// * `Err(e)` - An error occurred during lookup
     fn get_type(&self, file_path: &Path, range: ByteRange) -> SemanticResult<Option<String>>;
+
+    /// Follow the value at the given byte range through the value-flow graph:
+    /// backward to what it depends on, or forward to where it goes.
+    ///
+    /// The default is an empty result, for providers without data-flow analysis.
+    fn get_data_flow(
+        &self,
+        _file_path: &Path,
+        _range: ByteRange,
+        _options: FlowOptions,
+    ) -> SemanticResult<FlowResult> {
+        Ok(FlowResult::default())
+    }
+
+    /// Walk the call graph from the function (or call) at the given byte range.
+    ///
+    /// The default is an empty result, for providers without a call graph.
+    fn get_call_graph(
+        &self,
+        _file_path: &Path,
+        _range: ByteRange,
+        _options: CallGraphOptions,
+    ) -> SemanticResult<CallGraphResult> {
+        Ok(CallGraphResult::default())
+    }
+
+    /// Find the places that change the binding at the given byte range, or
+    /// the value it holds.
+    ///
+    /// The default is an empty result, for providers without mutation analysis.
+    fn get_mutations(
+        &self,
+        _file_path: &Path,
+        _range: ByteRange,
+        _options: MutationOptions,
+    ) -> SemanticResult<MutationsResult> {
+        Ok(MutationsResult::default())
+    }
 
     /// Notify the provider that a file has been processed.
     ///

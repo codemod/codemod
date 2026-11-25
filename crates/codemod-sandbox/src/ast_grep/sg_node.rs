@@ -1221,6 +1221,112 @@ impl<'js> SgNodeRjs<'js> {
         }
     }
 
+    /// Follow this node's value backward: what it is computed from.
+    ///
+    /// Returns an array of steps, nearest first. Each step has the `node` and
+    /// its `root`, the node's `kind`, the edge that reached it (`via`), and
+    /// `boundary: true` where the value comes from outside the module's own
+    /// code (a parameter, an import, a global, a call result).
+    ///
+    /// Empty when no semantic provider is configured.
+    #[qjs(rename = "flowsFrom")]
+    pub fn flows_from(&self, ctx: Ctx<'js>, options: Opt<Value<'js>>) -> Result<Value<'js>> {
+        self.data_flow(ctx, options, true)
+    }
+
+    /// Follow this node's value forward: the bindings, calls, returns, property
+    /// writes and JSX attributes it reaches.
+    ///
+    /// Returns the same step objects as `flowsFrom()`. A step with
+    /// `via: "argument"` is a call that receives the value (`index` is the
+    /// argument position).
+    #[qjs(rename = "flowsTo")]
+    pub fn flows_to(&self, ctx: Ctx<'js>, options: Opt<Value<'js>>) -> Result<Value<'js>> {
+        self.data_flow(ctx, options, false)
+    }
+
+    /// Functions called from the function (or by the call) at this node.
+    ///
+    /// Returns an array of `{ node, root, name, resolved, via, depth, callSite }`.
+    /// A call whose callee is not a function in the workspace comes back with
+    /// `resolved: false` and the call as its `node`.
+    #[qjs(rename = "callees")]
+    pub fn callees(&self, ctx: Ctx<'js>, options: Opt<Value<'js>>) -> Result<Value<'js>> {
+        self.call_graph(ctx, options, true)
+    }
+
+    /// Functions that call the function at this node. Needs workspace scope
+    /// to see callers in other files.
+    #[qjs(rename = "callers")]
+    pub fn callers(&self, ctx: Ctx<'js>, options: Opt<Value<'js>>) -> Result<Value<'js>> {
+        self.call_graph(ctx, options, false)
+    }
+
+    /// Places that change the variable at this node, or the object it holds.
+    ///
+    /// `options.after` (an SgNode in the same file) keeps only the mutations
+    /// that can run after that node. Returns an array of
+    /// `{ node, root, kind, confidence, name, deferred, viaAlias }`.
+    #[qjs(rename = "mutations")]
+    pub fn mutations(&self, ctx: Ctx<'js>, options: Opt<Value<'js>>) -> Result<Value<'js>> {
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = options;
+            return rquickjs::Array::new(ctx.clone())?.into_js(&ctx);
+        }
+        #[cfg(feature = "native")]
+        {
+            let result = rquickjs::Array::new(ctx.clone())?;
+            let Some((provider, file_path, range)) = self.semantic_query() else {
+                return result.into_js(&ctx);
+            };
+
+            let mut after = None;
+            if let Some(opts) = options.0.and_then(|value| value.into_object()) {
+                let value: Value = opts.get("after")?;
+                if let Ok(node) = rquickjs::Class::<SgNodeRjs>::from_value(&value) {
+                    let node = node.borrow();
+                    if Arc::ptr_eq(&node.root, &self.root) {
+                        let node_range = node.inner_node.range();
+                        after = Some(language_core::ByteRange::new(
+                            node_range.start as u32,
+                            node_range.end as u32,
+                        ));
+                    }
+                }
+            }
+
+            let found = provider
+                .get_mutations(&file_path, range, language_core::MutationOptions { after })
+                .map_err(|e| {
+                    Exception::throw_message(&ctx, &format!("Failed to find mutations: {}", e))
+                })?;
+            let mut count = 0;
+            for mutation in &found.mutations {
+                let Some(node) = Self::node_in(&self.root, mutation.range) else {
+                    continue;
+                };
+                let object = rquickjs::Object::new(ctx.clone())?;
+                object.set("node", node)?;
+                object.set(
+                    "root",
+                    SgRootRjs {
+                        inner: Arc::clone(&self.root),
+                        _phantom: PhantomData,
+                    },
+                )?;
+                object.set("kind", mutation.kind.as_str())?;
+                object.set("confidence", mutation.confidence.as_str())?;
+                object.set("name", mutation.name.clone())?;
+                object.set("deferred", mutation.deferred)?;
+                object.set("viaAlias", mutation.via_alias)?;
+                result.set(count, object)?;
+                count += 1;
+            }
+            result.into_js(&ctx)
+        }
+    }
+
     /// Get type information for the symbol at this node's position.
     ///
     /// TODO: Currently, this is not implemented by any of the semantic providers. So it's not publicly available.
@@ -1259,6 +1365,269 @@ impl<'js> SgNodeRjs<'js> {
                 )),
             }
         }
+    }
+}
+
+/// The data-flow and call-graph queries behind `flowsFrom()`, `flowsTo()`,
+/// `callees()` and `callers()`.
+impl<'js> SgNodeRjs<'js> {
+    fn data_flow(
+        &self,
+        ctx: Ctx<'js>,
+        options: Opt<Value<'js>>,
+        backward: bool,
+    ) -> Result<Value<'js>> {
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = (options, backward);
+            return rquickjs::Array::new(ctx.clone())?.into_js(&ctx);
+        }
+        #[cfg(feature = "native")]
+        {
+            let result = rquickjs::Array::new(ctx.clone())?;
+            let Some((provider, file_path, range)) = self.semantic_query() else {
+                return result.into_js(&ctx);
+            };
+
+            let mut flow_options = language_core::FlowOptions {
+                direction: if backward {
+                    language_core::FlowDirection::Backward
+                } else {
+                    language_core::FlowDirection::Forward
+                },
+                ..Default::default()
+            };
+            if let Some(opts) = options.0.and_then(|value| value.into_object()) {
+                if let Some(through_calls) = opts.get::<_, Option<bool>>("throughCalls")? {
+                    flow_options.through_calls = through_calls;
+                }
+                flow_options.max_depth = opts.get::<_, Option<u32>>("maxDepth")?;
+            }
+
+            let flow = provider
+                .get_data_flow(&file_path, range, flow_options)
+                .map_err(|e| {
+                    Exception::throw_message(&ctx, &format!("Failed to follow data flow: {}", e))
+                })?;
+
+            let mut roots = Vec::new();
+            let mut steps = Vec::new();
+            for file in &flow.files {
+                let Some(root) = self.root_for(&mut roots, &file.file_path, &file.content) else {
+                    continue;
+                };
+                for step in &file.steps {
+                    if let Some(node) = Self::node_in(&root, step.range) {
+                        steps.push((step, node, Arc::clone(&root)));
+                    }
+                }
+            }
+            steps.sort_by_key(|(step, _, _)| step.depth);
+
+            for (index, (step, node, root)) in steps.into_iter().enumerate() {
+                let object = rquickjs::Object::new(ctx.clone())?;
+                object.set("node", node)?;
+                object.set(
+                    "root",
+                    SgRootRjs {
+                        inner: root,
+                        _phantom: PhantomData,
+                    },
+                )?;
+                object.set("kind", step.kind.as_str())?;
+                object.set("via", step.via.as_str())?;
+                object.set("name", step.name.clone())?;
+                object.set("index", step.index)?;
+                object.set("depth", step.depth)?;
+                object.set("boundary", step.boundary)?;
+                result.set(index, object)?;
+            }
+            result.into_js(&ctx)
+        }
+    }
+
+    fn call_graph(
+        &self,
+        ctx: Ctx<'js>,
+        options: Opt<Value<'js>>,
+        callees: bool,
+    ) -> Result<Value<'js>> {
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = (options, callees);
+            return rquickjs::Array::new(ctx.clone())?.into_js(&ctx);
+        }
+        #[cfg(feature = "native")]
+        {
+            let result = rquickjs::Array::new(ctx.clone())?;
+            let Some((provider, file_path, range)) = self.semantic_query() else {
+                return result.into_js(&ctx);
+            };
+
+            let mut graph_options = language_core::CallGraphOptions {
+                direction: if callees {
+                    language_core::CallGraphDirection::Callees
+                } else {
+                    language_core::CallGraphDirection::Callers
+                },
+                ..Default::default()
+            };
+            if let Some(opts) = options.0.and_then(|value| value.into_object()) {
+                graph_options.transitive =
+                    opts.get::<_, Option<bool>>("transitive")?.unwrap_or(false);
+                graph_options.max_depth = opts.get::<_, Option<u32>>("maxDepth")?;
+            }
+
+            let graph = provider
+                .get_call_graph(&file_path, range, graph_options)
+                .map_err(|e| {
+                    Exception::throw_message(&ctx, &format!("Failed to walk the call graph: {}", e))
+                })?;
+
+            // Call sites can sit in files that have no entry of their own.
+            let contents: std::collections::HashMap<&std::path::Path, &str> = graph
+                .files
+                .iter()
+                .map(|file| (file.file_path.as_path(), file.content.as_str()))
+                .collect();
+            let mut roots = Vec::new();
+            let mut entries = Vec::new();
+            for file in &graph.files {
+                let Some(root) = self.root_for(&mut roots, &file.file_path, &file.content) else {
+                    continue;
+                };
+                for entry in &file.entries {
+                    if let Some(node) = Self::node_in(&root, entry.range) {
+                        entries.push((entry, node, Arc::clone(&root)));
+                    }
+                }
+            }
+            entries.sort_by_key(|(entry, _, _)| entry.depth);
+
+            for (index, (entry, node, root)) in entries.into_iter().enumerate() {
+                let object = rquickjs::Object::new(ctx.clone())?;
+                object.set("node", node)?;
+                object.set(
+                    "root",
+                    SgRootRjs {
+                        inner: root,
+                        _phantom: PhantomData,
+                    },
+                )?;
+                object.set("name", entry.name.clone())?;
+                object.set("resolved", entry.resolved)?;
+                object.set("via", entry.via.as_str())?;
+                object.set("depth", entry.depth)?;
+
+                let call_site = entry.call_site.as_ref().and_then(|(path, call_range)| {
+                    let content = match contents.get(path.as_path()) {
+                        Some(content) => (*content).to_string(),
+                        None => std::fs::read_to_string(path).ok()?,
+                    };
+                    let root = self.root_for(&mut roots, path, &content)?;
+                    let node = Self::node_in(&root, *call_range)?;
+                    Some((node, root))
+                });
+                match call_site {
+                    Some((node, root)) => {
+                        let site = rquickjs::Object::new(ctx.clone())?;
+                        site.set("node", node)?;
+                        site.set(
+                            "root",
+                            SgRootRjs {
+                                inner: root,
+                                _phantom: PhantomData,
+                            },
+                        )?;
+                        object.set("callSite", site)?;
+                    }
+                    None => object.set("callSite", Value::new_null(ctx.clone()))?,
+                }
+                result.set(index, object)?;
+            }
+            result.into_js(&ctx)
+        }
+    }
+}
+
+#[cfg(feature = "native")]
+impl<'js> SgNodeRjs<'js> {
+    /// The provider, file and byte range a semantic query about this node needs.
+    fn semantic_query(
+        &self,
+    ) -> Option<(
+        Arc<dyn SemanticProvider>,
+        std::path::PathBuf,
+        language_core::ByteRange,
+    )> {
+        let provider = self.root.semantic_provider.clone()?;
+        let file_path = std::path::PathBuf::from(self.root.filename.as_ref()?);
+        let range = self.inner_node.range();
+        Some((
+            provider,
+            file_path,
+            language_core::ByteRange::new(range.start as u32, range.end as u32),
+        ))
+    }
+
+    /// The root for a file a semantic answer points into: this node's root
+    /// for its own file, otherwise one parsed from `content` and kept in
+    /// `roots`, so every node of the answer in that file shares it.
+    fn root_for(
+        &self,
+        roots: &mut Vec<(std::path::PathBuf, Arc<SgRootInner>)>,
+        file_path: &std::path::Path,
+        content: &str,
+    ) -> Option<Arc<SgRootInner>> {
+        let own = self.root.filename.as_ref().is_some_and(|name| {
+            let own_path = std::path::Path::new(name);
+            own_path == file_path || own_path.canonicalize().is_ok_and(|p| p == file_path)
+        });
+        if own {
+            return Some(Arc::clone(&self.root));
+        }
+        if let Some((_, root)) = roots.iter().find(|(path, _)| path == file_path) {
+            return Some(Arc::clone(root));
+        }
+        let lang = Lang::from_str(&detect_language_from_path(file_path)).ok()?;
+        let root = SgRootRjs::try_new_with_semantic(
+            AstGrep::new(content, lang),
+            Some(file_path.to_string_lossy().to_string()),
+            self.root.semantic_provider.clone(),
+            self.root.current_file_path.clone(),
+            self.root.target_directory.as_deref(),
+        )
+        .ok()?;
+        roots.push((file_path.to_path_buf(), Arc::clone(&root.inner)));
+        Some(root.inner)
+    }
+
+    /// The innermost syntax node with this byte range, or the tightest one around it.
+    fn node_in(root: &Arc<SgRootInner>, range: language_core::ByteRange) -> Option<Self> {
+        let (start, end) = (range.start as usize, range.end as usize);
+        let mut current = root.grep.root();
+        let top = current.range();
+        if top.start > start || top.end < end {
+            return None;
+        }
+        loop {
+            let inner = current.children().find(|child| {
+                let child_range = child.range();
+                child_range.start <= start && child_range.end >= end
+            });
+            match inner {
+                Some(child) => current = child,
+                None => break,
+            }
+        }
+        let node_match: NodeMatch<_> = current.into();
+        let static_node_match: NodeMatch<'static, TSDoc> =
+            unsafe { std::mem::transmute(node_match) };
+        Some(SgNodeRjs {
+            root: Arc::clone(root),
+            inner_node: static_node_match,
+            _phantom: PhantomData,
+        })
     }
 }
 

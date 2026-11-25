@@ -1,20 +1,26 @@
 //! Lightweight mode implementation for incremental per-file analysis.
 
 use crate::cache::SymbolCache;
+use crate::dataflow::{FileFlow, FlowCache};
 use crate::error::JsSemanticError;
+use crate::flow_query::{self, FlowHost};
 use crate::oxc_adapter::{find_symbol_at_range, parse_and_analyze};
 use language_core::{
-    ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences,
+    ByteRange, CallGraphOptions, CallGraphResult, DefinitionKind, DefinitionOptions,
+    DefinitionResult, FileReferences, FlowOptions, FlowResult, MutationOptions, MutationsResult,
     ReferencesResult, SemanticResult, SymbolLocation,
 };
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Lightweight semantic analyzer that builds symbol cache incrementally.
 #[derive(Debug, Default)]
 pub struct LightweightAnalyzer {
     /// Symbol cache for all processed files
     cache: SymbolCache,
+    /// Value-flow facts per file, built on the first data-flow or call-graph query.
+    flows: FlowCache,
 }
 
 impl LightweightAnalyzer {
@@ -22,6 +28,7 @@ impl LightweightAnalyzer {
     pub fn new() -> Self {
         Self {
             cache: SymbolCache::new(),
+            flows: FlowCache::default(),
         }
     }
 
@@ -321,6 +328,68 @@ impl LightweightAnalyzer {
     /// Clear the symbol cache.
     pub fn clear_cache(&self) {
         self.cache.clear();
+        self.flows.clear();
+    }
+
+    /// Follow the value at `range` backward or forward within its module.
+    pub fn data_flow(
+        &self,
+        file_path: &Path,
+        content: &str,
+        range: ByteRange,
+        options: FlowOptions,
+    ) -> SemanticResult<FlowResult> {
+        self.process_file(file_path, content)?;
+        Ok(flow_query::data_flow(self, file_path, range, options))
+    }
+
+    /// Walk the call graph from the function or call at `range`. File scope
+    /// does not resolve imports: calls of imported functions are unresolved.
+    pub fn call_graph(
+        &self,
+        file_path: &Path,
+        content: &str,
+        range: ByteRange,
+        options: CallGraphOptions,
+    ) -> SemanticResult<CallGraphResult> {
+        self.process_file(file_path, content)?;
+        Ok(flow_query::call_graph(self, file_path, range, options))
+    }
+
+    /// Places that change the binding at `range` or the value it holds.
+    pub fn mutations(
+        &self,
+        file_path: &Path,
+        content: &str,
+        range: ByteRange,
+        options: MutationOptions,
+    ) -> SemanticResult<MutationsResult> {
+        self.process_file(file_path, content)?;
+        Ok(flow_query::mutations(self, file_path, range, options))
+    }
+}
+
+impl FlowHost for LightweightAnalyzer {
+    fn canonical(&self, path: &Path) -> PathBuf {
+        path.to_path_buf()
+    }
+
+    fn flow(&self, path: &Path) -> Option<Arc<FileFlow>> {
+        let hash = self.cache.content_hash(path)?;
+        self.flows
+            .get_or_build(path, hash, || self.cache.content(path))
+    }
+
+    fn content(&self, path: &Path) -> Option<String> {
+        self.cache.content(path)
+    }
+
+    fn resolve_import(&self, _: &Path, _: &str, _: &str) -> Option<(PathBuf, ByteRange)> {
+        None
+    }
+
+    fn workspace_files(&self) -> Vec<PathBuf> {
+        self.cache.files()
     }
 }
 

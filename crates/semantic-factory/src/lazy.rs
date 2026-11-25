@@ -4,8 +4,9 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use language_core::{
-    ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
-    SemanticProvider, SemanticResult,
+    ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult, FlowOptions,
+    FlowResult, MutationOptions, MutationsResult, ProviderMode, ReferencesResult, SemanticProvider,
+    SemanticResult,
 };
 use vfs::VfsPath;
 
@@ -182,6 +183,45 @@ impl SemanticProvider for LazySemanticProvider {
         match self.get_or_init(lang) {
             Some(provider) => provider.get_type(file_path, range),
             None => Ok(None), // Unsupported language
+        }
+    }
+
+    fn get_data_flow(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+        options: FlowOptions,
+    ) -> SemanticResult<FlowResult> {
+        let lang = Self::detect_language(file_path);
+        match self.get_or_init(lang) {
+            Some(provider) => provider.get_data_flow(file_path, range, options),
+            None => Ok(FlowResult::default()), // Unsupported language
+        }
+    }
+
+    fn get_call_graph(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+        options: CallGraphOptions,
+    ) -> SemanticResult<CallGraphResult> {
+        let lang = Self::detect_language(file_path);
+        match self.get_or_init(lang) {
+            Some(provider) => provider.get_call_graph(file_path, range, options),
+            None => Ok(CallGraphResult::default()), // Unsupported language
+        }
+    }
+
+    fn get_mutations(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+        options: MutationOptions,
+    ) -> SemanticResult<MutationsResult> {
+        let lang = Self::detect_language(file_path);
+        match self.get_or_init(lang) {
+            Some(provider) => provider.get_mutations(file_path, range, options),
+            None => Ok(MutationsResult::default()), // Unsupported language
         }
     }
 

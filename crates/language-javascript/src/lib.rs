@@ -39,7 +39,9 @@
 
 mod accurate;
 mod cache;
+mod dataflow;
 mod error;
+mod flow_query;
 mod lightweight;
 mod oxc_adapter;
 mod provider;

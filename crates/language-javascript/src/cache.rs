@@ -88,7 +88,6 @@ pub struct FileSymbols {
     /// All references in this file
     pub references: Vec<SymbolReference>,
     /// Source content hash (for invalidation)
-    #[allow(dead_code)]
     pub content_hash: u64,
 }
 
@@ -173,6 +172,16 @@ impl SymbolCache {
             .read()
             .get(path)
             .map(|e| (e.symbols.clone(), e.content.clone()))
+    }
+
+    /// Content hash of a cached file, without cloning its symbols.
+    pub fn content_hash(&self, path: &Path) -> Option<u64> {
+        self.files.read().get(path).map(|e| e.symbols.content_hash)
+    }
+
+    /// Content of a cached file.
+    pub fn content(&self, path: &Path) -> Option<String> {
+        self.files.read().get(path).map(|e| e.content.clone())
     }
 
     pub fn content_matches(&self, path: &Path, candidate: &str) -> bool {

@@ -1,11 +1,14 @@
 //! Accurate mode implementation for workspace-wide lazy indexing.
 
 use crate::cache::{ExportedSymbol, FileSymbols, ImportedSymbol, Symbol, SymbolCache};
+use crate::dataflow::{FileFlow, FlowCache};
 use crate::error::JsSemanticError;
+use crate::flow_query::{self, FlowHost};
 use crate::oxc_adapter::{find_symbol_at_range, parse_and_analyze};
 use crate::vfs_fs::VfsFileSystem;
 use language_core::{
-    filesystem, ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences,
+    filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionKind, DefinitionOptions,
+    DefinitionResult, FileReferences, FlowOptions, FlowResult, MutationOptions, MutationsResult,
     ReferencesResult, SemanticResult, SymbolLocation,
 };
 use oxc_resolver::{
@@ -15,6 +18,7 @@ use oxc_resolver::{
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use vfs::{VfsFileType, VfsPath};
 
 /// Strategy for discovering workspace files during indexing.
@@ -114,6 +118,8 @@ pub struct AccurateAnalyzer {
     fs_root: VfsPath,
     /// Strategy for discovering workspace files during bulk indexing.
     walker: WorkspaceWalker,
+    /// Value-flow facts per file, built on the first data-flow or call-graph query.
+    flows: FlowCache,
 }
 
 impl AccurateAnalyzer {
@@ -165,6 +171,7 @@ impl AccurateAnalyzer {
             indexing_in_progress: RwLock::new(HashSet::new()),
             fs_root,
             walker,
+            flows: FlowCache::default(),
         }
     }
 
@@ -913,6 +920,7 @@ impl AccurateAnalyzer {
         self.cache.clear();
         self.indexed_files.write().clear();
         self.indexing_in_progress.write().clear();
+        self.flows.clear();
     }
 
     /// Gets the type of a symbol at the given byte range.
@@ -926,6 +934,81 @@ impl AccurateAnalyzer {
     ) -> SemanticResult<Option<String>> {
         // TODO: Implement type inference using oxc's type system
         Ok(None)
+    }
+}
+
+impl AccurateAnalyzer {
+    /// Follow the value at `range` backward or forward within its module.
+    pub fn data_flow(
+        &self,
+        file_path: &Path,
+        content: &str,
+        range: ByteRange,
+        options: FlowOptions,
+    ) -> SemanticResult<FlowResult> {
+        self.process_file(file_path, content)?;
+        Ok(flow_query::data_flow(self, file_path, range, options))
+    }
+
+    /// Walk the workspace call graph from the function or call at `range`.
+    pub fn call_graph(
+        &self,
+        file_path: &Path,
+        content: &str,
+        range: ByteRange,
+        options: CallGraphOptions,
+    ) -> SemanticResult<CallGraphResult> {
+        self.process_file(file_path, content)?;
+        Ok(flow_query::call_graph(self, file_path, range, options))
+    }
+
+    /// Places that change the binding at `range` or the value it holds.
+    pub fn mutations(
+        &self,
+        file_path: &Path,
+        content: &str,
+        range: ByteRange,
+        options: MutationOptions,
+    ) -> SemanticResult<MutationsResult> {
+        self.process_file(file_path, content)?;
+        Ok(flow_query::mutations(self, file_path, range, options))
+    }
+}
+
+impl FlowHost for AccurateAnalyzer {
+    fn canonical(&self, path: &Path) -> PathBuf {
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    fn flow(&self, path: &Path) -> Option<Arc<FileFlow>> {
+        let _ = self.ensure_indexed(path);
+        let hash = self.cache.content_hash(path)?;
+        self.flows
+            .get_or_build(path, hash, || self.cache.content(path))
+    }
+
+    fn content(&self, path: &Path) -> Option<String> {
+        self.cache.content(path)
+    }
+
+    /// Imports are resolved by the same module and re-export resolution that
+    /// answers go-to-definition.
+    fn resolve_import(
+        &self,
+        from: &Path,
+        specifier: &str,
+        export_name: &str,
+    ) -> Option<(PathBuf, ByteRange)> {
+        let module = self.resolve_module(specifier, from).ok()?;
+        match self.resolve_export(&module, export_name, &mut HashSet::new())? {
+            ExportTarget::Symbol { path, symbol } => Some((path, symbol.range)),
+            ExportTarget::Site { path, range, .. } => Some((path, range)),
+        }
+    }
+
+    fn workspace_files(&self) -> Vec<PathBuf> {
+        let _ = self.index_workspace_files();
+        self.cache.files()
     }
 }
 
