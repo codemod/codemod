@@ -124,6 +124,28 @@ impl SgRoot {
             "root.write() is for files found through definition() or references(), which roots parsed in a forEachFile callback have none of; call file.write(text) for the callback's file",
         ))
     }
+
+    /// Throws: module resolution needs the semantic provider.
+    #[napi]
+    pub fn resolve_module(&self, _specifier: String) -> Result<Option<String>> {
+        Err(no_semantic_provider("resolveModule"))
+    }
+
+    /// Throws: module resolution needs the semantic provider.
+    #[napi]
+    pub fn resolve_export(&self, _module: String, _name: String) -> Result<Option<Value>> {
+        Err(no_semantic_provider("resolveExport"))
+    }
+
+    /// Throws: module resolution needs the semantic provider.
+    #[napi]
+    pub fn specifier_for(
+        &self,
+        _target: Unknown<'_>,
+        _options: Option<Value>,
+    ) -> Result<Option<String>> {
+        Err(no_semantic_provider("specifierFor"))
+    }
 }
 
 #[napi]

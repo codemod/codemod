@@ -1,11 +1,12 @@
 //! Main OXC semantic provider implementation.
 
 use crate::accurate::{AccurateAnalyzer, WorkspaceWalker};
+use crate::cache::SymbolCache;
 use crate::lightweight::LightweightAnalyzer;
 use language_core::{
     filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult,
     FlowOptions, FlowResult, MutationOptions, MutationsResult, ProviderMode, ReferencesResult,
-    SemanticProvider, SemanticResult, SymbolKind,
+    SemanticError, SemanticProvider, SemanticResult, SpecifierOptions, SymbolKind,
 };
 use std::path::{Path, PathBuf};
 use vfs::VfsPath;
@@ -239,6 +240,34 @@ impl std::fmt::Debug for OxcSemanticProvider {
 }
 
 impl SemanticProvider for OxcSemanticProvider {
+    fn resolve_module(&self, from_file: &Path, specifier: &str) -> SemanticResult<Option<PathBuf>> {
+        Ok(self
+            .workspace("resolveModule")?
+            .resolve_module_path(from_file, specifier))
+    }
+
+    fn resolve_export(
+        &self,
+        module_path: &Path,
+        export_name: &str,
+    ) -> SemanticResult<Option<DefinitionResult>> {
+        let analyzer = self.workspace("resolveExport")?;
+        Ok(analyzer
+            .resolve_export_definition(module_path, export_name)
+            .map(|definition| with_export_name(definition, analyzer.cache())))
+    }
+
+    fn specifier_for(
+        &self,
+        from_file: &Path,
+        target: &Path,
+        options: &SpecifierOptions,
+    ) -> SemanticResult<Option<String>> {
+        Ok(self
+            .workspace("specifierFor")?
+            .specifier_for(from_file, target, options))
+    }
+
     fn get_definition(
         &self,
         file_path: &Path,
@@ -367,15 +396,21 @@ impl OxcSemanticProvider {
                 analyzer.cache(),
             ),
         };
-        Ok(definition.map(|mut definition| {
-            let location = &definition.location;
-            definition.export_name = match location.kind {
-                // Resolution stopped at an export specifier: that is the name.
-                SymbolKind::Export => Some(location.name.clone()),
-                _ => cache.export_name_at(&location.file_path, location.range),
-            };
-            definition
-        }))
+        Ok(definition.map(|definition| with_export_name(definition, cache)))
+    }
+
+    /// The workspace analyzer, or why module queries need it.
+    fn workspace(&self, operation: &str) -> SemanticResult<&AccurateAnalyzer> {
+        match &self.analyzer {
+            AnalyzerKind::WorkspaceScope(analyzer) => Ok(analyzer),
+            AnalyzerKind::FileScope(_) => Err(SemanticError::Unsupported {
+                operation: operation.to_string(),
+                reason: "module resolution needs workspace scope: set `semanticAnalysis: \"workspace\"` \
+                         on the step (`semantic_analysis: workspace` in workflow.yaml, \
+                         `--semantic-workspace <dir>` with `codemod jssg run`)"
+                    .to_string(),
+            }),
+        }
     }
 
     /// Find references with content already available.
@@ -399,6 +434,17 @@ impl OxcSemanticProvider {
     pub fn fs_root(&self) -> &VfsPath {
         &self.fs_root
     }
+}
+
+/// Fill in how the definition is exported from its module.
+fn with_export_name(mut definition: DefinitionResult, cache: &SymbolCache) -> DefinitionResult {
+    let location = &definition.location;
+    definition.export_name = match location.kind {
+        // Resolution stopped at an export specifier: that is the name.
+        SymbolKind::Export => Some(location.name.clone()),
+        _ => cache.export_name_at(&location.file_path, location.range),
+    };
+    definition
 }
 
 #[cfg(test)]

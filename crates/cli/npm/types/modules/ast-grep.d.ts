@@ -310,6 +310,65 @@ declare module "codemod:ast-grep" {
      * ```
      */
     write(content: string): void;
+
+    // Module resolution (experimental; JavaScript and TypeScript, workspace scope).
+
+    /**
+     * The file `specifier` resolves to when this root's file imports it, as
+     * `definition()` resolves it: tsconfig `paths` (with `extends`), workspace
+     * packages, `node_modules`, index files and extensions.
+     *
+     * @throws when semantic analysis is not in workspace scope, or the root
+     *   was parsed from a string.
+     * @returns The absolute path, or null when it does not resolve.
+     * @experimental
+     * @example
+     * ```ts
+     * root.resolveModule("@/components"); // "/repo/src/components/index.ts"
+     * ```
+     */
+    resolveModule(specifier: string): string | null;
+
+    /**
+     * What export `name` (`"default"` for the default export) of `module`
+     * lands on, following re-exports through barrels and `export *`.
+     * `module` is a specifier, resolved from this root's file, or an
+     * absolute path (from `resolveModule()`).
+     *
+     * @throws as `resolveModule()` does.
+     * @returns A `definition()`-shaped result (`exportName` is how the
+     *   declaring module exports it), or null when the module does not
+     *   export the name or does not resolve.
+     * @experimental
+     * @example
+     * ```ts
+     * const modal = root.resolveExport("@/components", "Modal");
+     * modal?.root.filename(); // ".../components/modal.tsx"
+     * modal?.exportName;      // "default"
+     * ```
+     */
+    resolveExport(module: string, name: string): DefinitionResult<M> | null;
+
+    /**
+     * A specifier this root's file can import `target` with. Candidates are
+     * the relative path and every tsconfig `paths` alias whose target holds
+     * the file; each is checked by resolving it, so the answer always
+     * reaches `target`. With `like` (the specifier being replaced) its style
+     * wins: relative or alias, the same alias prefix, `.js` or no extension.
+     * Otherwise `prefer`, then the shortest.
+     *
+     * @param target - An absolute path, a path relative to this file, or an
+     *   SgRoot (from `definition()` or `resolveExport()`).
+     * @throws as `resolveModule()` does, and on an unknown option.
+     * @returns The specifier, or null when none reaches `target`.
+     * @experimental
+     * @example
+     * ```ts
+     * root.specifierFor(modal.root, { like: "@/components" }); // "@/components/modal"
+     * root.specifierFor(modal.root, { like: "../components" }); // "../components/modal"
+     * ```
+     */
+    specifierFor(target: string | SgRoot<M>, options?: SpecifierOptions): string | null;
     /**
      * Rename the current file to a new path.
      *
@@ -607,6 +666,17 @@ declare module "codemod:ast-grep" {
      * ```
      */
     follow?: boolean;
+  }
+
+  export interface SpecifierOptions {
+    /**
+     * The specifier being replaced: its style (relative or alias), alias
+     * prefix and extension are kept when a specifier like it reaches the file.
+     * Takes precedence over `prefer`.
+     */
+    like?: string;
+    /** Which kind to choose when both reach the file. */
+    prefer?: "relative" | "alias";
   }
 
   export interface DefinitionResult<M extends TypesMap = TypesMap> {

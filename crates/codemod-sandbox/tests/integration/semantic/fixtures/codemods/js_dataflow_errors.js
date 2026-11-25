@@ -53,6 +53,18 @@ export default function transform(root) {
   if (!Array.isArray(items.mutations({ after: audit }))) throw new Error("after: a node works");
   if (!Array.isArray(items.flowsFrom(undefined))) throw new Error("undefined options work");
 
+  // Module resolution needs workspace scope; this test runs in file scope.
+  expectThrow(
+    () => root.resolveModule("./db.js"),
+    "needs workspace scope",
+    "resolveModule in file scope",
+  );
+  expectThrow(
+    () => root.specifierFor("./db.js"),
+    "needs workspace scope",
+    "specifierFor in file scope",
+  );
+
   // A missing name is null, not undefined, as the types say.
   const escape = items.mutations().find((m) => m.kind === "escape");
   if (escape.name !== null) throw new Error("escape name: expected null, got " + escape.name);

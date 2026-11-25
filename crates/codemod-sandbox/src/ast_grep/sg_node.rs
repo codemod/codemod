@@ -268,6 +268,172 @@ impl<'js> SgRootRjs<'js> {
             Ok(())
         }
     }
+
+    // Module resolution for codemods that rewrite imports (workspace scope).
+
+    /// The file `specifier` resolves to from this root's file, or null.
+    #[qjs(rename = "resolveModule")]
+    pub fn resolve_module(&self, ctx: Ctx<'js>, specifier: String) -> Result<Value<'js>> {
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = specifier;
+            return Err(Exception::throw_message(
+                &ctx,
+                &not_in_wasm("resolveModule"),
+            ));
+        }
+        #[cfg(feature = "native")]
+        {
+            let (provider, file) = self.module_query(&ctx, "resolveModule")?;
+            let path = provider
+                .resolve_module(&file, &specifier)
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
+            or_null(&ctx, path.map(|p| p.to_string_lossy().to_string()))
+        }
+    }
+
+    /// What `name` (`"default"` for the default export) of `module` lands
+    /// on, following re-exports: a `definition()`-shaped object, or null.
+    /// `module` is a specifier resolved from this root's file, or a path.
+    #[qjs(rename = "resolveExport")]
+    pub fn resolve_export(
+        &self,
+        ctx: Ctx<'js>,
+        module: String,
+        name: String,
+    ) -> Result<Value<'js>> {
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = (module, name);
+            return Err(Exception::throw_message(
+                &ctx,
+                &not_in_wasm("resolveExport"),
+            ));
+        }
+        #[cfg(feature = "native")]
+        {
+            let (provider, file) = self.module_query(&ctx, "resolveExport")?;
+            let Some(module_path) = module_path(&*provider, &file, &module)
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?
+            else {
+                return Ok(Value::new_null(ctx));
+            };
+            match provider
+                .resolve_export(&module_path, &name)
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?
+            {
+                Some(def) => definition_value(&ctx, &self.inner, &file, &def),
+                None => Ok(Value::new_null(ctx)),
+            }
+        }
+    }
+
+    /// A specifier this root's file can import `target` with (a path, or a
+    /// root from `definition()`/`resolveExport()`), checked by resolving it;
+    /// null when none reaches it. `options.like` keeps the style of the
+    /// specifier being replaced; `options.prefer` is "relative" or "alias".
+    #[qjs(rename = "specifierFor")]
+    pub fn specifier_for(
+        &self,
+        ctx: Ctx<'js>,
+        target: Value<'js>,
+        options: Opt<Value<'js>>,
+    ) -> Result<Value<'js>> {
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = (target, options);
+            return Err(Exception::throw_message(&ctx, &not_in_wasm("specifierFor")));
+        }
+        #[cfg(feature = "native")]
+        {
+            let (provider, file) = self.module_query(&ctx, "specifierFor")?;
+            let target_path = if let Some(path) = target.as_string() {
+                std::path::PathBuf::from(path.to_string()?)
+            } else if let Ok(root) = rquickjs::Class::<SgRootRjs>::from_value(&target) {
+                match root.borrow().inner.filename.clone() {
+                    Some(name) => std::path::PathBuf::from(name),
+                    None => return Err(Exception::throw_type(
+                        &ctx,
+                        "specifierFor(target): this root was parsed from a string and has no file",
+                    )),
+                }
+            } else {
+                return Err(Exception::throw_type(
+                    &ctx,
+                    "specifierFor(target): target must be a file path or an SgRoot",
+                ));
+            };
+            let target_path = if target_path.is_relative() {
+                file.parent().unwrap_or(&file).join(target_path)
+            } else {
+                target_path
+            };
+            let mut spec_options = language_core::SpecifierOptions::default();
+            if let Some(opts) = query_options(&ctx, options, "specifierFor", &["prefer", "like"])? {
+                spec_options.like = opts.get::<_, Option<String>>("like")?;
+                spec_options.prefer = match opts.get::<_, Option<String>>("prefer")?.as_deref() {
+                    None => None,
+                    Some("relative") => Some(language_core::SpecifierStyle::Relative),
+                    Some("alias") => Some(language_core::SpecifierStyle::Alias),
+                    Some(other) => {
+                        return Err(Exception::throw_range(
+                            &ctx,
+                            &format!(
+                                "specifierFor(options): prefer must be \"relative\" or \"alias\", not \"{other}\""
+                            ),
+                        ))
+                    }
+                };
+            }
+            let specifier = provider
+                .specifier_for(&file, &target_path, &spec_options)
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
+            or_null(&ctx, specifier)
+        }
+    }
+}
+
+#[cfg(feature = "native")]
+impl SgRootRjs<'_> {
+    /// The provider and this root's file, or why a module query cannot run.
+    fn module_query(
+        &self,
+        ctx: &Ctx<'_>,
+        method: &str,
+    ) -> Result<(Arc<dyn SemanticProvider>, std::path::PathBuf)> {
+        let Some(filename) = self.inner.filename.as_ref() else {
+            return Err(Exception::throw_message(
+                ctx,
+                &format!("{method}() needs this root's file, and it was parsed from a string."),
+            ));
+        };
+        let Some(provider) = self.inner.semantic_provider.clone() else {
+            return Err(Exception::throw_message(
+                ctx,
+                &format!(
+                    "{method}() needs semantic analysis in workspace scope, and it is off for this \
+                     code. Set `semanticAnalysis: \"workspace\"` on the step (`semantic_analysis: \
+                     workspace` in workflow.yaml, `--semantic-workspace <dir>` with `codemod jssg run`)."
+                ),
+            ));
+        };
+        Ok((provider, std::path::PathBuf::from(filename)))
+    }
+}
+
+/// `module` as a path: absolute paths as they are, anything else resolved
+/// as a specifier from `from_file`.
+#[cfg(feature = "native")]
+fn module_path(
+    provider: &dyn SemanticProvider,
+    from_file: &std::path::Path,
+    module: &str,
+) -> language_core::SemanticResult<Option<std::path::PathBuf>> {
+    let path = std::path::Path::new(module);
+    if path.is_absolute() {
+        return Ok(Some(path.to_path_buf()));
+    }
+    provider.resolve_module(from_file, module)
 }
 
 /// Whether this context runs workflow callbacks, whose file changes go
@@ -1567,76 +1733,14 @@ impl<'js> SgNodeRjs<'js> {
 
 #[cfg(feature = "native")]
 impl<'js> SgNodeRjs<'js> {
-    /// The object `definition()` returns: `node`, `root`, `kind`,
-    /// `exportName` and `nameNode`. Null when the range has no node.
+    /// The object `definition()` returns. See [`definition_value`].
     fn definition_object(
         &self,
         ctx: &Ctx<'js>,
         file_path: &std::path::Path,
         def_result: &language_core::DefinitionResult,
     ) -> Result<Value<'js>> {
-        let loc = &def_result.location;
-        let root = if loc.file_path == file_path {
-            Arc::clone(&self.root)
-        } else {
-            let lang_str = detect_language_from_path(&loc.file_path);
-            let lang = Lang::from_str(&lang_str).map_err(|e| {
-                Exception::throw_message(ctx, &format!("Unsupported language: {}", e))
-            })?;
-            let grep = AstGrep::new(def_result.content.clone(), lang);
-            match SgRootRjs::try_new_with_semantic(
-                grep,
-                Some(loc.file_path.to_string_lossy().to_string()),
-                self.root.semantic_provider.clone(),
-                self.root.current_file_path.clone(),
-                self.root.target_directory.as_deref(),
-            ) {
-                Ok(new_root) => new_root.inner,
-                Err(_) => return Ok(Value::new_null(ctx.clone())),
-            }
-        };
-        let wrap = |node: Node<'_, TSDoc>| {
-            let node_match: NodeMatch<_> = node.into();
-            let static_node_match: NodeMatch<'static, TSDoc> =
-                unsafe { std::mem::transmute(node_match) };
-            SgNodeRjs {
-                root: Arc::clone(&root),
-                inner_node: static_node_match,
-                _phantom: PhantomData,
-            }
-        };
-        let root_node = root.grep.root();
-        let Some(node) =
-            find_node_at_range(&root_node, loc.range.start as usize, loc.range.end as usize)
-        else {
-            return Ok(Value::new_null(ctx.clone()));
-        };
-        // The declared name: the node itself for a binding, the identifier
-        // inside it for a declaration or `export default function f`.
-        // A default export's symbol is named "default": fall back to the
-        // `name` field of the declaration inside.
-        let name_node = node
-            .dfs()
-            .find(|n| n.kind().ends_with("identifier") && n.text() == loc.name.as_str())
-            .or_else(|| {
-                node.dfs()
-                    .find_map(|n| n.field("name"))
-                    .filter(|n| n.kind().ends_with("identifier"))
-            });
-
-        let result_obj = rquickjs::Object::new(ctx.clone())?;
-        result_obj.set("node", wrap(node))?;
-        result_obj.set("nameNode", or_null(ctx, name_node.map(wrap))?)?;
-        result_obj.set(
-            "root",
-            SgRootRjs {
-                inner: Arc::clone(&root),
-                _phantom: PhantomData,
-            },
-        )?;
-        result_obj.set("kind", def_result.kind.as_str())?;
-        result_obj.set("exportName", or_null(ctx, def_result.export_name.clone())?)?;
-        result_obj.into_js(ctx)
+        definition_value(ctx, &self.root, file_path, def_result)
     }
 
     /// The provider, file and byte range a data-flow or call-graph query
@@ -1752,6 +1856,79 @@ impl<'js> SgNodeRjs<'js> {
             _phantom: PhantomData,
         })
     }
+}
+
+/// The object `definition()` returns: `node`, `root`, `kind`, `exportName`
+/// and `nameNode`. `own_root` answers for its own file; other files get a
+/// new root. Null when the range has no node.
+#[cfg(feature = "native")]
+fn definition_value<'js>(
+    ctx: &Ctx<'js>,
+    own_root: &Arc<SgRootInner>,
+    file_path: &std::path::Path,
+    def_result: &language_core::DefinitionResult,
+) -> Result<Value<'js>> {
+    let loc = &def_result.location;
+    let root = if loc.file_path == file_path {
+        Arc::clone(own_root)
+    } else {
+        let lang_str = detect_language_from_path(&loc.file_path);
+        let lang = Lang::from_str(&lang_str)
+            .map_err(|e| Exception::throw_message(ctx, &format!("Unsupported language: {}", e)))?;
+        let grep = AstGrep::new(def_result.content.clone(), lang);
+        match SgRootRjs::try_new_with_semantic(
+            grep,
+            Some(loc.file_path.to_string_lossy().to_string()),
+            own_root.semantic_provider.clone(),
+            own_root.current_file_path.clone(),
+            own_root.target_directory.as_deref(),
+        ) {
+            Ok(new_root) => new_root.inner,
+            Err(_) => return Ok(Value::new_null(ctx.clone())),
+        }
+    };
+    let wrap = |node: Node<'_, TSDoc>| {
+        let node_match: NodeMatch<_> = node.into();
+        let static_node_match: NodeMatch<'static, TSDoc> =
+            unsafe { std::mem::transmute(node_match) };
+        SgNodeRjs {
+            root: Arc::clone(&root),
+            inner_node: static_node_match,
+            _phantom: PhantomData,
+        }
+    };
+    let root_node = root.grep.root();
+    let Some(node) =
+        find_node_at_range(&root_node, loc.range.start as usize, loc.range.end as usize)
+    else {
+        return Ok(Value::new_null(ctx.clone()));
+    };
+    // The declared name: the node itself for a binding, the identifier
+    // inside it for a declaration or `export default function f`.
+    // A default export's symbol is named "default": fall back to the
+    // `name` field of the declaration inside.
+    let name_node = node
+        .dfs()
+        .find(|n| n.kind().ends_with("identifier") && n.text() == loc.name.as_str())
+        .or_else(|| {
+            node.dfs()
+                .find_map(|n| n.field("name"))
+                .filter(|n| n.kind().ends_with("identifier"))
+        });
+
+    let result_obj = rquickjs::Object::new(ctx.clone())?;
+    result_obj.set("node", wrap(node))?;
+    result_obj.set("nameNode", or_null(ctx, name_node.map(wrap))?)?;
+    result_obj.set(
+        "root",
+        SgRootRjs {
+            inner: Arc::clone(&root),
+            _phantom: PhantomData,
+        },
+    )?;
+    result_obj.set("kind", def_result.kind.as_str())?;
+    result_obj.set("exportName", or_null(ctx, def_result.export_name.clone())?)?;
+    result_obj.into_js(ctx)
 }
 
 /// `null`, not `undefined`, for a missing value: the public types say

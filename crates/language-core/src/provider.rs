@@ -2,9 +2,10 @@
 
 use crate::{
     ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult, FlowOptions,
-    FlowResult, MutationOptions, MutationsResult, ReferencesResult, SemanticResult,
+    FlowResult, MutationOptions, MutationsResult, ReferencesResult, SemanticError, SemanticResult,
+    SpecifierOptions,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Provider mode determines the analysis strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -138,6 +139,46 @@ pub trait SemanticProvider: Send + Sync {
         Ok(MutationsResult::default())
     }
 
+    /// Resolve `specifier` the way an import in `from_file` would: tsconfig
+    /// `paths` (with `extends`), workspace packages, `node_modules`, index
+    /// files and extensions. `Ok(None)` when it does not resolve.
+    ///
+    /// The default is an `Unsupported` error, for providers without module
+    /// resolution.
+    fn resolve_module(
+        &self,
+        _from_file: &Path,
+        _specifier: &str,
+    ) -> SemanticResult<Option<PathBuf>> {
+        Err(unsupported("resolveModule"))
+    }
+
+    /// What `export_name` (`"default"` for the default export) of the module
+    /// at `module_path` lands on, following re-exports. `Ok(None)` when the
+    /// module does not export the name.
+    ///
+    /// The default is an `Unsupported` error.
+    fn resolve_export(
+        &self,
+        _module_path: &Path,
+        _export_name: &str,
+    ) -> SemanticResult<Option<DefinitionResult>> {
+        Err(unsupported("resolveExport"))
+    }
+
+    /// A specifier that an import in `from_file` can use to reach `target`,
+    /// checked by resolving it. `Ok(None)` when none is found.
+    ///
+    /// The default is an `Unsupported` error.
+    fn specifier_for(
+        &self,
+        _from_file: &Path,
+        _target: &Path,
+        _options: &SpecifierOptions,
+    ) -> SemanticResult<Option<String>> {
+        Err(unsupported("specifierFor"))
+    }
+
     /// Notify the provider that a file has been processed.
     ///
     /// This is called after each file is processed during codemod execution.
@@ -163,4 +204,11 @@ pub trait SemanticProvider: Send + Sync {
 
     /// Get the current provider mode.
     fn mode(&self) -> ProviderMode;
+}
+
+fn unsupported(operation: &str) -> SemanticError {
+    SemanticError::Unsupported {
+        operation: operation.to_string(),
+        reason: "this language's semantic provider does not resolve modules".to_string(),
+    }
 }

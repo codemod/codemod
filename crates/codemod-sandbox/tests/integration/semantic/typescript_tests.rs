@@ -164,3 +164,12 @@ jssg_test! {
     target: "src/Nav.tsx",
     scope: workspace,
 }
+
+jssg_test! {
+    name: test_resolve_module_resolve_export_and_specifier_for,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_module_resolution.js",
+    fixture_dir: "typescript/module_resolution",
+    target: "src/pages/home.ts",
+    scope: workspace,
+}

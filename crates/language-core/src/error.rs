@@ -38,6 +38,11 @@ pub enum SemanticError {
     #[error("Semantic provider is not configured")]
     ProviderNotConfigured,
 
+    /// The provider cannot answer this kind of query; `reason` says why and
+    /// what to change.
+    #[error("{operation}: {reason}")]
+    Unsupported { operation: String, reason: String },
+
     /// Internal error
     #[error("Internal error: {0}")]
     Internal(String),

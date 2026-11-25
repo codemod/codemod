@@ -9,7 +9,8 @@ use crate::vfs_fs::VfsFileSystem;
 use language_core::{
     filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionKind, DefinitionOptions,
     DefinitionResult, FileReferences, FlowOptions, FlowResult, MutationOptions, MutationsResult,
-    ReferencesResult, SemanticResult, SymbolLocation, UnparsedFile,
+    ReferencesResult, SemanticResult, SpecifierOptions, SpecifierStyle, SymbolLocation,
+    UnparsedFile,
 };
 use oxc_resolver::{
     Resolution, ResolveError, ResolveOptions, Resolver, ResolverGeneric, TsconfigDiscovery,
@@ -55,6 +56,9 @@ pub enum WorkspaceWalker {
 /// can't resolve, so `paths` declared in a nested tsconfig (e.g.
 /// `packages/tsconfig.json` in a monorepo whose root tsconfig only covers
 /// tooling) still apply.
+/// tsconfig `paths`: each alias pattern with its target patterns.
+type TsconfigPaths = Vec<(String, Vec<String>)>;
+
 enum DualResolver {
     Physical {
         primary: Resolver,
@@ -100,6 +104,34 @@ impl DualResolver {
             Self::Physical { nearest, .. } => nearest.resolve(directory, specifier),
             Self::Vfs { nearest, .. } => nearest.resolve(directory, specifier),
         }
+    }
+
+    /// The `paths` of the tsconfig file at `path` (after `extends`), with
+    /// the directory relative targets are resolved against. None when there
+    /// is no such file.
+    fn tsconfig_paths(&self, path: &Path) -> Option<(PathBuf, TsconfigPaths)> {
+        let tsconfig = match self {
+            Self::Physical { nearest, .. } => nearest.resolve_tsconfig(path),
+            Self::Vfs { nearest, .. } => nearest.resolve_tsconfig(path),
+        }
+        .ok()?;
+        let base = tsconfig
+            .compiler_options
+            .base_url
+            .clone()
+            .unwrap_or_else(|| path.parent().unwrap_or(path).to_path_buf());
+        let paths = tsconfig
+            .compiler_options
+            .paths
+            .as_ref()
+            .map(|paths| {
+                paths
+                    .iter()
+                    .map(|(key, targets)| (key.clone(), targets.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some((base, paths))
     }
 }
 
@@ -852,6 +884,142 @@ impl AccurateAnalyzer {
         });
     }
 
+    /// [`Self::resolve_module`] for codemods: the canonical path, or None.
+    pub fn resolve_module_path(&self, from_file: &Path, specifier: &str) -> Option<PathBuf> {
+        let from = self.canonical_path(from_file);
+        self.resolve_module(specifier, &from)
+            .ok()
+            .map(|path| self.canonical_path(&path))
+    }
+
+    /// What `export_name` of the module at `module_path` lands on, following
+    /// re-exports: the declaration, or the export site where the chain stops.
+    pub fn resolve_export_definition(
+        &self,
+        module_path: &Path,
+        export_name: &str,
+    ) -> Option<DefinitionResult> {
+        let target = self.resolve_export(module_path, export_name, &mut HashSet::new())?;
+        self.target_definition(target, DefinitionKind::External)
+    }
+
+    /// A specifier an import in `from_file` can use to reach `target`.
+    ///
+    /// Candidates are the relative path and every tsconfig `paths` alias
+    /// (from the tsconfig nearest to `from_file` up to the workspace root)
+    /// whose target directory holds `target`. Each is checked by resolving
+    /// it from `from_file`, so a candidate only survives if it reaches
+    /// `target`. Then the style of `options.like` (or `options.prefer`)
+    /// wins, then the alias sharing the longest prefix with `like`, then the
+    /// shortest.
+    pub fn specifier_for(
+        &self,
+        from_file: &Path,
+        target: &Path,
+        options: &SpecifierOptions,
+    ) -> Option<String> {
+        let from = self.canonical_path(from_file);
+        let target = self.canonical_path(target);
+        let from_dir = from.parent()?.to_path_buf();
+
+        // Forms of the target a specifier can name: with its extension,
+        // without it, and its directory when it is an index file.
+        let target_str = target.to_string_lossy().replace('\\', "/");
+        let mut forms = vec![target_str.clone()];
+        if let Some(stem) = strip_js_extension(&target_str) {
+            forms.push(stem.to_string());
+            // ESM TypeScript names the compiled output: `./x.js` for `x.ts`.
+            for (source, output) in [
+                (".tsx", ".js"),
+                (".ts", ".js"),
+                (".mts", ".mjs"),
+                (".cts", ".cjs"),
+            ] {
+                if target_str.ends_with(source) && !target_str.ends_with(".d.ts") {
+                    forms.push(format!("{stem}{output}"));
+                    break;
+                }
+            }
+            if let Some(dir) = stem.strip_suffix("/index") {
+                forms.push(dir.to_string());
+            }
+        }
+
+        let mut candidates: Vec<(String, bool)> = Vec::new();
+        for form in &forms {
+            candidates.push((relative_specifier(&from_dir, Path::new(form)), false));
+        }
+        let mut dir = Some(from_dir.as_path());
+        while let Some(current) = dir {
+            if let Some((base, paths)) =
+                self.resolver.tsconfig_paths(&current.join("tsconfig.json"))
+            {
+                for (key, targets) in &paths {
+                    for pattern in targets {
+                        let pattern_path = base.join(pattern);
+                        let pattern_str = pattern_path.to_string_lossy().replace('\\', "/");
+                        match (key.split_once('*'), pattern_str.split_once('*')) {
+                            (Some((key_head, key_tail)), Some((head, tail))) => {
+                                for form in &forms {
+                                    if let Some(middle) = form
+                                        .strip_prefix(head)
+                                        .and_then(|rest| rest.strip_suffix(tail))
+                                    {
+                                        candidates
+                                            .push((format!("{key_head}{middle}{key_tail}"), true));
+                                    }
+                                }
+                            }
+                            (None, None) => candidates.push((key.clone(), true)),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            if current == self.workspace_root.as_path() {
+                break;
+            }
+            dir = current
+                .parent()
+                .filter(|p| p.starts_with(&self.workspace_root));
+        }
+
+        let mut seen = HashSet::new();
+        candidates.retain(|(specifier, _)| {
+            seen.insert(specifier.clone())
+                && self.resolve_module_path(&from, specifier).as_ref() == Some(&target)
+        });
+
+        let like = options.like.as_deref();
+        let want_alias = match (like, options.prefer) {
+            (Some(like), _) => Some(!like.starts_with('.')),
+            (None, Some(style)) => Some(style == SpecifierStyle::Alias),
+            (None, None) => None,
+        };
+        let like_has_extension = like.is_some_and(|like| strip_js_extension(like).is_some());
+        let common = |specifier: &str| {
+            like.map_or(0, |like| {
+                specifier
+                    .chars()
+                    .zip(like.chars())
+                    .take_while(|(a, b)| a == b)
+                    .count()
+            })
+        };
+        candidates
+            .into_iter()
+            .min_by_key(|(specifier, alias)| {
+                (
+                    want_alias.is_some_and(|want| want != *alias),
+                    like_has_extension != strip_js_extension(specifier).is_some(),
+                    std::cmp::Reverse(common(specifier)),
+                    specifier.len(),
+                    specifier.clone(),
+                )
+            })
+            .map(|(specifier, _)| specifier)
+    }
+
     /// Resolve an import to the declaration it ultimately binds to,
     /// following re-export chains through barrels.
     fn resolve_import_target(
@@ -1347,6 +1515,35 @@ fn walk_vfs_tree(start: &VfsPath, prefix: &str, on_file: &mut dyn FnMut(&Path)) 
         }
     }
     recurse(start, prefix, on_file);
+}
+
+/// The path without a JavaScript or TypeScript extension, if it has one.
+fn strip_js_extension(path: &str) -> Option<&str> {
+    const EXTENSIONS: [&str; 10] = [
+        ".d.ts", ".tsx", ".ts", ".mts", ".cts", ".jsx", ".js", ".mjs", ".cjs", ".json",
+    ];
+    EXTENSIONS.iter().find_map(|ext| path.strip_suffix(ext))
+}
+
+/// `./x` / `../x` from `from_dir` to `target`.
+fn relative_specifier(from_dir: &Path, target: &Path) -> String {
+    let from: Vec<_> = from_dir.components().collect();
+    let to: Vec<_> = target.components().collect();
+    let shared = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<String> = vec!["..".to_string(); from.len() - shared];
+    parts.extend(
+        to[shared..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().to_string()),
+    );
+    let joined = parts.join("/");
+    if joined.starts_with("..") {
+        joined
+    } else if joined.is_empty() {
+        ".".to_string()
+    } else {
+        format!("./{joined}")
+    }
 }
 
 #[cfg(test)]

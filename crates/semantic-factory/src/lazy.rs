@@ -225,6 +225,40 @@ impl SemanticProvider for LazySemanticProvider {
         }
     }
 
+    fn resolve_module(
+        &self,
+        from_file: &Path,
+        specifier: &str,
+    ) -> SemanticResult<Option<std::path::PathBuf>> {
+        match self.get_or_init(Self::detect_language(from_file)) {
+            Some(provider) => provider.resolve_module(from_file, specifier),
+            None => Err(unsupported_language("resolveModule", from_file)),
+        }
+    }
+
+    fn resolve_export(
+        &self,
+        module_path: &Path,
+        export_name: &str,
+    ) -> SemanticResult<Option<language_core::DefinitionResult>> {
+        match self.get_or_init(Self::detect_language(module_path)) {
+            Some(provider) => provider.resolve_export(module_path, export_name),
+            None => Err(unsupported_language("resolveExport", module_path)),
+        }
+    }
+
+    fn specifier_for(
+        &self,
+        from_file: &Path,
+        target: &Path,
+        options: &language_core::SpecifierOptions,
+    ) -> SemanticResult<Option<String>> {
+        match self.get_or_init(Self::detect_language(from_file)) {
+            Some(provider) => provider.specifier_for(from_file, target, options),
+            None => Err(unsupported_language("specifierFor", from_file)),
+        }
+    }
+
     fn notify_file_processed(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
         let lang = Self::detect_language(file_path);
         match self.get_or_init(lang) {
@@ -250,6 +284,16 @@ impl SemanticProvider for LazySemanticProvider {
 // OnceLock is already Send + Sync, and Arc<dyn SemanticProvider> is Send + Sync
 unsafe impl Send for LazySemanticProvider {}
 unsafe impl Sync for LazySemanticProvider {}
+
+fn unsupported_language(operation: &str, path: &Path) -> language_core::SemanticError {
+    language_core::SemanticError::Unsupported {
+        operation: operation.to_string(),
+        reason: format!(
+            "no semantic provider handles {} (JavaScript, TypeScript and Python are supported)",
+            path.display()
+        ),
+    }
+}
 
 #[cfg(test)]
 mod tests {
