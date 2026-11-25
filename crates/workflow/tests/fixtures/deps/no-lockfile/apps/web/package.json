@@ -1,0 +1,9 @@
+{
+  "name": "@acme/web",
+  "dependencies": {
+    "@acme/lib": "workspace:*",
+    "next": "^14.0.0",
+    "ui-kit": "github:acme/ui-kit",
+    "zod": "^4.0.0"
+  }
+}

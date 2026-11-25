@@ -1,0 +1,7 @@
+{
+  "name": "@acme/lib",
+  "version": "2.3.0",
+  "peerDependencies": {
+    "zod": "^3.22.0 || ^4.0.0"
+  }
+}
