@@ -21,6 +21,7 @@ a rewrite is safe before it makes it:
 | Who calls this function? | `node.callers()` |
 | Is it called from outside the workspace? | `node.entryPoints()` |
 | Is this variable, or the object it holds, changed? | `node.mutations()` |
+| What can this reach, through calls and framework edges? | [`crawl()`](#walk-the-workspace-lookups-join-and-crawl) |
 
 Each answer is an array of objects that carry `node` and `root`, so you can go straight from an
 answer to an edit. On top of them: `dependsOn()` / `reaches()` booleans, `key()` / `equals()` to
@@ -218,8 +219,7 @@ A rule names `exports`, `decorators` or both (then a function must match both). 
 needs `semanticAnalysis: "workspace"`; `entryPoints` rules are only accepted there.
 
 A function that has callers can still be dead: when no caller is an entry point or reached from
-one, nothing runs it. To check, walk `callers({ transitive: true })` and ask `entryPoints()` of
-each caller.
+one, nothing runs it. To check, [crawl](#follow-edges-crawl) from `entryPoints("typescript")`.
 
 ## What does this call: `callees()`
 
@@ -340,6 +340,100 @@ const deletable = left.length === 0 && left.unparsed.length === 0 && !barrel.has
 `definition({ follow: true })` goes from a use of an imported name to its declaration in one call.
 `@jssg/utils` builds a debarrel rewrite on these:
 [`importFromDeclarations`](/community/jssg/utils/javascript#importfromdeclarations).
+
+## Walk the workspace: lookups, `join()` and `crawl()`
+
+The methods above answer one node at a time. To follow calls and values across the workspace,
+import the analyses as values. Each is a **lookup**: a read-only map from a node to the edges that
+leave it, `{ node, ...meta }`.
+
+```ts
+import { callGraph, crawl, dataflow, entryPoints, join, lookup, symbols, types } from "codemod/ast-grep";
+
+const { callers, callees } = callGraph("typescript"); // meta: { site, via }
+const { sources, uses } = dataflow("typescript");     // one hop of flowsFrom / flowsTo
+const { definition, references } = symbols("typescript"); // definition goes through imports
+const { typeOf } = types("typescript");               // the TypeScript 7 checker
+entryPoints("typescript");                            // every function called from outside
+
+callees.get(handler);
+// [{ node: <function loadUser>, site: <loadUser(id)>, via: "direct" }]
+callers.get(unused); // undefined, like a Map
+```
+
+Code that imports one of these gets workspace analysis without `semanticAnalysis` on the selector,
+in `forEachFile` callbacks and in plain `step(() => ...)` functions; importing `types` turns on the
+checker too. Nodes match by syntax node (`key()`), so a node from another query finds its edges.
+Built-in lookups are answered node by node and can't be listed: `size`, `keys()` and `for...of`
+throw. Like every answer, they describe the workspace when the step started.
+
+### Edges you know: `lookup()`
+
+When you know edges the analysis can't see, build a lookup from `[from, to, meta?]` pairs. Both ends
+must be nodes; the error names the edge that is not. It lists its edges like a Map.
+
+```ts
+const renders = lookup(pages.map((page) => [page, layoutOf(page), { via: "layout" }]));
+```
+
+### Edges between two patterns: `join()`
+
+Most framework edges are a pattern on one side and a pattern on the other, joined where a captured
+name is equal: a tRPC call to its procedure, `emit("x")` to `on("x")`, a Django URL to its view.
+`join()` builds that lookup in one pass, with no JavaScript per match:
+
+```ts
+const procedures = join({
+  from: { find: "trpc.$R.$P.$M($$$)", anchor: "function", on: "$P" }, // the edge starts at the calling function
+  to: { find: { rule: { pattern: { context: "({ $P: publicProcedure.$M($$$) })", selector: "pair" } } }, on: "$P" },
+  meta: { via: "trpc" },
+});
+procedures.get(Profile);
+// [{ node: <getUser: publicProcedure.query(...)>, site: <trpc.user.getUser.useQuery()>, name: "getUser", via: "trpc" }]
+```
+
+`find` is a pattern, or a rule as `findAll()` takes. `anchor: "function"` puts the edge on the
+function around the match instead of the match.
+
+Two captures join when they name the same thing. Where both resolve (an imported function, a
+variable), that means the same declaration, so two files that each register their own `handler`
+don't get crossed; where either doesn't (a string like an event name, a property the analysis can't
+follow), it means the same text. Results get more precise with [types](#types-the-typescript-7-checker)
+on: a tRPC client's `trpc.user.getUser` resolves only through the checker, so without it procedures
+join by name. To choose, pass `by`:
+
+| `by` | Joins when |
+| --- | --- |
+| (left out) | Both resolve to the same declaration; otherwise the text is equal |
+| `"text"` | The text is equal |
+| `symbols("typescript").definition`, or any lookup | Both resolve, through it, to the same node; the rest are dropped |
+
+A route path `"/users/[id]"` against a fetch of `` `/users/${id}` `` needs code to normalize, so build
+those edges with `lookup()`.
+
+### Follow edges: `crawl()`
+
+`crawl(lookups, start, { stopAt })` walks one or more lookups from the start nodes, breadth first,
+each node once, and maps each node it reached to the edge that reached it first (with `from`, the
+node it came from). Start nodes map to `null`. It reaches a `stopAt` node but does not walk past it.
+
+```ts
+// Everything a page can run, through tRPC and plain calls
+const reached = await crawl([procedures, callees], Profile);
+for (const [node, edge] of reached) {
+  console.log(edge ? `${edge.from.text()} -> ${node.text()} (${edge.via})` : `start: ${node.text()}`);
+}
+```
+
+A function with callers can still be dead. To check, crawl from the entry points:
+
+```ts
+const live = await crawl(callees, entryPoints("typescript"));
+const dead = exported.filter((fn) => !live.has(fn));
+```
+
+`crawl()` takes lookups only. To crawl edges you hold in a `Map`, make it one with
+`lookup([...map].flatMap(([from, tos]) => tos.map((to) => [from, to])))`.
 
 ## Cookbook
 
