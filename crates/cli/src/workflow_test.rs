@@ -82,6 +82,7 @@ fn run_case_blocking(request: CaseRequest) -> Result<CaseRun> {
             name: None,
             dry_run: false,
             test: Some(request.plan),
+            check_uncommitted: false,
         })
         .map_err(|e| anyhow!("{e}"))?;
     Ok(CaseRun {

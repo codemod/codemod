@@ -656,6 +656,9 @@ mod tests {
             error: None,
             failed_files: 0,
             partial_steps: Vec::new(),
+            output: serde_json::Value::Null,
+            output_omitted: None,
+            steps: Vec::new(),
         });
         assert!(view.is_finished());
     }
@@ -760,6 +763,9 @@ mod tests {
             error: None,
             failed_files: 0,
             partial_steps: Vec::new(),
+            output: serde_json::Value::Null,
+            output_omitted: None,
+            steps: Vec::new(),
         });
         assert_eq!(view.diffs[0].step, None);
         assert_eq!(view.key(key(KeyCode::Char('a'))), Action::Apply);
@@ -774,6 +780,9 @@ mod tests {
             error: Some("boom".into()),
             failed_files: 0,
             partial_steps: Vec::new(),
+            output: serde_json::Value::Null,
+            output_omitted: None,
+            steps: Vec::new(),
         });
         assert_eq!(view.key(key(KeyCode::Char('a'))), Action::None);
     }
@@ -861,6 +870,9 @@ mod tests {
             error: None,
             failed_files: 0,
             partial_steps: Vec::new(),
+            output: serde_json::Value::Null,
+            output_omitted: None,
+            steps: Vec::new(),
         });
         assert_eq!(view.key(key(KeyCode::Char('q'))), Action::Exit);
     }

@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use tabled::{Table, Tabled};
 
+use super::status::{run_json, ListFormat};
 use crate::workflow_exec::{status_label, store};
 
 #[derive(Args, Debug)]
@@ -9,6 +10,10 @@ pub struct Command {
     /// Number of workflow runs to show
     #[arg(short, long, default_value = "10")]
     limit: usize,
+
+    /// Output format: "text" (default), or "json": an array of runs, without their steps
+    #[arg(long, value_enum, default_value_t = ListFormat::Text)]
+    format: ListFormat,
 }
 
 #[derive(Tabled)]
@@ -27,6 +32,14 @@ struct RunRow {
 pub async fn handler(args: &Command) -> Result<()> {
     let store = store();
     let runs = store.list_runs(args.limit)?;
+    if args.format == ListFormat::Json {
+        let runs: Vec<serde_json::Value> = runs
+            .iter()
+            .map(|run| run_json(store.as_ref(), run, None))
+            .collect();
+        println!("{}", serde_json::Value::from(runs));
+        return Ok(());
+    }
     if runs.is_empty() {
         println!("No workflow runs found.");
         return Ok(());

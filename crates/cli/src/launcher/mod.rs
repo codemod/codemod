@@ -252,8 +252,7 @@ impl Interaction for ScreenInteraction {
     }
 
     fn approve(&self, approval: &Approval) -> Decision {
-        let grants_capabilities = matches!(approval, Approval::Capabilities { .. });
-        if self.approve_all && !grants_capabilities {
+        if self.approve_all && approval.given_by_approve_all() {
             return NonInteractive { approve_all: true }.approve(approval);
         }
         let _guard = self.asking.lock().unwrap_or_else(|e| e.into_inner());
@@ -316,12 +315,8 @@ pub(crate) async fn run_start(request: ExecRequest) -> Result<ExecOutcome> {
         if action != Action::Apply {
             return Ok(outcome);
         }
-        // Applying writes: the same check a run that is not a dry run makes.
-        crate::dirty_git_check::dirty_check(false)(
-            &request.target,
-            request.settings.allow_dirty,
-            None,
-        )?;
+        // Applying is a run like any other: it asks about uncommitted
+        // changes before its first write.
         dry_run = false;
     }
 }
@@ -358,6 +353,7 @@ async fn run_on_screen(
     let (engine, summary) =
         crate::workflow_exec::engine_with(settings, Arc::new(ChannelEvents(sender)), interaction);
     let stop = engine.stop_handle();
+    let allow_dirty = settings.allow_dirty;
 
     let workflow = match &kind {
         Kind::Start { workflow, .. } => {
@@ -382,6 +378,7 @@ async fn run_on_screen(
                 name,
                 dry_run,
                 test: None,
+                check_uncommitted: !allow_dirty,
             }),
             Kind::Resume(run_id) => engine.resume(&run_id),
         };

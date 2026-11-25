@@ -83,9 +83,13 @@ pub struct RunRecord {
     pub awaiting: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
-    /// The workflow's return value once it succeeds.
+    /// The workflow's return value once it succeeds, or the output a
+    /// workflow gave `fail()`.
     #[serde(default)]
     pub output: Option<Value>,
+    /// The exit code a workflow gave `fail()`; `None` for every other ending.
+    #[serde(default)]
+    pub exit_code: Option<i32>,
     /// What the run was started with, so resuming it continues the same way.
     #[serde(default)]
     pub settings: RunSettings,
@@ -116,6 +120,12 @@ pub struct RunSettings {
 pub enum Outcome {
     Succeeded(Value),
     Failed(String),
+    /// The workflow called `fail()`: failed, with an output and an exit code.
+    FailedWithOutput {
+        error: String,
+        output: Value,
+        exit_code: i32,
+    },
     Canceled,
     /// Waiting for an approval: what is being approved.
     AwaitingApproval(String),
@@ -139,6 +149,7 @@ impl RunRecord {
     pub fn conclude(&mut self, outcome: Outcome) {
         self.awaiting = None;
         self.error = None;
+        self.exit_code = None;
         match outcome {
             Outcome::Succeeded(output) => {
                 self.status = RunStatus::Succeeded;
@@ -147,6 +158,17 @@ impl RunRecord {
             Outcome::Failed(error) => {
                 self.status = RunStatus::Failed;
                 self.error = Some(error);
+                self.output = None;
+            }
+            Outcome::FailedWithOutput {
+                error,
+                output,
+                exit_code,
+            } => {
+                self.status = RunStatus::Failed;
+                self.error = Some(error);
+                self.output = Some(output);
+                self.exit_code = Some(exit_code);
             }
             Outcome::Canceled => self.status = RunStatus::Canceled,
             Outcome::AwaitingApproval(message) => {
@@ -229,6 +251,9 @@ pub struct StepRecord {
     /// For a partial step: how many of its files failed, of how many.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<FileCount>,
+    /// How long the step's last run took, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 /// How many of a step's files failed, of how many it ran on.
@@ -715,6 +740,7 @@ mod tests {
             awaiting: None,
             error: None,
             output: None,
+            exit_code: None,
             settings: RunSettings::default(),
         }
     }
@@ -733,6 +759,7 @@ mod tests {
             since: None,
             attempts: None,
             files: None,
+            duration_ms: None,
         }
     }
 

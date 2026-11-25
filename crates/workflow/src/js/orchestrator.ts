@@ -170,6 +170,48 @@ export class AwaitingApprovalError extends Error {
   }
 }
 
+/**
+ * Thrown by `fail()`: the run ends as failed, with this output and exit code.
+ * Hosts read `output` and `exitCode` when the body rejects with it (by name, as
+ * errors cross realms).
+ */
+export class WorkflowFailure extends Error {
+  declare readonly output: Json;
+  declare readonly exitCode: number;
+
+  constructor(message: string, output: Json, exitCode: number) {
+    super(message);
+    this.name = "WorkflowFailure";
+    this.output = output;
+    this.exitCode = exitCode;
+  }
+}
+
+/** The exit code of a run that `fail()` ended, unless it gives one. */
+export const FAIL_EXIT_CODE = 2;
+
+/** Ends the run as failed, keeping `output` as its output. See `fail` in `codemod/workflow`. */
+export function fail(
+  message: string,
+  options: { output?: unknown; exitCode?: unknown } = {},
+): never {
+  if (typeof message !== "string") throw new TypeError("fail() takes a message string first");
+  const output = options.output === undefined ? null : options.output;
+  checkJson(output, "fail()'s output");
+  const exitCode = options.exitCode === undefined ? FAIL_EXIT_CODE : options.exitCode;
+  if (
+    typeof exitCode !== "number" ||
+    !Number.isInteger(exitCode) ||
+    exitCode < 1 ||
+    exitCode > 125
+  ) {
+    throw new TypeError(
+      `fail()'s exitCode must be an integer from 1 to 125, not ${JSON.stringify(exitCode)}`,
+    );
+  }
+  throw new WorkflowFailure(message, output, exitCode);
+}
+
 // ---------------------------------------------------------------- tasks ---
 
 const TASK = Symbol.for("codemod.workflow.task");

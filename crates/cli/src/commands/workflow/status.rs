@@ -1,14 +1,76 @@
 use anyhow::{anyhow, Result};
+use butterflow_state::run_store::{RunRecord, StepRecord};
 use clap::Args;
+use serde_json::{json, Value};
 use tabled::{Table, Tabled};
 
 use crate::workflow_exec::{status_label, store};
+
+/// How `workflow status` and `workflow list` print.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ListFormat {
+    #[default]
+    Text,
+    /// One JSON document on stdout
+    Json,
+}
 
 #[derive(Args, Debug)]
 pub struct Command {
     /// Workflow run ID
     #[arg(short, long)]
     id: String,
+
+    /// Output format: "text" (default), or "json" with the steps' results and the run's output
+    #[arg(long, value_enum, default_value_t = ListFormat::Text)]
+    format: ListFormat,
+}
+
+/// A run as `--format json` prints it. `steps` is left out when `None`.
+pub(crate) fn run_json(
+    store: &dyn butterflow_state::run_store::RunStore,
+    run: &RunRecord,
+    steps: Option<&[StepRecord]>,
+) -> Value {
+    let mut value = json!({
+        "id": run.id,
+        "name": run.name,
+        "workflow": run.workflow_path,
+        "target": run.target,
+        "params": run.params,
+        "status": status_label(store, run),
+        "startedAt": run.started_at.to_rfc3339(),
+        "endedAt": run.ended_at.map(|ended| ended.to_rfc3339()),
+        "durationMs": run.ended_at.map(|ended| (ended - run.started_at).num_milliseconds().max(0)),
+        "awaiting": run.awaiting,
+        "error": run.error,
+        "output": run.output,
+        "exitCode": run.exit_code,
+    });
+    if let Some(steps) = steps {
+        value["failedFiles"] = steps
+            .iter()
+            .map(StepRecord::failed_files)
+            .sum::<usize>()
+            .into();
+        value["steps"] = steps
+            .iter()
+            .map(|step| {
+                json!({
+                    "position": step.position,
+                    "label": step.label,
+                    "status": step.status,
+                    "error": step.error,
+                    "result": step.result,
+                    "finishedAt": step.finished_at.and_then(chrono::DateTime::from_timestamp_millis).map(|at| at.to_rfc3339()),
+                    "durationMs": step.duration_ms,
+                    "attempts": step.attempts,
+                    "files": step.files,
+                })
+            })
+            .collect();
+    }
+    value
 }
 
 #[derive(Tabled)]
@@ -30,6 +92,10 @@ pub async fn handler(args: &Command) -> Result<()> {
         .get_run(&args.id)?
         .ok_or_else(|| anyhow!("run '{}' not found", args.id))?;
     let steps = store.load_steps(&args.id)?;
+    if args.format == ListFormat::Json {
+        println!("{}", run_json(store.as_ref(), &run, Some(&steps)));
+        return Ok(());
+    }
 
     println!("Run:       {}", run.id);
     if let Some(name) = &run.name {
@@ -51,6 +117,18 @@ pub async fn handler(args: &Command) -> Result<()> {
     }
     if let Some(error) = &run.error {
         println!("Error:     {error}");
+    }
+    if let Some(code) = run.exit_code {
+        println!("Exit code: {code}");
+    }
+    if let Some(output) = run.output.as_ref().filter(|output| !output.is_null()) {
+        let json = output.to_string();
+        if json.chars().count() > 200 {
+            let cut: String = json.chars().take(200).collect();
+            println!("Output:    {cut}… (all of it: --format json)");
+        } else {
+            println!("Output:    {json}");
+        }
     }
 
     if steps.is_empty() {

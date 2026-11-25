@@ -32,7 +32,8 @@ export async function examples(): Promise<void> {
   const deleted: string | null | undefined = run.changes["src/a.ts"];
   const given: boolean = run.step("Find moment imports").given;
   assertTree(run.files, { "src/a.ts": "" });
-  void [status, deleted, given, run.diff(), run.logs[0]?.step];
+  const exitCode: number | null = run.exitCode;
+  void [status, deleted, given, exitCode, run.diff(), run.logs[0]?.step];
 
   const workflowModule = { default: async (_context: { params: Record<string, unknown> }) => ({}) };
   await runWorkflow(workflowModule, { path: "workflow.ts", target: {}, host: "node" });

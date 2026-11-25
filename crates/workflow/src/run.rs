@@ -179,6 +179,10 @@ pub(crate) struct RunContext {
     pub interruption: Mutex<Option<Interruption>>,
     /// The run's `assess()` calls: usage by step, and the import graph.
     pub assess: crate::assess::RunAssess,
+    /// Checks for uncommitted changes before the run first changes its
+    /// target; `None` when nothing is checked (dry runs, tests, resumes,
+    /// `--allow-dirty`). Shared with nested codemods.
+    pub write_gate: Option<Arc<crate::write_gate::WriteGate>>,
     /// Keeps `cancel` following the store's cancel requests; `None` for
     /// nested codemods, which share their parent's flag.
     pub _cancel_watch: Option<CancelWatch>,
@@ -267,7 +271,17 @@ impl RunContext {
             stopped: AtomicBool::new(false),
             interruption: Mutex::new(None),
             assess: Default::default(),
+            write_gate: self.write_gate.clone(),
             _cancel_watch: None,
+        }
+    }
+
+    /// Call before changing the target: `Err` when it has uncommitted
+    /// changes nobody agreed to write over (see `write_gate`).
+    pub fn before_write(&self) -> Result<(), String> {
+        match &self.write_gate {
+            Some(gate) if !self.dry_run => gate.check(self.interaction.as_ref()),
+            _ => Ok(()),
         }
     }
 
@@ -328,7 +342,9 @@ impl RunContext {
     /// Persist one step's outcome and report it. A step that only began to
     /// wait has not finished, so that is saved and not reported.
     pub fn record_step(&self, step: &StepRecord, duration_ms: u64) -> StoreResult<()> {
-        self.store.put_step(&self.run_id, step)?;
+        let mut timed = step.clone();
+        timed.duration_ms = Some(duration_ms);
+        self.store.put_step(&self.run_id, &timed)?;
         if step.status == StepStatus::Waiting {
             return Ok(());
         }
@@ -390,6 +406,14 @@ impl RunContext {
 pub enum Ending {
     Succeeded(serde_json::Value),
     Failed(String),
+    /// The workflow called `fail()`: the run failed, and still has an output
+    /// and the exit code the CLI ends with.
+    #[serde(rename_all = "camelCase")]
+    FailedWithOutput {
+        error: String,
+        output: serde_json::Value,
+        exit_code: i32,
+    },
     Canceled,
     /// Stopped at a manual approval nobody could give.
     AwaitingApproval(String),
@@ -402,7 +426,7 @@ impl Ending {
     pub fn status(&self) -> &'static str {
         match self {
             Self::Succeeded(_) => "succeeded",
-            Self::Failed(_) => "failed",
+            Self::Failed(_) | Self::FailedWithOutput { .. } => "failed",
             Self::Canceled => "canceled",
             Self::AwaitingApproval(_) => "awaiting-approval",
             Self::Stopped(_) => "stopped",
@@ -411,10 +435,27 @@ impl Ending {
 
     /// What the run's record keeps of it. Only test runs stop early, and
     /// they are never resumed, so stopped is stored as succeeded.
+    /// What the workflow returned, or gave `fail()`; `Null` otherwise.
+    pub fn output(&self) -> &serde_json::Value {
+        match self {
+            Self::Succeeded(output) | Self::FailedWithOutput { output, .. } => output,
+            _ => &serde_json::Value::Null,
+        }
+    }
+
     pub(crate) fn outcome(&self) -> Outcome {
         match self {
             Self::Succeeded(output) => Outcome::Succeeded(output.clone()),
             Self::Failed(error) => Outcome::Failed(error.clone()),
+            Self::FailedWithOutput {
+                error,
+                output,
+                exit_code,
+            } => Outcome::FailedWithOutput {
+                error: error.clone(),
+                output: output.clone(),
+                exit_code: *exit_code,
+            },
             Self::Canceled => Outcome::Canceled,
             Self::AwaitingApproval(message) => Outcome::AwaitingApproval(message.clone()),
             Self::Stopped(_) => Outcome::Succeeded(serde_json::Value::Null),
@@ -889,18 +930,40 @@ fn rejection<'js>(ctx: &Ctx<'js>, promise: &Promise<'js>) -> Ending {
             text("message").unwrap_or_default(),
         )
     };
-    let (name, message) = match &caught {
-        rquickjs::CaughtError::Exception(exception) => named(exception.as_object()),
+    let object = match &caught {
+        rquickjs::CaughtError::Exception(exception) => exception.as_object().clone(),
         rquickjs::CaughtError::Value(value) => match value.as_object() {
-            Some(object) => named(object),
+            Some(object) => object.clone(),
             None => return Ending::Failed(caught.to_string()),
         },
         rquickjs::CaughtError::Error(_) => return Ending::Failed(caught.to_string()),
     };
+    let (name, message) = named(&object);
     match name.as_str() {
         "CanceledError" => Ending::Canceled,
         "AwaitingApprovalError" => Ending::AwaitingApproval(message),
+        "WorkflowFailure" => workflow_failure(ctx, &object, message),
         _ => Ending::Failed(format!("{name}: {message}")),
+    }
+}
+
+/// The ending of a body that `fail()` stopped: its message, output and exit
+/// code (`fail()` checked both).
+fn workflow_failure<'js>(ctx: &Ctx<'js>, error: &Object<'js>, message: String) -> Ending {
+    let output = error
+        .get::<_, Value>("output")
+        .map_err(|e| e.to_string())
+        .and_then(|value| to_json(ctx, value));
+    let exit_code = error.get::<_, f64>("exitCode").ok();
+    match (output, exit_code) {
+        (Ok(output), Some(code)) if code.fract() == 0.0 && (1.0..=125.0).contains(&code) => {
+            Ending::FailedWithOutput {
+                error: message,
+                output,
+                exit_code: code as i32,
+            }
+        }
+        _ => Ending::Failed(format!("WorkflowFailure: {message}")),
     }
 }
 

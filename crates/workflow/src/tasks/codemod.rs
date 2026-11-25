@@ -125,9 +125,11 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     if let (Some(observer), Some(nested)) = (&observer, nested_run) {
         let outcome = match &ending {
             Ending::Succeeded(_) => NestedCodemodRunOutcome::Succeeded,
-            Ending::Failed(error) => NestedCodemodRunOutcome::Failed {
-                error_message: error.clone(),
-            },
+            Ending::Failed(error) | Ending::FailedWithOutput { error, .. } => {
+                NestedCodemodRunOutcome::Failed {
+                    error_message: error.clone(),
+                }
+            }
             Ending::Canceled => NestedCodemodRunOutcome::Failed {
                 error_message: "canceled".into(),
             },
@@ -158,10 +160,9 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
                 });
             Ok(TaskOutcome::new(json!({ "output": output })).with_failures(failed, total))
         }
-        Ending::Failed(error) => Err(TaskError::Failed(format!(
-            "codemod '{}' failed: {error}",
-            request.source
-        ))),
+        Ending::Failed(error) | Ending::FailedWithOutput { error, .. } => Err(TaskError::Failed(
+            format!("codemod '{}' failed: {error}", request.source),
+        )),
         Ending::Canceled => Err(TaskError::Canceled),
         Ending::AwaitingApproval(message) => Err(TaskError::AwaitingApproval(message)),
         // Nested runs have no test plan.

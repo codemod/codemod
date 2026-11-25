@@ -174,8 +174,10 @@ export interface WorkflowRun {
   readonly status: RunStatus;
   /** Whether the run succeeded, or stopped at its `until` step. */
   readonly ok: boolean;
-  /** What the workflow returned, when it succeeded. */
+  /** What the workflow returned, or gave `fail()`. */
   readonly output: JsonValue | null;
+  /** The exit code the workflow gave `fail()` (2 by default); `null` when it did not call it. */
+  readonly exitCode: number | null;
   /** Why the run failed. */
   readonly error: string | null;
   /** The approval the run waits for (`approve: false`). */
@@ -272,6 +274,7 @@ interface RunResult {
   error: string | null;
   awaiting: string | null;
   stoppedAt: string | null;
+  exitCode?: number | null;
   steps: StepRun[];
   logs: LogLine[];
 }
@@ -485,6 +488,7 @@ class Run implements WorkflowRun {
   readonly error: string | null;
   readonly awaiting: string | null;
   readonly stoppedAt: string | null;
+  readonly exitCode: number | null;
   readonly dir: string;
   readonly files: FileTree;
   readonly changes: { readonly [path: string]: string | null };
@@ -499,6 +503,7 @@ class Run implements WorkflowRun {
     this.error = result.error;
     this.awaiting = result.awaiting;
     this.stoppedAt = result.stoppedAt;
+    this.exitCode = result.exitCode ?? null;
     this.dir = dir;
     this.files = Object.freeze(files);
     this.changes = Object.freeze(changes(before, files));
@@ -610,6 +615,7 @@ function harness(
           error: null,
           awaiting: null,
           stoppedAt: null,
+          exitCode: null,
           steps: [],
           logs: [],
         });

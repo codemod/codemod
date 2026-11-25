@@ -387,6 +387,10 @@ A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>
   Run every step without changing files. Later steps see what earlier steps would have changed, and the run ends by printing the diff of all of it (`run_diff` events with `--format jsonl`). Shell commands, agents and skill installs are skipped, and the run is not saved.
 </ResponseField>
 
+<ResponseField name="--allow-dirty" type="boolean">
+  Let the run change a target that has uncommitted changes, or that is not in a git repository. Without it, the run checks just before it first changes the target: before a step writes, renames or deletes a file, and before a `shell`, `agent`, `installSkill` or git step, or a step whose code gets `fs` or `child_process`. An interactive run asks; an unattended one fails that step and writes nothing. A run that only reads (a check or a report) is never stopped by uncommitted changes. Dry runs and `workflow resume` are not checked.
+</ResponseField>
+
 <ResponseField name="--approve" type="boolean">
   Give every approval the workflow asks for (`approval(...)` steps, manual nodes in `workflow.yaml`, pull requests). Without it, a run nobody can answer for pauses at the first approval and can be continued with `workflow resume --approve`.
 
@@ -420,6 +424,16 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 
 <ResponseField name="--format <text|jsonl>" type="string">
   `jsonl` prints one JSON object per engine event (`run_started`, `step_started`, `step_progress`, `step_log`, `step_retrying`, `step_finished`, `run_finished`, ...) on stdout. `run_finished` has the run's `status`, its `error`, `failed_files` (how many files failed in all), and `partial_steps`: each step some files failed in, with its `position`, `label`, `failed_files` and `files` (how many it ran on).
+
+  It also has `output`, what the workflow returned (or gave [`fail()`](/community/workflows/reference#failing-a-run-with-a-report)), dry runs included, and `steps`: every recorded step with its `position`, `label`, `status` and `result`. An `output` over 1 MiB as JSON is `null`, with `output_omitted: { bytes, limit }`; step results share another 1 MiB, and one that does not fit is `null` with `result_omitted`. A saved run has all of it in `workflow status --id <ID> --format json`.
+
+  ```json
+  {"event":"run_finished","run_id":"…","status":"failed","error":"1 check failed","failed_files":0,"partial_steps":[],
+   "output":{"checks":[{"id":"no-var","status":"fail"}]},
+   "steps":[{"position":0,"label":"Find var","status":"succeeded","result":{"outputs":["src/a.ts"]}}],"seq":5,"ts":"…"}
+  ```
+
+  In text format, a run that returned something ends with `Output: <JSON>`, cut at 200 characters.
 </ResponseField>
 
 <ResponseField name="-t, --target <PATH>" type="string">
@@ -490,7 +504,8 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 | ---- | ------- |
 | `0` | The run finished, or is waiting for an approval. |
 | `1` | The run failed or was canceled. |
-| `2` | The run finished, but some files failed. The other files' changes were written (in a dry run, nothing was), and the output ends with how many failed. A resumed run counts the files that failed in steps it reused. |
+| `2` | The run finished, but some files failed. The other files' changes were written (in a dry run, nothing was), and the output ends with how many failed. A resumed run counts the files that failed in steps it reused. Also: the workflow called [`fail()`](/community/workflows/reference#failing-a-run-with-a-report) (the run is `failed`, and keeps its output). |
+| other | The workflow called `fail(message, { exitCode })` with that code (1 to 125). |
 
 **`workflow resume`**
 
@@ -609,10 +624,15 @@ Show a run and each of its recorded steps. A step is `succeeded`, `failed`, `can
 
 ```bash
 npx codemod workflow status -i <ID>
+npx codemod workflow status -i <ID> --format json
 ```
 
 <ResponseField name="-i, --id <ID>" type="string" required>
   Workflow run ID.
+</ResponseField>
+
+<ResponseField name="--format <text|json>" type="string">
+  `json` prints the run as one JSON object: `id`, `name`, `workflow`, `target`, `params`, `status`, `startedAt`, `endedAt`, `durationMs`, `awaiting`, `error`, `output` (what the workflow returned or gave `fail()`), `exitCode` (from `fail()`, else `null`), `failedFiles`, and `steps`, each with `position`, `label`, `status`, `error`, `result`, `finishedAt`, `durationMs`, `attempts` and `files`.
 </ResponseField>
 
 **`workflow list`**
@@ -620,11 +640,15 @@ npx codemod workflow status -i <ID>
 List workflow runs.
 
 ```bash
-npx codemod workflow list [-l <LIMIT>]
+npx codemod workflow list [-l <LIMIT>] [--format json]
 ```
 
 <ResponseField name="-l, --limit <LIMIT>" type="number">
   Number of workflow runs to show. (default: 10)
+</ResponseField>
+
+<ResponseField name="--format <text|json>" type="string">
+  `json` prints an array of runs, most recent first, each as `workflow status --format json` shows it without `steps` and `failedFiles`.
 </ResponseField>
 
 **`workflow cancel`**

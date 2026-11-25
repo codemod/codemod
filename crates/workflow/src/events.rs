@@ -81,7 +81,78 @@ pub enum Event {
         failed_files: usize,
         /// The steps some files failed in, by position.
         partial_steps: Vec<PartialStep>,
+        /// What the workflow returned, or gave `fail()`; `null` otherwise,
+        /// and when it is over [`OUTPUT_LIMIT`] as JSON (`output_omitted`
+        /// says so). Dry runs report it too.
+        output: serde_json::Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output_omitted: Option<Omitted>,
+        /// Every recorded step with its result, by position. Results share
+        /// [`STEP_RESULTS_LIMIT`]: one that does not fit is `null`, with
+        /// `result_omitted`.
+        steps: Vec<StepResult>,
     },
+}
+
+/// The most JSON `RunFinished.output` carries.
+pub const OUTPUT_LIMIT: usize = 1024 * 1024;
+/// The most JSON the step results in one `RunFinished` carry together.
+pub const STEP_RESULTS_LIMIT: usize = 1024 * 1024;
+
+/// A value left out of an event for its size.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Omitted {
+    /// Its size as JSON.
+    pub bytes: usize,
+    /// What was left for it.
+    pub limit: usize,
+}
+
+/// A step as `RunFinished` reports it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StepResult {
+    pub position: u64,
+    pub label: String,
+    pub status: StepStatus,
+    pub result: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_omitted: Option<Omitted>,
+}
+
+/// `value` if it is at most `limit` bytes as JSON, else `null` and why.
+pub fn bounded(value: &serde_json::Value, limit: usize) -> (serde_json::Value, Option<Omitted>) {
+    let bytes = serde_json::to_string(value).map_or(0, |text| text.len());
+    if bytes <= limit {
+        (value.clone(), None)
+    } else {
+        (serde_json::Value::Null, Some(Omitted { bytes, limit }))
+    }
+}
+
+impl StepResult {
+    /// `steps` with their results, within [`STEP_RESULTS_LIMIT`] together.
+    pub fn of(steps: &[StepRecord]) -> Vec<StepResult> {
+        let mut left = STEP_RESULTS_LIMIT;
+        steps
+            .iter()
+            .map(|step| {
+                let (result, result_omitted) = bounded(
+                    step.result.as_ref().unwrap_or(&serde_json::Value::Null),
+                    left,
+                );
+                if result_omitted.is_none() {
+                    left -= serde_json::to_string(&result).map_or(0, |text| text.len());
+                }
+                StepResult {
+                    position: step.position,
+                    label: step.label.clone(),
+                    status: step.status,
+                    result,
+                    result_omitted,
+                }
+            })
+            .collect()
+    }
 }
 
 /// A step that finished with some of its files failed.

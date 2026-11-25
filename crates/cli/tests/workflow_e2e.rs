@@ -583,3 +583,300 @@ export default async function main() {
     // Neither run got to the first step.
     assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
 }
+
+/// The events of a `--format jsonl` run.
+fn events(output: &Output) -> Vec<serde_json::Value> {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.starts_with('{'))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+fn run_finished(output: &Output) -> serde_json::Value {
+    events(output)
+        .into_iter()
+        .rfind(|event| event["event"] == "run_finished")
+        .unwrap_or_else(|| panic!("no run_finished in {}", text(output)))
+}
+
+/// Reads, never writes: one check that fails on src/a.ts's `var`.
+const TS_CHECK: &str = r#"
+import { fail, forEachFile, step } from "codemod/workflow";
+export default async function main() {
+  const found = await step("Find var", forEachFile("src/**/*.ts", (file) =>
+    file.text.includes("var ") ? file.path : undefined));
+  const report = { checks: [{ id: "no-var", status: found.outputs.length ? "fail" : "pass", files: found.outputs }] };
+  if (found.outputs.length) fail("1 check failed: no-var", { output: report });
+  return report;
+}
+"#;
+
+#[test]
+fn run_finished_carries_the_output_and_step_results() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { step } from "codemod/workflow";
+export default async function main() {
+  const n = await step("Count", () => 2);
+  return { checks: [{ id: "count", n }] };
+}
+"#,
+    );
+    for extra in [&[][..], &["--dry-run"][..]] {
+        let mut args = vec!["--format", "jsonl"];
+        args.extend_from_slice(extra);
+        let output = fixture.run(&args);
+        assert!(output.status.success(), "{}", text(&output));
+        let finished = run_finished(&output);
+        assert_eq!(
+            finished["output"],
+            serde_json::json!({ "checks": [{ "id": "count", "n": 2 }] }),
+            "{extra:?}: {finished}"
+        );
+        assert_eq!(
+            finished["steps"],
+            serde_json::json!([{ "position": 0, "label": "Count", "status": "succeeded", "result": 2 }]),
+            "{extra:?}: {finished}"
+        );
+    }
+}
+
+#[test]
+fn a_huge_output_is_left_out_of_run_finished_and_says_so() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { step } from "codemod/workflow";
+export default async function main() {
+  const big = await step("Big", () => "x".repeat(2 * 1024 * 1024));
+  return { big };
+}
+"#,
+    );
+    let output = fixture.run(&["--format", "jsonl", "--dry-run"]);
+    assert!(output.status.success(), "{}", text(&output));
+    let finished = run_finished(&output);
+    assert_eq!(finished["output"], serde_json::Value::Null);
+    assert!(
+        finished["output_omitted"]["bytes"].as_u64().unwrap() > 2 * 1024 * 1024,
+        "{finished}"
+    );
+    assert_eq!(finished["steps"][0]["result"], serde_json::Value::Null);
+    assert!(
+        finished["steps"][0]["result_omitted"]["bytes"]
+            .as_u64()
+            .unwrap()
+            > 2 * 1024 * 1024
+    );
+}
+
+#[test]
+fn a_text_run_ends_with_its_output() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        "export default async function main() { return { ok: true, n: 1 }; }\n",
+    );
+    for extra in [&[][..], &["--dry-run"][..]] {
+        let output = fixture.run(extra);
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(
+            text(&output).contains(r#"Output: {"ok":true,"n":1}"#),
+            "{extra:?}: {}",
+            text(&output)
+        );
+    }
+}
+
+#[test]
+fn fail_ends_the_run_with_exit_2_and_keeps_the_output() {
+    let fixture = Fixture::new();
+    fixture.package_file("workflow.ts", TS_CHECK);
+    let report = serde_json::json!({
+        "checks": [{ "id": "no-var", "status": "fail", "files": ["src/a.ts"] }]
+    });
+
+    for extra in [&[][..], &["--dry-run"][..]] {
+        let mut args = vec!["--format", "jsonl"];
+        args.extend_from_slice(extra);
+        let output = fixture.run(&args);
+        assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+        let finished = run_finished(&output);
+        assert_eq!(finished["status"], "failed", "{finished}");
+        assert_eq!(finished["error"], "1 check failed: no-var", "{finished}");
+        assert_eq!(finished["output"], report, "{finished}");
+    }
+
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let shown = text(&output);
+    assert!(shown.contains("1 check failed: no-var"), "{shown}");
+    assert!(shown.contains(r#"Output: {"checks":"#), "{shown}");
+
+    let id = latest_run_id(&fixture);
+    let status = fixture.codemod(&["workflow", "status", "--id", &id, "--format", "json"]);
+    assert!(status.status.success(), "{}", text(&status));
+    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["id"], id.as_str());
+    assert_eq!(status["status"], "failed");
+    assert_eq!(status["error"], "1 check failed: no-var");
+    assert_eq!(status["exitCode"], 2);
+    assert_eq!(status["output"], report);
+    assert_eq!(status["steps"][0]["label"], "Find var");
+    assert_eq!(status["steps"][0]["status"], "succeeded");
+    assert_eq!(
+        status["steps"][0]["result"]["outputs"],
+        serde_json::json!(["src/a.ts"])
+    );
+    assert!(status["durationMs"].as_u64().is_some(), "{status}");
+}
+
+#[test]
+fn fail_takes_an_exit_code() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        &TS_CHECK.replace("{ output: report }", "{ output: report, exitCode: 3 }"),
+    );
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+}
+
+#[test]
+fn workflow_list_and_status_print_json() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { step } from "codemod/workflow";
+export default async function main() { return await step("One", () => 1); }
+"#,
+    );
+    let output = fixture.run(&[]);
+    assert!(output.status.success(), "{}", text(&output));
+
+    let list = fixture.codemod(&["workflow", "list", "--format", "json"]);
+    assert!(list.status.success(), "{}", text(&list));
+    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let id = list[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(list[0]["status"], "succeeded");
+
+    let status = fixture.codemod(&["workflow", "status", "--id", &id, "--format", "json"]);
+    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["status"], "succeeded");
+    assert_eq!(status["output"], 1);
+    assert_eq!(status["exitCode"], serde_json::Value::Null);
+    assert_eq!(status["steps"][0]["result"], 1);
+}
+
+/// A git repository with one commit and an uncommitted change.
+fn dirty_repo(fixture: &Fixture) {
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(fixture.target.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {}", text(&output));
+    };
+    git(&["init", "-q"]);
+    git(&["-c", "user.email=t@t", "-c", "user.name=t", "add", "."]);
+    git(&[
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-qm",
+        "init",
+    ]);
+    fixture.target_file("src/c.ts", "const c = 3;\n");
+}
+
+/// `workflow run` without `--allow-dirty`.
+fn run_strict(fixture: &Fixture, extra: &[&str]) -> Output {
+    let package = fixture.package.path().to_str().unwrap().to_string();
+    let target = fixture.target.path().to_str().unwrap().to_string();
+    let mut args = vec![
+        "workflow",
+        "run",
+        "-w",
+        &package,
+        "--target",
+        &target,
+        "--no-interactive",
+    ];
+    args.extend_from_slice(extra);
+    fixture.codemod(&args)
+}
+
+#[test]
+fn a_run_that_only_reads_is_not_stopped_by_uncommitted_changes() {
+    let fixture = Fixture::new();
+    fixture.package_file("workflow.ts", TS_CHECK);
+    dirty_repo(&fixture);
+    let output = run_strict(&fixture, &[]);
+    // The check's own failure, not the dirty tree's.
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        !text(&output).contains("uncommitted changes"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_run_that_writes_stops_at_uncommitted_changes_before_writing() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { forEachFile, step } from "codemod/workflow";
+import replace from "./scripts/replace.ts";
+export default async function main() {
+  await step("Look", forEachFile("src/**/*.ts", (file) => file.path));
+  await step("Replace var", forEachFile("src/**/*.ts", replace));
+}
+"#,
+    );
+    dirty_repo(&fixture);
+    let output = run_strict(&fixture, &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("uncommitted changes") && text(&output).contains("--allow-dirty"),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
+
+    let output = run_strict(&fixture, &["--allow-dirty"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(fixture.read("src/a.ts"), "let a = 1;\n");
+}
+
+#[test]
+fn a_shell_step_counts_as_a_write() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { shell, step } from "codemod/workflow";
+export default async function main() {
+  await step("Touch", shell("echo hi > touched.txt"));
+}
+"#,
+    );
+    dirty_repo(&fixture);
+    let output = run_strict(&fixture, &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("uncommitted changes"),
+        "{}",
+        text(&output)
+    );
+    assert!(!fixture.target.path().join("touched.txt").exists());
+}

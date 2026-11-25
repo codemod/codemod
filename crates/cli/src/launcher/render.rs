@@ -612,6 +612,17 @@ fn approval_modal(frame: &mut Frame, approval: &Approval) {
             " Open a pull request? ",
             format!("Push '{branch}' and open \"{title}\"."),
         ),
+        Approval::UncommittedChanges {
+            path,
+            not_a_repository,
+        } => (
+            " Write over uncommitted changes? ",
+            if *not_a_repository {
+                format!("The next step changes files in {path}, which is not tracked by Git.")
+            } else {
+                format!("The next step changes files in {path}, which has uncommitted changes.")
+            },
+        ),
     };
     let mut keys = vec![
         Span::styled("y", bold()),
@@ -817,6 +828,9 @@ mod tests {
             error: None,
             failed_files: 0,
             partial_steps: Vec::new(),
+            output: serde_json::Value::Null,
+            output_omitted: None,
+            steps: Vec::new(),
         });
         view.pane = Pane::Diff;
         assert_snapshot("dry-run-diff", &text(100, 14, |f| run(f, &view)));

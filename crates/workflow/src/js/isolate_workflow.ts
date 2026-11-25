@@ -2,7 +2,12 @@
 // These functions only work in the workflow body, so using one here says so;
 // importing one still works, for helpers the body and callbacks share.
 
-export { AwaitingApprovalError, CanceledError, StepError } from "codemod-internal:orchestrator";
+export {
+  AwaitingApprovalError,
+  CanceledError,
+  StepError,
+  WorkflowFailure,
+} from "codemod-internal:orchestrator";
 
 function bodyOnly(name: string): () => never {
   return () => {
@@ -23,3 +28,4 @@ export const codemod = bodyOnly("codemod");
 export const agent = bodyOnly("agent");
 export const installSkill = bodyOnly("installSkill");
 export const approval = bodyOnly("approval");
+export const fail = bodyOnly("fail");

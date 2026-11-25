@@ -15,6 +15,24 @@ pub enum Approval {
     Capabilities { modules: Vec<String> },
     /// A pull request is about to be opened.
     PullRequest { title: String, branch: String },
+    /// The run is about to change the target for the first time, and the
+    /// target has uncommitted changes (or is not in a git repository).
+    #[serde(rename_all = "camelCase")]
+    UncommittedChanges {
+        path: String,
+        not_a_repository: bool,
+    },
+}
+
+impl Approval {
+    /// Whether `--approve` gives it. Capabilities are granted up front, and
+    /// writing over uncommitted changes takes `--allow-dirty`.
+    pub fn given_by_approve_all(&self) -> bool {
+        !matches!(
+            self,
+            Approval::Capabilities { .. } | Approval::UncommittedChanges { .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,7 +77,7 @@ impl Interaction for NonInteractive {
 
     fn approve(&self, approval: &Approval) -> Decision {
         match approval {
-            Approval::Capabilities { .. } => Decision::Denied,
+            Approval::Capabilities { .. } | Approval::UncommittedChanges { .. } => Decision::Denied,
             Approval::Manual { .. } if !self.approve_all => Decision::Deferred,
             Approval::Manual { .. }
             | Approval::ShellCommand { .. }

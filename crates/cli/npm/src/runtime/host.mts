@@ -45,6 +45,7 @@ import { ORCHESTRATOR_VERSION } from "./orchestrator-version.mts";
 import {
   AwaitingApprovalError,
   CanceledError,
+  WorkflowFailure,
   checkJson,
   createRuntime,
   describeDuration,
@@ -152,6 +153,8 @@ export interface HostRunReport {
   readonly awaiting: string | null;
   /** The `until` step the run stopped after. */
   readonly stoppedAt: string | null;
+  /** The exit code the workflow gave `fail()`; `null` otherwise. */
+  readonly exitCode: number | null;
   readonly steps: readonly HostStepReport[];
   readonly stats: {
     readonly filesModified: number;
@@ -169,6 +172,7 @@ export interface HostRunReport {
 type BodyEnding =
   | { status: "succeeded"; detail: Json }
   | { status: "failed" | "awaiting-approval"; detail: string }
+  | { status: "failed-with-output"; detail: { error: string; output: Json; exitCode: number } }
   | { status: "canceled" }
   | null;
 
@@ -732,6 +736,17 @@ function endingOf(error: unknown): BodyEnding {
   }
   if (error instanceof AwaitingApprovalError || name === "AwaitingApprovalError") {
     return { status: "awaiting-approval", detail: String((error as Error).message) };
+  }
+  // `fail()`, which checked both; by name too, for another copy of this package.
+  if (
+    error instanceof WorkflowFailure ||
+    (name === "WorkflowFailure" && isRecord(error) && typeof error.exitCode === "number")
+  ) {
+    const failure = error as WorkflowFailure;
+    return {
+      status: "failed-with-output",
+      detail: { error: failure.message, output: failure.output, exitCode: failure.exitCode },
+    };
   }
   const message =
     isRecord(error) && "message" in error
