@@ -451,7 +451,11 @@ pub(crate) fn select_paths(
     // the ones they would have renamed into place are there.
     if let Some(overlay) = &run.overlay {
         paths.retain(|selected| !overlay.is_gone(&selected.path));
-        let include = include_globs(&selector, &default_languages)?;
+        let include = literal_paths(
+            &run.target,
+            Some(overlay),
+            include_globs(&selector, &default_languages)?,
+        );
         for path in overlay.created(&include, &selector.exclude)? {
             paths.push(Selected {
                 file: changes::under(&run.target, &path),
@@ -533,7 +537,7 @@ pub(crate) fn select(
     selector: &Selector,
     default_languages: &[String],
 ) -> Result<Vec<Selected>, String> {
-    let include = include_globs(selector, default_languages)?;
+    let include = literal_paths(target, None, include_globs(selector, default_languages)?);
     execution::select_files(target, &include, &selector.exclude)?
         .into_iter()
         .map(|file| {
@@ -543,6 +547,30 @@ pub(crate) fn select(
                 .to_string_lossy()
                 .replace('\\', "/");
             Ok(Selected { path, file })
+        })
+        .collect()
+}
+
+/// An include pattern that names an existing file as written (Next.js
+/// `app/[id]/route.ts`) selects that file: its glob characters are escaped.
+fn literal_paths(target: &Path, overlay: Option<&Overlay>, globs: Vec<String>) -> Vec<String> {
+    globs
+        .into_iter()
+        .map(|glob| {
+            let special = glob.contains(['[', ']', '{', '}', '*', '?']);
+            let exists = match overlay {
+                Some(overlay) => overlay.exists(&glob),
+                None => target.join(&glob).is_file(),
+            };
+            if !special || !exists {
+                return glob;
+            }
+            glob.chars()
+                .map(|c| match c {
+                    '[' | ']' | '{' | '}' | '*' | '?' => format!("[{c}]"),
+                    c => c.to_string(),
+                })
+                .collect()
         })
         .collect()
 }
