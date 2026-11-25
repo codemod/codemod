@@ -73,3 +73,53 @@ jssg_test! {
     preprocess: ["really_imports.py", "models.py"],
     scope: workspace,
 }
+
+// =============================================================================
+// Data flow and call graph (Workspace Scope)
+// =============================================================================
+
+jssg_test! {
+    name: test_py_sql_taint_to_parameterized_queries,
+    language: CodemodLang::Static(SupportLang::Python),
+    codemod: "py_sql_taint.js",
+    fixture_dir: "python/django_flow",
+    target: "shop/views.py",
+    scope: workspace,
+    expected_dir: "python/django_flow_expected",
+}
+
+jssg_test! {
+    name: test_py_calls_mutations_and_types,
+    language: CodemodLang::Static(SupportLang::Python),
+    codemod: "py_calls_and_mutations.js",
+    fixture_dir: "python/django_flow",
+    target: "shop/services.py",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_py_fastapi_calls_and_types,
+    language: CodemodLang::Static(SupportLang::Python),
+    codemod: "py_fastapi_flow.js",
+    fixture_dir: "python/fastapi_flow",
+    target: "app/main.py",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_py_fastapi_taint_into_text,
+    language: CodemodLang::Static(SupportLang::Python),
+    codemod: "py_fastapi_taint.js",
+    fixture_dir: "python/fastapi_flow",
+    target: "app/repository.py",
+    scope: workspace,
+}
+
+jssg_test! {
+    name: test_py_drf_views_and_celery_tasks,
+    language: CodemodLang::Static(SupportLang::Python),
+    codemod: "py_drf_celery.js",
+    fixture_dir: "python/django_flow",
+    target: "shop/api.py",
+    scope: workspace,
+}

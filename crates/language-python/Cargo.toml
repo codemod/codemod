@@ -8,6 +8,8 @@ description = "Python semantic analysis provider using Ruff ty_ide"
 
 [dependencies]
 language-core.workspace = true
+language-flow.workspace = true
+rustc-hash = "2"
 thiserror.workspace = true
 log.workspace = true
 anyhow.workspace = true

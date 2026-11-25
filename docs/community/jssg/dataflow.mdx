@@ -1,11 +1,12 @@
 ---
 title: "Data Flow and Call Graph"
-description: "Ask where a value comes from, where it goes, who calls a function, what it calls, and whether a variable changes, in JavaScript and TypeScript JSSG codemods."
+description: "Ask where a value comes from, where it goes, who calls a function, what it calls, and whether a variable changes, in JavaScript, TypeScript and Python JSSG codemods."
 ---
 
 <Warning>
-  Experimental. The API can change between releases. JavaScript and TypeScript only (JSX and TSX
-  syntax included; types are not used).
+  Experimental. The API can change between releases. JavaScript and TypeScript (JSX and TSX
+  syntax included; types are not used), and Python with less precision (see
+  [Python](#python)).
 </Warning>
 
 [`definition()` and `references()`](/community/jssg/semantic-analysis) answer questions about
@@ -377,6 +378,38 @@ export default async function main() {
 A restored barrel's consumers stay rewritten: the barrel comes back for whatever still needed it
 (an import the codemod could not see, such as a non-TypeScript consumer or a generated file). The
 step names say which barrels were restored.
+
+## Python
+
+The same methods work on `.py` files. Python support is simpler than JavaScript's:
+
+- Names are resolved with Python's scoping rules (module, function, class and comprehension
+  scopes, `global`, `nonlocal`), not with a type checker.
+- Imports resolve to workspace files: `import a.b`, `from a import b`, relative imports
+  (`from .services import f`, `from . import services`) and re-exports from a package's
+  `__init__.py`. Installed packages are not looked into, so calls into them come back with
+  `resolved: false`.
+- Types come from annotations only. A call on an annotated receiver resolves to the class's
+  method: with `repo: OrderRepository`, `repo.find()` is `OrderRepository.find`. The same goes
+  for return annotations (`def get_repo() -> OrderRepository`), annotated class attributes and
+  `self.x = x` assigned in a method. `self.method()`, `super().method()` and `Class()` (its
+  `__init__`) resolve too. `typeInfo()` returns the annotation as written.
+- f-strings, `%` and `.format()` derive from their parts, so a request value is followed into
+  `cursor.execute(f"…")` or SQLAlchemy's `text(f"…")`.
+- A decorator is a call of the decorator with the function: `@app.get("/")` and `@shared_task`
+  show up as `callback` callers. `task.delay(…)` and `task.apply_async(…)` call the task.
+- `mutations()` knows the list, dict and set methods that change their receiver (`append`,
+  `update`, …), and `setattr`/`delattr`.
+
+```js
+// Request data reaching a raw SQL call in a Django view.
+for (const call of root.root().findAll({ rule: { pattern: "$C.execute($SQL)" } })) {
+  const sql = call.getMatch("SQL");
+  if (sql.dependsOn((s) => s.kind === "parameter" && s.name === "request")) {
+    // parameterize it
+  }
+}
+```
 
 ## Soundness: what "may" means
 

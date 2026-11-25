@@ -1,8 +1,10 @@
 //! Main Ruff semantic provider implementation for Python.
 
 use crate::analyzer::{FileScopeAnalyzer, WorkspaceScopeAnalyzer};
+use crate::flow_host::PyFlow;
 use language_core::{
-    filesystem, ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
+    filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult,
+    FlowOptions, FlowResult, MutationOptions, MutationsResult, ProviderMode, ReferencesResult,
     SemanticProvider, SemanticResult,
 };
 use std::path::{Path, PathBuf};
@@ -36,6 +38,8 @@ pub struct RuffSemanticProvider {
     /// Physical root path for converting absolute paths to relative paths.
     /// Only used when fs_root is PhysicalFS.
     physical_root: Option<PathBuf>,
+    /// Value flow, mutations, the call graph and annotation types.
+    flow: PyFlow,
 }
 
 impl RuffSemanticProvider {
@@ -54,6 +58,7 @@ impl RuffSemanticProvider {
             analyzer: AnalyzerKind::FileScope(FileScopeAnalyzer::new()),
             fs_root: filesystem::physical_path(&cwd),
             physical_root: Some(cwd),
+            flow: PyFlow::new(None),
         }
     }
 
@@ -71,6 +76,7 @@ impl RuffSemanticProvider {
             analyzer: AnalyzerKind::FileScope(FileScopeAnalyzer::new()),
             fs_root,
             physical_root: None, // MemoryFS or other VFS - paths are virtual
+            flow: PyFlow::new(None),
         }
     }
 
@@ -93,7 +99,8 @@ impl RuffSemanticProvider {
                 canonical_root.clone(),
             )),
             fs_root,
-            physical_root: Some(canonical_root),
+            physical_root: Some(canonical_root.clone()),
+            flow: PyFlow::new(Some(canonical_root)),
         }
     }
 
@@ -105,14 +112,18 @@ impl RuffSemanticProvider {
     /// * `fs_root` - The virtual filesystem root to use for file operations
     pub fn workspace_scope_with_fs(workspace_root: PathBuf, fs_root: VfsPath) -> Self {
         Self {
-            analyzer: AnalyzerKind::WorkspaceScope(WorkspaceScopeAnalyzer::new(workspace_root)),
+            analyzer: AnalyzerKind::WorkspaceScope(WorkspaceScopeAnalyzer::new(
+                workspace_root.clone(),
+            )),
             fs_root,
             physical_root: None, // Custom VFS - paths handled by VFS implementation
+            flow: PyFlow::new(Some(workspace_root)),
         }
     }
 
     /// Clear all cached data.
     pub fn clear_cache(&self) {
+        self.flow.clear();
         match &self.analyzer {
             AnalyzerKind::FileScope(analyzer) => analyzer.clear_cache(),
             AnalyzerKind::WorkspaceScope(analyzer) => analyzer.clear(),
@@ -236,13 +247,45 @@ impl SemanticProvider for RuffSemanticProvider {
         }
     }
 
-    fn get_type(&self, _file_path: &Path, _range: ByteRange) -> SemanticResult<Option<String>> {
-        // Type inference is available through ty_ide but not exposed yet
-        // Could be added in the future using ty_ide::hover
-        Ok(None)
+    /// The declared type, from annotations (and literals) only: there is no
+    /// type checker behind it.
+    fn get_type(&self, file_path: &Path, range: ByteRange) -> SemanticResult<Option<String>> {
+        let content = self.read_file(file_path)?;
+        Ok(self.flow.type_of(file_path, &content, range))
+    }
+
+    fn get_data_flow(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+        options: FlowOptions,
+    ) -> SemanticResult<FlowResult> {
+        let content = self.read_file(file_path)?;
+        self.flow.data_flow(file_path, &content, range, options)
+    }
+
+    fn get_call_graph(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+        options: CallGraphOptions,
+    ) -> SemanticResult<CallGraphResult> {
+        let content = self.read_file(file_path)?;
+        self.flow.call_graph(file_path, &content, range, options)
+    }
+
+    fn get_mutations(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+        options: MutationOptions,
+    ) -> SemanticResult<MutationsResult> {
+        let content = self.read_file(file_path)?;
+        self.flow.mutations(file_path, &content, range, options)
     }
 
     fn notify_file_processed(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
+        self.flow.update(file_path, content);
         match &self.analyzer {
             AnalyzerKind::FileScope(analyzer) => analyzer
                 .process_file(file_path, content)
