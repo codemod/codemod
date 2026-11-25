@@ -148,14 +148,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let capabilities = flags.capabilities(None, Some(workflow_dir.clone()), dry_run);
 
-    if !dry_run {
-        crate::dirty_git_check::dirty_check(flags.no_interactive)(
-            &target_path,
-            args.allow_dirty,
-            None,
-        )?;
-    }
-
     let execution_id = generate_execution_id();
     let nested_observer = crate::commands::run_telemetry::nested_codemod_run_observer(
         telemetry.clone(),
@@ -174,7 +166,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             managed_git: args.start.managed_git,
             skip_shard_steps: pro_dry_run,
             nested_observer: Some(nested_observer),
-            // The check ran above; applying a dry run makes it again.
+            // Uncommitted changes are checked before the run's first write.
             allow_dirty: args.allow_dirty,
             ..flags.settings(capabilities, registry.clone(), &telemetry)
         },

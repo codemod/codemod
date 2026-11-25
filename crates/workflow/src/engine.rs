@@ -11,7 +11,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 use crate::build::{build, BuildError, Built};
-use crate::events::{Event, EventSink, PartialStep};
+use crate::events::{bounded, Event, EventSink, PartialStep, StepResult, OUTPUT_LIMIT};
 use crate::interaction::Interaction;
 use crate::run::{execute, CancelWatch, Ending, RunContext, RunError, TestPlan};
 use crate::Services;
@@ -107,6 +107,11 @@ pub struct StartRequest {
     /// Run as a test: steps may be stopped at or stubbed, and nothing is
     /// persisted (changes on disk are made, in the target the test set up).
     pub test: Option<TestPlan>,
+    /// Before the run first changes the target, check it has no uncommitted
+    /// changes (and is in a git repository), and ask the [`Interaction`]
+    /// (`Approval::UncommittedChanges`) when it does. A run that never
+    /// changes anything is never checked. Ignored for dry runs and tests.
+    pub check_uncommitted: bool,
 }
 
 /// What a run ended as.
@@ -130,6 +135,9 @@ impl RunReport {
         let (output, error, awaiting, stopped_at) = match &self.ending {
             Ending::Succeeded(output) => (output.clone(), None, None, None),
             Ending::Failed(error) => (Value::Null, Some(error), None, None),
+            Ending::FailedWithOutput { error, output, .. } => {
+                (output.clone(), Some(error), None, None)
+            }
             Ending::Canceled => (Value::Null, None, None, None),
             Ending::AwaitingApproval(message) => (Value::Null, None, Some(message), None),
             Ending::Stopped(label) => (Value::Null, None, None, Some(label)),
@@ -155,6 +163,10 @@ impl RunReport {
             "error": error,
             "awaiting": awaiting,
             "stoppedAt": stopped_at,
+            "exitCode": match &self.ending {
+                Ending::FailedWithOutput { exit_code, .. } => Some(*exit_code),
+                _ => None,
+            },
             "steps": steps,
         })
     }
@@ -245,12 +257,16 @@ impl Execution {
         }
         let steps = context.store.load_steps(&self.record.id)?;
         let partial_steps = PartialStep::of(&steps);
+        let (output, output_omitted) = bounded(ending.output(), OUTPUT_LIMIT);
         context.events.emit(Event::RunFinished {
             run_id: self.record.id.clone(),
             status: self.record.status,
             error: self.record.error.clone(),
             failed_files: partial_steps.iter().map(|step| step.failed_files).sum(),
             partial_steps,
+            output,
+            output_omitted,
+            steps: StepResult::of(&steps),
         });
         Ok(steps)
     }
@@ -290,6 +306,7 @@ impl Engine {
             request.workflow.built.callbacks.clone(),
             request.dry_run,
             request.test,
+            request.check_uncommitted,
             QUICKJS_HOST,
         )?;
         self.drive(execution, &request.workflow.built)
@@ -328,6 +345,7 @@ impl Engine {
         callbacks: std::collections::BTreeMap<String, String>,
         dry_run: bool,
         test: Option<TestPlan>,
+        check_uncommitted: bool,
         host: &str,
     ) -> Result<Execution, EngineError> {
         let record = RunRecord {
@@ -342,6 +360,7 @@ impl Engine {
             awaiting: None,
             error: None,
             output: None,
+            exit_code: None,
             settings: self.settings(host),
         };
         // Dry runs and tests leave no run behind.
@@ -354,7 +373,9 @@ impl Engine {
         let lease = store
             .acquire(&record.id)?
             .ok_or_else(|| EngineError::Busy(record.id.clone()))?;
-        Ok(self.begin(store, record, lease, callbacks, dry_run, test, false))
+        let gate = (check_uncommitted && !dry_run && test.is_none())
+            .then(|| Arc::new(crate::write_gate::WriteGate::new(&record.target)));
+        Ok(self.begin(store, record, lease, callbacks, dry_run, test, false, gate))
     }
 
     /// Take a stored run to continue it, marked running again.
@@ -388,7 +409,8 @@ impl Engine {
         self.store.clear_cancel(&record.id)?;
         self.store.put_run(&record)?;
         let store = Arc::clone(&self.store);
-        Ok(self.begin(store, record, lease, callbacks, false, None, true))
+        // A resumed run is not checked: it made the changes there may be.
+        Ok(self.begin(store, record, lease, callbacks, false, None, true, None))
     }
 
     /// Announce a run and set up what its steps share.
@@ -402,6 +424,7 @@ impl Engine {
         dry_run: bool,
         test: Option<TestPlan>,
         resumed: bool,
+        write_gate: Option<Arc<crate::write_gate::WriteGate>>,
     ) -> Execution {
         self.events.emit(Event::RunStarted {
             run_id: record.id.clone(),
@@ -438,6 +461,7 @@ impl Engine {
             stopped: AtomicBool::new(false),
             interruption: Mutex::new(None),
             assess: Default::default(),
+            write_gate,
         });
         Execution {
             record,

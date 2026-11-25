@@ -300,7 +300,8 @@ jobs:
           node-version: '20'
 
       - name: Install codemod CLI
-        run: npm install -g codemod@latest
+        # v2 is on the `alpha` tag; `latest` is still 1.x
+        run: npm install -g codemod@alpha
 
       - name: Get OIDC token
         id: oidc

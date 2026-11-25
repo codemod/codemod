@@ -245,6 +245,10 @@ impl ExecOutcome {
         match &self.report.ending {
             Ending::Succeeded(_) | Ending::AwaitingApproval(_) | Ending::Stopped(_) => Ok(()),
             Ending::Failed(_) | Ending::Canceled => Err(WorkflowFailureAlreadyReported.into()),
+            Ending::FailedWithOutput { exit_code, .. } => Err(FailedByWorkflow {
+                exit_code: *exit_code,
+            }
+            .into()),
         }
     }
 
@@ -292,6 +296,22 @@ impl std::fmt::Display for FinishedWithFailedFiles {
 
 impl std::error::Error for FinishedWithFailedFiles {}
 
+/// The workflow called `fail()`: the run failed with an output, and the CLI
+/// exits with the code it gave (2 unless it said otherwise). The run's output
+/// already described it.
+#[derive(Debug)]
+pub struct FailedByWorkflow {
+    pub exit_code: i32,
+}
+
+impl std::fmt::Display for FailedByWorkflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the workflow failed (exit code {})", self.exit_code)
+    }
+}
+
+impl std::error::Error for FailedByWorkflow {}
+
 /// A workflow failure the run's output already described.
 #[derive(Debug)]
 pub struct WorkflowFailureAlreadyReported;
@@ -338,6 +358,7 @@ pub async fn start(mut request: ExecRequest) -> Result<ExecOutcome> {
     }
     let format = request.settings.format;
     let dry_run = request.dry_run;
+    let allow_dirty = request.settings.allow_dirty;
     let (engine, renderer, summary) = engine(&request.settings)?;
     let started = Instant::now();
     let report = run_off_thread(engine, move |engine| {
@@ -348,6 +369,9 @@ pub async fn start(mut request: ExecRequest) -> Result<ExecOutcome> {
             name: request.name,
             dry_run: request.dry_run,
             test: None,
+            // Before the first write, not now: a run that only reads is
+            // never stopped by uncommitted changes.
+            check_uncommitted: !allow_dirty,
         })
     })
     .await?;
@@ -515,6 +539,9 @@ pub(crate) fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumabl
     };
     match &outcome.report.ending {
         Ending::Succeeded(_) | Ending::Stopped(_) => {}
+        Ending::FailedWithOutput { error, .. } => {
+            eprintln!("\n{} {error}", style("The run failed:").red().bold());
+        }
         Ending::AwaitingApproval(message) => {
             eprintln!(
                 "\n{} {message}{}",
@@ -546,6 +573,38 @@ pub(crate) fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumabl
             );
         }
     }
+    if let Some(line) = output_summary(outcome.report.ending.output(), &run.id, resumable) {
+        eprintln!("{line}");
+    }
+}
+
+/// How much of a run's output the text format shows.
+const OUTPUT_SUMMARY_CHARS: usize = 200;
+
+/// `Output: <JSON>` for a run that returned something, cut short when long,
+/// with where to read all of it. `saved`: the run is in the run store.
+fn output_summary(output: &Value, run_id: &str, saved: bool) -> Option<String> {
+    if output.is_null() {
+        return None;
+    }
+    let json = output.to_string();
+    if json.chars().count() <= OUTPUT_SUMMARY_CHARS {
+        return Some(format!("{} {json}", style("Output:").bold()));
+    }
+    let cut: String = json.chars().take(OUTPUT_SUMMARY_CHARS).collect();
+    let full = if saved {
+        format!("codemod workflow status --id {run_id} --format json, or ")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "{} {cut}…\n  {}",
+        style("Output:").bold(),
+        style(format!(
+            "The whole output: {full}`run_finished.output` with --format jsonl"
+        ))
+        .dim()
+    ))
 }
 
 // ----------------------------------------------------------- rendering ---
@@ -808,8 +867,7 @@ impl Interaction for TerminalInteraction {
     }
 
     fn approve(&self, approval: &Approval) -> Decision {
-        let grants_capabilities = matches!(approval, Approval::Capabilities { .. });
-        if !self.interactive || (self.approve_all && !grants_capabilities) {
+        if !self.interactive || (self.approve_all && approval.given_by_approve_all()) {
             return NonInteractive {
                 approve_all: self.approve_all,
             }
@@ -825,6 +883,16 @@ impl Interaction for TerminalInteraction {
             Approval::PullRequest { title, branch } => {
                 format!("Push '{branch}' and open pull request '{title}'?")
             }
+            Approval::UncommittedChanges {
+                path,
+                not_a_repository: false,
+            } => format!("You have uncommitted changes in {path}. Do you want to proceed anyway?"),
+            Approval::UncommittedChanges {
+                path,
+                not_a_repository: true,
+            } => format!(
+                "The target path '{path}' is not tracked by Git. Do you want to proceed anyway?"
+            ),
         };
         // Enter never approves: every one of these runs or publishes something.
         let answer = self.renderer.suspend(|| {

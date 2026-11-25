@@ -663,11 +663,7 @@ pub(crate) fn resolve_adapter_with_runtime(
     let (resolved_harness, warnings, detected_by) = match harness {
         Harness::Auto => match detect_auto_harness_marker(&runtime_paths.cwd) {
             Some((detected, marker)) => (detected, Vec::new(), Some(format!("found {marker}"))),
-            None => (
-                Harness::Claude,
-                vec![NO_AGENT_DETECTED_WARNING.to_string()],
-                None,
-            ),
+            None => (Harness::Claude, vec![no_agent_detected_warning()], None),
         },
         explicit => (explicit, Vec::new(), None),
     };
@@ -690,7 +686,14 @@ pub(crate) fn resolve_adapter_with_runtime(
     })
 }
 
-pub(crate) const NO_AGENT_DETECTED_WARNING: &str = "No coding agent detected here, so Codemod was set up for Claude Code. Using a different agent? Run `npx codemod ai --harness <cursor|codex|opencode|goose>`.";
+/// Names this version's `codemod ai`: a bare `npx codemod` is 1.x while 2.x
+/// is a prerelease.
+pub(crate) fn no_agent_detected_warning() -> String {
+    format!(
+        "No coding agent detected here, so Codemod was set up for Claude Code. Using a different agent? Run `{}`.",
+        crate::utils::cli_command::npx_codemod("ai --harness <cursor|codex|opencode|goose>")
+    )
+}
 
 fn detect_auto_harness_marker(cwd: &Path) -> Option<(Harness, &'static str)> {
     // OpenCode projects are frequently configured with only a root-level
@@ -6307,7 +6310,10 @@ codemod-skill-version: 0.1.0
 
         assert_eq!(
             resolved.warnings,
-            vec![NO_AGENT_DETECTED_WARNING.to_string()]
+            vec![format!(
+                "No coding agent detected here, so Codemod was set up for Claude Code. Using a different agent? Run `npx codemod@{} ai --harness <cursor|codex|opencode|goose>`.",
+                crate::CLI_VERSION
+            )]
         );
     }
 

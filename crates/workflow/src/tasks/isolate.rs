@@ -46,6 +46,7 @@ pub(crate) struct StepIsolates {
 
 impl StepIsolates {
     pub fn new(task: &TaskContext<'_>) -> Result<Self, String> {
+        writes_itself(task, &task.run.services.capabilities)?;
         let resolver = OxcResolver::new(task.run.bundle_dir.clone(), None)
             .map_err(|e| format!("cannot resolve imports from the workflow directory: {e}"))?;
         Ok(Self {
@@ -175,6 +176,31 @@ pub(crate) fn capabilities(
         }
     }
     Ok(result)
+}
+
+/// The capabilities for a task's code, as [`capabilities`], checked like a
+/// write when they let that code change files itself (`fs`, `child_process`).
+pub(crate) fn capabilities_for_code(
+    task: &TaskContext<'_>,
+    requested: &[String],
+) -> Result<HashSet<LlrtSupportedModules>, String> {
+    let granted = capabilities(task, requested)?;
+    writes_itself(task, &granted)?;
+    Ok(granted)
+}
+
+/// Code with `fs` or `child_process` may change files without the engine:
+/// that counts as a write.
+fn writes_itself(
+    task: &TaskContext<'_>,
+    capabilities: &HashSet<LlrtSupportedModules>,
+) -> Result<(), String> {
+    if capabilities.contains(&LlrtSupportedModules::Fs)
+        || capabilities.contains(&LlrtSupportedModules::ChildProcess)
+    {
+        task.run.before_write()?;
+    }
+    Ok(())
 }
 
 /// The semantic analysis a `semanticAnalysis` option asks for: `"file"`

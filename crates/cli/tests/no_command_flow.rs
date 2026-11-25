@@ -35,8 +35,10 @@ fn no_command_in_non_interactive_mode_prints_next_steps() {
 
     assert_eq!(stdout.matches("      __                  __").count(), 1);
     assert!(stderr.contains("No command provided."));
-    assert!(stderr.contains("1. Install Master Codemod Skills: npx codemod ai"));
-    assert!(stderr.contains("2. Create a new codemod package: npx codemod init"));
-    assert!(stderr.contains("3. Run a published package: npx codemod <package>"));
+    // Pinned to this version: a bare `npx codemod` is 1.x while 2.x is a prerelease.
+    let npx = format!("npx codemod@{}", env!("CARGO_PKG_VERSION"));
+    assert!(stderr.contains(&format!("1. Install Master Codemod Skills: {npx} ai")));
+    assert!(stderr.contains(&format!("2. Create a new codemod package: {npx} init")));
+    assert!(stderr.contains(&format!("3. Run a published package: {npx} <package>")));
     assert!(!stdout.contains("What would you like to do?"));
 }

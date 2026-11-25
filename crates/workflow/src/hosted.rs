@@ -61,6 +61,8 @@ impl Engine {
             request.callbacks,
             request.dry_run,
             request.test,
+            // `runWorkflow` runs on a target the test or script chose.
+            false,
             NODE_HOST,
         )?;
         Ok(HostedRun::new(execution, Vec::new()))

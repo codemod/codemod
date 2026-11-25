@@ -181,6 +181,14 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // Steps that change the target outside the file commits `before_write`
+    // already guards.
+    if matches!(
+        kind.as_str(),
+        "shell" | "agent" | "installSkill" | "branch" | "commit" | "pullRequest"
+    ) {
+        task.run.before_write().map_err(TaskError::Failed)?;
+    }
     let result = match kind.as_str() {
         "forEachFile" => for_each_file::run(task, content).map_err(TaskError::from),
         "function" => function::run(task, content).map_err(TaskError::from),

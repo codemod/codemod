@@ -55,6 +55,8 @@ export interface NativeReport {
   error: string | null;
   awaiting: string | null;
   stoppedAt: string | null;
+  /** The exit code the workflow gave `fail()`; `null` otherwise. */
+  exitCode: number | null;
   steps: {
     position: number;
     label: string;

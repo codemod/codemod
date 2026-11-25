@@ -179,6 +179,30 @@ export default async function main() {
   },
 );
 
+const FAILING_CHECK = `
+import { fail, step } from "codemod/workflow";
+export default async function main() {
+  const found = await step("Find", () => ["a.ts"]);
+  const report = { checks: [{ id: "no-var", status: "fail", files: found }] };
+  if (found.length) fail("1 check failed", { output: report, exitCode: 3 });
+  return report;
+}
+`;
+
+for (const host of ["node", "quickjs"]) {
+  test(`${host}: fail() ends the run failed and keeps its output`, HOSTS[host], async () => {
+    const path = join(scratch({ "workflow.ts": FAILING_CHECK }), "workflow.ts");
+    const result = await run(path, { target: { "a.ts": "var a;\n" }, host });
+    assert.equal(result.status, "failed");
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "1 check failed");
+    assert.equal(result.exitCode, 3);
+    assert.deepEqual(result.output, {
+      checks: [{ id: "no-var", status: "fail", files: ["a.ts"] }],
+    });
+  });
+}
+
 /**
  * A System One API on localhost: yes/no questions get 0.9, choices their
  * first option. Keeps each request's authorization and body.

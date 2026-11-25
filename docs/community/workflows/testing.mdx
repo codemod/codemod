@@ -244,7 +244,8 @@ YAML workflows always run with the CLI.
 | --- | --- |
 | `status` | `"succeeded"`, `"failed"`, `"canceled"`, `"awaiting-approval"`, or `"stopped"` |
 | `ok` | Whether the run succeeded, or stopped at its `until` step |
-| `output`, `error` | What the workflow returned, or why it failed |
+| `output`, `error` | What the workflow returned (or gave `fail()`), and why it failed |
+| `exitCode` | The exit code the workflow gave `fail()` (2 by default); `null` when it did not call it |
 | `files` | Every file after the run, by path |
 | `changes` | Files the run wrote or created, with their text; `null` for files it removed |
 | `steps`, `step(label)` | Each step's label, status (`"succeeded"`, `"partial"` when some of its files failed, or `"failed"`), result and error, and whether it was `given` |

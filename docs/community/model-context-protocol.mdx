@@ -44,11 +44,13 @@ This is the main setup path for the AI-native CLI experience. It installs Codemo
     "mcpServers": {
       "codemod": {
         "command": "npx",
-        "args": ["codemod@latest", "mcp"]
+        "args": ["codemod@alpha", "mcp"]
       }
     }
   }
   ```
+
+  `codemod@alpha` is the v2 CLI these docs describe; `codemod@latest` is still 1.x. `npx codemod ai` writes this entry for you, pinned to the version that ran it.
 
   For Cursor IDE:
   - Open Cursor Settings
@@ -154,7 +156,7 @@ Do not include source code, secrets, auth tokens, private repository paths, user
   <Accordion title="Server won't start">
     If the MCP server fails to start:
     - Ensure you have Node.js 16.0.0 or higher installed
-    - Try running `npx codemod@latest mcp` manually to test
+    - Try running `npx codemod@alpha mcp` manually to test
   </Accordion>
   <Accordion title="Tools not available">
     If MCP tools aren't showing up:
