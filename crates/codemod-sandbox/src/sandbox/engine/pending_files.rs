@@ -185,6 +185,16 @@ impl PendingFiles {
     /// the returned guard is dropped (or the thread's transaction ends).
     /// Waits while another transform has it.
     pub fn take(&self, path: &Path) -> std::io::Result<(String, TakenFile)> {
+        self.take_inner(path, false)
+    }
+
+    /// [`Self::take`], where a file that does not exist yet is taken as
+    /// empty: setting its text creates it when the step commits.
+    pub fn take_creating(&self, path: &Path) -> std::io::Result<(String, TakenFile)> {
+        self.take_inner(path, true)
+    }
+
+    fn take_inner(&self, path: &Path, create: bool) -> std::io::Result<(String, TakenFile)> {
         let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let me = std::thread::current().id();
         let mut state = self.lock();
@@ -249,7 +259,10 @@ impl PendingFiles {
                 file.text.clone()
             }
             None => {
-                let text = self.read_base(&key)?;
+                let text = match self.read_base(&key) {
+                    Err(e) if create && e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                    other => other?,
+                };
                 state.files.insert(
                     key.clone(),
                     Pending {

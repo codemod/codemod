@@ -14,6 +14,13 @@ export {
   fail,
 } from "codemod-internal:orchestrator";
 
+/** Only steps create files; in the body it says where to call it. */
+export function createFile(): never {
+  throw new Error(
+    "createFile() works inside a function step or a forEachFile callback, not in the workflow body",
+  );
+}
+
 const raw = globalThis.__workflowHost;
 
 /** Tasks the engine is running, by the id it gave them. */

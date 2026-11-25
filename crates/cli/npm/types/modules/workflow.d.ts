@@ -1008,6 +1008,16 @@ declare module "codemod:workflow" {
   export function approval(message: string): Task<{ approved: true }>;
 
   /**
+   * Creates a file (or gives an existing one new text), `path` relative to the
+   * target. Only inside a function step or a forEachFile callback: the file is
+   * kept with the step's other changes, so a dry run shows it in the diff and a
+   * real run writes it when the step commits (directories are made).
+   *
+   * @experimental
+   */
+  export function createFile(path: string, text: string): void;
+
+  /**
    * Asks a person to pick one of `options`; the step's result is the option
    * picked. Interactive runs ask; unattended runs (`--no-interactive`,
    * `--control stdio`) take `default`, else the first option. Recorded like

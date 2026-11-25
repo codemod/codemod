@@ -1127,6 +1127,11 @@ impl Analysis<'_> {
             // Other imports are copied as written: in an isolate,
             // `codemod/deps` gives `dependencies`, `registry` and `semver`
             // that run there; `install` starts a step.
+            // `createFile` is the exception: it only works inside steps.
+            if is_flow_module(&import.source) && imported == "createFile" {
+                parts.imports.insert((import.at, import.line.clone()));
+                return Ok(());
+            }
             if is_flow_module(&import.source)
                 || is_git_module(&import.source)
                 || is_deps_module(&import.source) && imported == "install"

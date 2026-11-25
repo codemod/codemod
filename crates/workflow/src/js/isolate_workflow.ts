@@ -17,6 +17,9 @@ function bodyOnly(name: string): () => never {
   };
 }
 
+/** Create a file (relative to the target), kept with the step's changes. */
+export { createFile } from "codemod:ast-grep";
+
 export const step = bodyOnly("step");
 export const sleep = bodyOnly("sleep");
 export const waitForEvent = bodyOnly("waitForEvent");
