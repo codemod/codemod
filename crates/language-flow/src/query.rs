@@ -13,6 +13,7 @@ use language_core::{
 };
 use parking_lot::RwLock;
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1431,6 +1432,9 @@ fn callees(
     entries.finish(|file| host.content(file), truncated, unparsed)
 }
 
+/// A call in the callers table: calling file id, call index, how.
+type CallSiteRef = (u32, u32, CallEdgeKind);
+
 /// Every call in the workspace, by the function it may call, with the facts
 /// and content it was built from. Kept between queries (see
 /// [CallerIndexSlot]), so callers answers are a snapshot of the workspace as
@@ -1440,10 +1444,13 @@ pub struct CallerIndex {
     /// calls. The full facts are not kept, so they can leave the cache.
     sites: HashMap<PathBuf, FileSites>,
     contents: HashMap<PathBuf, Arc<str>>,
-    /// Calling file (index into `paths`), call index, how.
-    calls_of: HashMap<FunctionKey, Vec<(u32, u32, CallEdgeKind)>>,
-    /// The files with calls, in path order.
+    /// By called function (file id, function index): calling file id, call
+    /// index, how.
+    calls_of: FxHashMap<(u32, u32), Vec<CallSiteRef>>,
+    /// Files by id: the workspace files in path order, then files only
+    /// called into.
     paths: Vec<PathBuf>,
+    file_ids: HashMap<PathBuf, u32>,
     unparsed: Vec<UnparsedFile>,
 }
 
@@ -1452,8 +1459,9 @@ impl CallerIndex {
         let mut index = CallerIndex {
             sites: HashMap::new(),
             contents: HashMap::new(),
-            calls_of: HashMap::new(),
+            calls_of: FxHashMap::default(),
             paths: Vec::new(),
+            file_ids: HashMap::new(),
             unparsed: Vec::new(),
         };
         let mut files = host.workspace_files();
@@ -1472,21 +1480,49 @@ impl CallerIndex {
                 Some((file, sites, content, calls))
             })
             .collect();
+        for (file, _, _, _) in &contributions {
+            index.file_id(file);
+        }
         for (file, sites, content, calls) in contributions {
-            let file_id = index.paths.len() as u32;
-            for (target, call_index, via) in calls {
+            let file_id = index.file_ids[&file];
+            for ((target_path, target), call_index, via) in calls {
+                let Some(target) = target else {
+                    continue;
+                };
+                let target_file = index.file_id(&target_path);
                 index
                     .calls_of
-                    .entry(target)
+                    .entry((target_file, target))
                     .or_default()
                     .push((file_id, call_index, via));
             }
-            index.paths.push(file.clone());
             index.sites.insert(file.clone(), sites);
             index.contents.insert(file, content);
         }
         index.unparsed = host.parse_failures();
         index
+    }
+
+    /// The id of a file, given one if it has none yet.
+    fn file_id(&mut self, path: &Path) -> u32 {
+        if let Some(id) = self.file_ids.get(path) {
+            return *id;
+        }
+        let id = self.paths.len() as u32;
+        self.paths.push(path.to_path_buf());
+        self.file_ids.insert(path.to_path_buf(), id);
+        id
+    }
+
+    /// The calls of a function.
+    fn calls_to(&self, key: &FunctionKey) -> &[(u32, u32, CallEdgeKind)] {
+        let (path, Some(function)) = key else {
+            return &[];
+        };
+        self.file_ids
+            .get(path)
+            .and_then(|file| self.calls_of.get(&(*file, *function)))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// The snapshot's key for a function found in its file's current facts:
@@ -1620,7 +1656,7 @@ fn callers(
         if options.max_depth.is_some_and(|max| depth >= max) {
             continue;
         }
-        for (file_id, call_index, via) in index.calls_of.get(&key).into_iter().flatten() {
+        for (file_id, call_index, via) in index.calls_to(&key) {
             if !reported.insert((*file_id, *call_index)) {
                 continue;
             }
@@ -1794,7 +1830,7 @@ impl<'h> Walk<'h> {
             return Vec::new();
         };
         let mut sites = Vec::new();
-        for (file_id, call_index, via) in index.calls_of.get(&key).into_iter().flatten() {
+        for (file_id, call_index, via) in index.calls_to(&key) {
             if matches!(via, CallEdgeKind::Callback) {
                 continue;
             }
