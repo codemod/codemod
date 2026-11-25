@@ -304,7 +304,8 @@ fn cold() {
     let mut hasher = DefaultHasher::new();
     digest_call_graph(&result, &mut hasher);
     println!(
-        "BENCH cold scale={scale} first_callers_ms={:.0} rss_mb={:.0} peak_rss_mb={:.0} digest={:016x}",
+        "BENCH cold scale={scale} threads={} first_callers_ms={:.0} rss_mb={:.0} peak_rss_mb={:.0} digest={:016x}",
+        rayon::current_num_threads(),
         ms(elapsed),
         rss_mb(),
         peak_rss_mb(),
