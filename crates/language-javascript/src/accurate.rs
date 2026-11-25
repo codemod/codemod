@@ -129,6 +129,10 @@ pub struct AccurateAnalyzer {
     /// Set once a query needs facts for every workspace file (the callers
     /// table): from then on, indexing a file builds its facts in the same parse.
     flow_everywhere: AtomicBool,
+    /// `canonicalize()` results, so a path is resolved once per run rather
+    /// than on every lookup. Only successes are kept: a path that does not
+    /// exist yet is tried again.
+    canonical_paths: RwLock<HashMap<PathBuf, PathBuf>>,
 }
 
 impl AccurateAnalyzer {
@@ -184,6 +188,7 @@ impl AccurateAnalyzer {
             callers: CallerIndexSlot::default(),
             parse_errors: RwLock::new(HashMap::new()),
             flow_everywhere: AtomicBool::new(false),
+            canonical_paths: RwLock::new(HashMap::new()),
         }
     }
 
@@ -258,6 +263,23 @@ impl AccurateAnalyzer {
         }
     }
 
+    /// The canonical form of a path (symlinks resolved), or the path itself
+    /// when it cannot be canonicalized.
+    fn canonical_path(&self, path: &Path) -> PathBuf {
+        if let Some(canonical) = self.canonical_paths.read().get(path) {
+            return canonical.clone();
+        }
+        match path.canonicalize() {
+            Ok(canonical) => {
+                self.canonical_paths
+                    .write()
+                    .insert(path.to_path_buf(), canonical.clone());
+                canonical
+            }
+            Err(_) => path.to_path_buf(),
+        }
+    }
+
     /// Read file content using the virtual filesystem.
     ///
     /// Path handling is dispatched by [`Self::walker`] because the two
@@ -304,9 +326,7 @@ impl AccurateAnalyzer {
     /// file's value-flow facts from the same parse (its dependencies get
     /// theirs only when every file needs them, see `flow_everywhere`).
     fn ensure_indexed_with(&self, file_path: &Path, with_flow: bool) -> SemanticResult<()> {
-        let canonical = file_path
-            .canonicalize()
-            .unwrap_or_else(|_| file_path.to_path_buf());
+        let canonical = self.canonical_path(file_path);
 
         // Check if already indexed
         if self.indexed_files.read().contains(&canonical) {
@@ -437,9 +457,7 @@ impl AccurateAnalyzer {
         content: &str,
         with_flow: bool,
     ) -> SemanticResult<()> {
-        let canonical = file_path
-            .canonicalize()
-            .unwrap_or_else(|_| file_path.to_path_buf());
+        let canonical = self.canonical_path(file_path);
 
         if self.indexed_files.read().contains(&canonical)
             && self.cache.content_matches(&canonical, content)
@@ -470,9 +488,7 @@ impl AccurateAnalyzer {
         // Ensure the file is indexed
         self.process_file(file_path, content)?;
 
-        let canonical = file_path
-            .canonicalize()
-            .unwrap_or_else(|_| file_path.to_path_buf());
+        let canonical = self.canonical_path(file_path);
         let (file_symbols, _) =
             self.cache
                 .get(&canonical)
@@ -590,9 +606,7 @@ impl AccurateAnalyzer {
         // Ensure the file is indexed
         self.process_file(file_path, content)?;
 
-        let canonical = file_path
-            .canonicalize()
-            .unwrap_or_else(|_| file_path.to_path_buf());
+        let canonical = self.canonical_path(file_path);
         let (file_symbols, _) =
             self.cache
                 .get(&canonical)
@@ -855,9 +869,7 @@ impl AccurateAnalyzer {
         export_name: &str,
         visited: &mut HashSet<(PathBuf, String)>,
     ) -> Option<ExportTarget> {
-        let path = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let path = self.canonical_path(module_path);
         if !visited.insert((path.clone(), export_name.to_string())) {
             return None; // re-export cycle
         }
@@ -987,6 +999,7 @@ impl AccurateAnalyzer {
         self.callers.clear();
         self.parse_errors.write().clear();
         self.flow_everywhere.store(false, Ordering::Relaxed);
+        self.canonical_paths.write().clear();
     }
 
     /// Gets the type of a symbol at the given byte range.
@@ -1043,7 +1056,7 @@ impl AccurateAnalyzer {
 
 impl FlowHost for AccurateAnalyzer {
     fn canonical(&self, path: &Path) -> PathBuf {
-        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+        self.canonical_path(path)
     }
 
     fn flow(&self, path: &Path) -> Option<Arc<FileFlow>> {
