@@ -243,7 +243,10 @@ impl LightweightAnalyzer {
             let file_content = if path == file_path {
                 content.to_string()
             } else {
-                self.cache.get(&path).map(|(_, c)| c).unwrap_or_default()
+                self.cache
+                    .get(&path)
+                    .map(|(_, c)| c.to_string())
+                    .unwrap_or_default()
             };
 
             result.add_file(FileReferences::new(path, file_content, locations));
@@ -295,7 +298,7 @@ impl LightweightAnalyzer {
                                         symbol.kind,
                                         symbol.name.clone(),
                                     ),
-                                    file_content,
+                                    file_content.to_string(),
                                     DefinitionKind::External,
                                 )));
                             }
@@ -308,7 +311,7 @@ impl LightweightAnalyzer {
                                 language_core::SymbolKind::Export,
                                 export.name.clone(),
                             ),
-                            file_content,
+                            file_content.to_string(),
                             DefinitionKind::External,
                         )));
                     }
@@ -323,7 +326,7 @@ impl LightweightAnalyzer {
                                     language_core::SymbolKind::Export,
                                     "default".to_string(),
                                 ),
-                                file_content,
+                                file_content.to_string(),
                                 DefinitionKind::External,
                             )));
                         }
@@ -396,7 +399,7 @@ impl FlowHost for LightweightAnalyzer {
             .get_or_build(path, hash, || self.cache.content(path))
     }
 
-    fn content(&self, path: &Path) -> Option<String> {
+    fn content(&self, path: &Path) -> Option<Arc<str>> {
         self.cache.content(path)
     }
 

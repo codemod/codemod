@@ -24,7 +24,7 @@ pub(crate) trait FlowHost {
     fn canonical(&self, path: &Path) -> PathBuf;
     /// Facts for a file, built on first use.
     fn flow(&self, path: &Path) -> Option<Arc<FileFlow>>;
-    fn content(&self, path: &Path) -> Option<String>;
+    fn content(&self, path: &Path) -> Option<Arc<str>>;
     /// Where the export export_name of the module specifier (imported
     /// from the file from) is declared: the declaring file and the range of
     /// the declaration's name, or of the export site when it has no name.
@@ -143,7 +143,7 @@ pub(crate) fn data_flow(
     FlowResult {
         files: vec![FileFlowSteps {
             file_path: path,
-            content,
+            content: content.to_string(),
             steps,
         }],
         truncated,
@@ -748,7 +748,7 @@ impl Entries {
     /// entries' ranges point into).
     fn finish(
         self,
-        content: impl Fn(&Path) -> Option<String>,
+        content: impl Fn(&Path) -> Option<Arc<str>>,
         truncated: bool,
         unparsed: Vec<UnparsedFile>,
     ) -> CallGraphResult {
@@ -758,7 +758,7 @@ impl Entries {
                 .into_iter()
                 .filter_map(|(file_path, entries)| {
                     Some(CallGraphFile {
-                        content: content(&file_path)?,
+                        content: content(&file_path)?.to_string(),
                         file_path,
                         entries,
                     })
@@ -873,7 +873,7 @@ fn callees(
 /// it was when the first callers query ran.
 pub(crate) struct CallerIndex {
     flows: HashMap<PathBuf, Arc<FileFlow>>,
-    contents: HashMap<PathBuf, String>,
+    contents: HashMap<PathBuf, Arc<str>>,
     calls_of: HashMap<FunctionKey, Vec<(PathBuf, u32, CallEdgeKind)>>,
     unparsed: Vec<UnparsedFile>,
 }

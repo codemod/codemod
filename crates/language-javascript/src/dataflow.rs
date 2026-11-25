@@ -257,7 +257,7 @@ impl FlowCache {
         &self,
         path: &Path,
         content_hash: u64,
-        content: impl FnOnce() -> Option<String>,
+        content: impl FnOnce() -> Option<Arc<str>>,
     ) -> Option<Arc<FileFlow>> {
         if let Some((hash, flow)) = self.files.read().get(path) {
             if *hash == content_hash {

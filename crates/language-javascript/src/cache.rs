@@ -4,6 +4,7 @@ use language_core::{ByteRange, SymbolKind};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Information about a symbol defined in a file.
 #[derive(Debug, Clone)]
@@ -149,8 +150,8 @@ impl FileSymbols {
 /// Cached entry containing both symbols and source content.
 #[derive(Debug, Clone)]
 struct CacheEntry {
-    symbols: FileSymbols,
-    content: String,
+    symbols: Arc<FileSymbols>,
+    content: Arc<str>,
 }
 
 /// Thread-safe symbol cache for multiple files.
@@ -167,11 +168,11 @@ impl SymbolCache {
     }
 
     /// Get cached symbols and content for a file.
-    pub fn get(&self, path: &Path) -> Option<(FileSymbols, String)> {
+    pub fn get(&self, path: &Path) -> Option<(Arc<FileSymbols>, Arc<str>)> {
         self.files
             .read()
             .get(path)
-            .map(|e| (e.symbols.clone(), e.content.clone()))
+            .map(|e| (Arc::clone(&e.symbols), Arc::clone(&e.content)))
     }
 
     /// Content hash of a cached file, without cloning its symbols.
@@ -180,15 +181,15 @@ impl SymbolCache {
     }
 
     /// Content of a cached file.
-    pub fn content(&self, path: &Path) -> Option<String> {
-        self.files.read().get(path).map(|e| e.content.clone())
+    pub fn content(&self, path: &Path) -> Option<Arc<str>> {
+        self.files.read().get(path).map(|e| Arc::clone(&e.content))
     }
 
     pub fn content_matches(&self, path: &Path, candidate: &str) -> bool {
         self.files
             .read()
             .get(path)
-            .map(|e| e.content == candidate)
+            .map(|e| &*e.content == candidate)
             .unwrap_or(false)
     }
 
@@ -199,14 +200,18 @@ impl SymbolCache {
 
     /// Insert or update cached symbols and content for a file.
     pub fn insert(&self, path: PathBuf, symbols: FileSymbols, content: String) {
-        self.files
-            .write()
-            .insert(path, CacheEntry { symbols, content });
+        self.files.write().insert(
+            path,
+            CacheEntry {
+                symbols: Arc::new(symbols),
+                content: content.into(),
+            },
+        );
     }
 
     /// Remove a file from the cache.
     #[allow(dead_code)]
-    pub fn remove(&self, path: &Path) -> Option<(FileSymbols, String)> {
+    pub fn remove(&self, path: &Path) -> Option<(Arc<FileSymbols>, Arc<str>)> {
         self.files
             .write()
             .remove(path)
@@ -273,7 +278,7 @@ mod tests {
         let (retrieved, content) = cache.get(&path).unwrap();
         assert_eq!(retrieved.symbols.len(), 1);
         assert_eq!(retrieved.symbols[0].name, "foo");
-        assert_eq!(content, "function foo() {}");
+        assert_eq!(&*content, "function foo() {}");
     }
 
     #[test]

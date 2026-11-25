@@ -746,7 +746,10 @@ impl AccurateAnalyzer {
             let file_content = if path == canonical {
                 content.to_string()
             } else {
-                self.cache.get(&path).map(|(_, c)| c).unwrap_or_default()
+                self.cache
+                    .get(&path)
+                    .map(|(_, c)| c.to_string())
+                    .unwrap_or_default()
             };
 
             result.add_file(FileReferences::new(path, file_content, locations));
@@ -967,7 +970,7 @@ impl AccurateAnalyzer {
             }
         };
         let (_, content) = self.cache.get(&path)?;
-        Some(DefinitionResult::new(location, content, kind))
+        Some(DefinitionResult::new(location, content.to_string(), kind))
     }
 
     /// Get the symbol cache (for testing/debugging).
@@ -1050,7 +1053,7 @@ impl FlowHost for AccurateAnalyzer {
             .get_or_build(path, hash, || self.cache.content(path))
     }
 
-    fn content(&self, path: &Path) -> Option<String> {
+    fn content(&self, path: &Path) -> Option<Arc<str>> {
         self.cache.content(path)
     }
 
@@ -1382,7 +1385,10 @@ console.log(PI);
             .cache
             .get(&canonical)
             .expect("still cached after modify");
-        assert_eq!(after_mod.1, modified, "content replaced on modified input");
+        assert_eq!(
+            &*after_mod.1, modified,
+            "content replaced on modified input"
+        );
         assert!(
             after_mod.0.symbols.len() > after_first.0.symbols.len(),
             "re-parsed symbols reflect the appended export (before={}, after={})",
