@@ -137,7 +137,7 @@ declare module "codemod:ast-grep" {
      */
     contains(other: SgNode<M>): boolean;
 
-    // Data flow and call graph (experimental; JavaScript and TypeScript only).
+    // Data flow and call graph (experimental; JavaScript, TypeScript and Python).
     // Every answer is a "may" answer: see the soundness notes on each method
     // and the result types, and https://docs.codemod.com/community/jssg/dataflow.
 

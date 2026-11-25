@@ -2178,11 +2178,12 @@ impl<'js> SgNodeRjs<'js> {
                 ast_grep_language::SupportLang::JavaScript
                     | ast_grep_language::SupportLang::TypeScript
                     | ast_grep_language::SupportLang::Tsx
+                    | ast_grep_language::SupportLang::Python
             )
         );
         if !supported {
             return Err(format!(
-                "{method}() supports JavaScript and TypeScript only, and this file is parsed as {lang}."
+                "{method}() supports JavaScript, TypeScript and Python only, and this file is parsed as {lang}."
             ));
         }
         let Some(filename) = self.root.filename.as_ref() else {
