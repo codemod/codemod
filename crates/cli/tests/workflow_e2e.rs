@@ -880,3 +880,61 @@ export default async function main() {
     );
     assert!(!fixture.target.path().join("touched.txt").exists());
 }
+
+#[test]
+fn resuming_a_run_stopped_at_uncommitted_changes_checks_again() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { forEachFile, step } from "codemod/workflow";
+import replace from "./scripts/replace.ts";
+export default async function main() {
+  await step("Replace var", forEachFile("src/**/*.ts", replace));
+}
+"#,
+    );
+    dirty_repo(&fixture);
+    let output = run_strict(&fixture, &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+
+    let id = latest_run_id(&fixture);
+    let output = fixture.codemod(&["workflow", "resume", "--id", &id, "--no-interactive"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("uncommitted changes"),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
+
+    let output = fixture.codemod(&[
+        "workflow",
+        "resume",
+        "--id",
+        &id,
+        "--no-interactive",
+        "--allow-dirty",
+    ]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(fixture.read("src/a.ts"), "let a = 1;\n");
+}
+
+#[test]
+fn a_git_step_without_managed_git_does_not_stop_at_uncommitted_changes() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { step } from "codemod/workflow";
+import { branch } from "codemod/git";
+export default async function main() {
+  await step(branch("codemod/x"));
+  return "ok";
+}
+"#,
+    );
+    dirty_repo(&fixture);
+    let output = run_strict(&fixture, &[]);
+    assert!(output.status.success(), "{}", text(&output));
+}

@@ -49,7 +49,7 @@ pub use butterflow_state::run_store::{
 pub use callback_file::{run_callback_file, CallbackFileRequest, CallbackFileRun};
 pub use engine::{
     cancel_run, is_typescript, load_workflow, send_event, Canceled, Engine, EngineError,
-    LoadedWorkflow, RunReport, StartRequest, StopHandle, StopMode,
+    LoadedWorkflow, ResumeOptions, RunReport, StartRequest, StopHandle, StopMode,
 };
 pub use hosted::{HostedRun, OpenRequest, SelectedFiles};
 pub use js::orchestrator_version;

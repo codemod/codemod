@@ -207,11 +207,11 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         .unwrap_or_default()
         .to_string();
     // Steps that change the target outside the file commits `before_write`
-    // already guards.
-    if matches!(
-        kind.as_str(),
-        "shell" | "agent" | "installSkill" | "branch" | "commit" | "pullRequest"
-    ) {
+    // already guards. Git steps only touch git with `--managed-git`.
+    let git_step = matches!(kind.as_str(), "branch" | "commit" | "pullRequest");
+    if matches!(kind.as_str(), "shell" | "agent" | "installSkill")
+        || (git_step && task.run.services.managed_git)
+    {
         task.run.before_write().map_err(TaskError::Failed)?;
     }
     let result = match kind.as_str() {

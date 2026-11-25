@@ -124,6 +124,16 @@ pub struct StartRequest {
     pub check_uncommitted: bool,
 }
 
+/// How to resume a run.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ResumeOptions {
+    /// Skip the check for uncommitted changes that a run which has not
+    /// written yet makes before its first write (`--allow-dirty`).
+    pub allow_dirty: bool,
+    /// Continue a run that was canceled or rejected (`--force`).
+    pub force: bool,
+}
+
 /// What a run ended as.
 #[derive(Debug, Clone)]
 pub struct RunReport {
@@ -288,6 +298,11 @@ impl Execution {
         if matches!(ending, Ending::AwaitingApproval(_)) {
             record.question = context.halt.question();
         }
+        // Still to check when the run never got past the check.
+        record.settings.check_uncommitted = context
+            .write_gate
+            .as_ref()
+            .is_some_and(|gate| !gate.passed());
         context.store.put_run(&record)?;
         self.record = record;
         self.stop.release(&context.halt);
@@ -364,12 +379,18 @@ impl Engine {
     /// Continue a run that failed, was paused or interrupted, or waits for
     /// an approval.
     pub fn resume(&self, run_id: &str) -> Result<RunReport, EngineError> {
-        self.resume_with(run_id, false)
+        self.resume_with(run_id, ResumeOptions::default())
     }
 
-    /// [`Self::resume`]; `force` also continues a run that was canceled or
-    /// rejected.
-    pub fn resume_with(&self, run_id: &str, force: bool) -> Result<RunReport, EngineError> {
+    /// [`Self::resume`], with options. A run that was started with the
+    /// check for uncommitted changes and never passed it (it wrote nothing)
+    /// checks before its first write, unless `options.allow_dirty`. A run
+    /// that was canceled or rejected is continued only with `options.force`.
+    pub fn resume_with(
+        &self,
+        run_id: &str,
+        options: ResumeOptions,
+    ) -> Result<RunReport, EngineError> {
         // Load the workflow first: one that no longer builds leaves the run
         // as it was.
         let record = self
@@ -381,7 +402,7 @@ impl Engine {
             record,
             workflow.built.callbacks.clone(),
             QUICKJS_HOST,
-            force,
+            options,
         )?;
         self.drive(execution, &workflow.built)
     }
@@ -408,7 +429,8 @@ impl Engine {
         check_uncommitted: bool,
         host: &str,
     ) -> Result<Execution, EngineError> {
-        let record = RunRecord {
+        let check_uncommitted = check_uncommitted && !dry_run && test.is_none();
+        let mut record = RunRecord {
             id: run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             name,
             workflow_path: absolute(workflow_path),
@@ -424,6 +446,7 @@ impl Engine {
             exit_code: None,
             settings: self.settings(host),
         };
+        record.settings.check_uncommitted = check_uncommitted;
         // Dry runs and tests leave no run behind.
         let store: Arc<dyn RunStore> = if dry_run || test.is_some() {
             Arc::new(MemoryStore::default())
@@ -437,8 +460,13 @@ impl Engine {
         let lease = store
             .acquire(&record.id)?
             .ok_or_else(|| EngineError::Busy(record.id.clone()))?;
-        let gate = (check_uncommitted && !dry_run && test.is_none())
-            .then(|| Arc::new(crate::write_gate::WriteGate::new(&record.target)));
+        let gate = check_uncommitted.then(|| {
+            Arc::new(crate::write_gate::WriteGate::new(
+                &record.target,
+                &record.id,
+                Arc::clone(&store),
+            ))
+        });
         Ok(self.begin(store, record, lease, callbacks, dry_run, test, false, gate))
     }
 
@@ -448,7 +476,7 @@ impl Engine {
         mut record: RunRecord,
         callbacks: std::collections::BTreeMap<String, String>,
         host: &str,
-        force: bool,
+        options: ResumeOptions,
     ) -> Result<Execution, EngineError> {
         // Step keys identify callbacks the way the host that ran them does.
         if let Some(started) = record.settings.host.as_deref().filter(|h| *h != host) {
@@ -468,18 +496,31 @@ impl Engine {
             .store
             .acquire(&record.id)?
             .ok_or_else(|| EngineError::Busy(record.id.clone()))?;
-        record.reopen(force).map_err(|refused| match refused {
-            NotResumable::AlreadySucceeded => EngineError::AlreadyFinished(record.id.clone()),
-            NotResumable::Ended(status) => EngineError::Ended {
-                run: record.id.clone(),
-                status,
-            },
-        })?;
+        record
+            .reopen(options.force)
+            .map_err(|refused| match refused {
+                NotResumable::AlreadySucceeded => EngineError::AlreadyFinished(record.id.clone()),
+                NotResumable::Ended(status) => EngineError::Ended {
+                    run: record.id.clone(),
+                    status,
+                },
+            })?;
         self.store.clear_cancel(&record.id)?;
+        // A run that already wrote is not checked again: it made the changes
+        // there may be. One that never got past the check checks again.
+        if options.allow_dirty {
+            record.settings.check_uncommitted = false;
+        }
         self.store.put_run(&record)?;
         let store = Arc::clone(&self.store);
-        // A resumed run is not checked: it made the changes there may be.
-        Ok(self.begin(store, record, lease, callbacks, false, None, true, None))
+        let gate = record.settings.check_uncommitted.then(|| {
+            Arc::new(crate::write_gate::WriteGate::new(
+                &record.target,
+                &record.id,
+                Arc::clone(&store),
+            ))
+        });
+        Ok(self.begin(store, record, lease, callbacks, false, None, true, gate))
     }
 
     /// Announce a run and set up what its steps share.
@@ -561,6 +602,7 @@ impl Engine {
             managed_git: self.services.managed_git,
             agent: self.services.agent.clone(),
             host: Some(host.to_string()),
+            check_uncommitted: false,
         }
     }
 }

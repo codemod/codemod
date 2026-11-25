@@ -401,7 +401,10 @@ async fn run_on_screen(
                 test: None,
                 check_uncommitted: !allow_dirty,
             }),
-            Kind::Resume(run_id) => engine.resume_with(&run_id, force),
+            Kind::Resume(run_id) => engine.resume_with(
+                &run_id,
+                codemod_workflow::ResumeOptions { allow_dirty, force },
+            ),
         };
         let _ = done_sender.send(report);
     });

@@ -150,6 +150,11 @@ pub struct RunSettings {
     /// way, so a run is resumed where it started.
     #[serde(default)]
     pub host: Option<String>,
+    /// The run still has to check for uncommitted changes before it first
+    /// changes its target: it was started with the check, and has not passed
+    /// it yet. A resume checks then.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub check_uncommitted: bool,
 }
 
 /// How an execution of a run ended, as far as the record goes.

@@ -344,3 +344,119 @@ fn a_clean_tree_is_written_without_asking() {
     );
     assert!(answer.asked.lock().unwrap().is_empty());
 }
+
+#[test]
+fn a_git_step_without_managed_git_is_not_a_write() {
+    let answer = Arc::new(Answer {
+        yes: false,
+        asked: Mutex::default(),
+    });
+    let harness = Harness::with(Arc::new(MemoryStore::default()), answer.clone());
+    dirty(&harness);
+    let report = checked_start(
+        &harness,
+        r#"
+import { step } from "codemod/workflow";
+import { branch, commit } from "codemod/git";
+export default async function main() {
+  await step(branch("codemod/x"));
+  await step(commit("nothing"));
+  return "read only";
+}
+"#,
+    );
+    assert_eq!(report.ending, Ending::Succeeded(json!("read only")));
+    assert!(answer.asked.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_resumed_run_that_never_wrote_checks_again() {
+    let answer = Arc::new(Answer {
+        yes: false,
+        asked: Mutex::default(),
+    });
+    let harness = Harness::with(Arc::new(MemoryStore::default()), answer.clone());
+    dirty(&harness);
+    let report = checked_start(&harness, WRITES);
+    assert!(matches!(report.ending, Ending::Failed(_)));
+    assert!(report.run.settings.check_uncommitted);
+
+    // Still dirty: the resume stops at the same place, and writes nothing.
+    let resumed = harness.resume(&report, None);
+    let Ending::Failed(error) = &resumed.ending else {
+        panic!("{:?}", resumed.ending)
+    };
+    assert!(error.contains("uncommitted changes"), "{error}");
+    assert_eq!(harness.read("a.ts"), "var a = 1;\n");
+    assert_eq!(answer.asked.lock().unwrap().len(), 2);
+
+    // Committed: the resume writes, and the run no longer checks.
+    git(harness.target.path(), &["add", "."]);
+    git(harness.target.path(), &["commit", "-qm", "b"]);
+    let resumed = harness.resume(&report, None);
+    assert!(
+        matches!(resumed.ending, Ending::Succeeded(_)),
+        "{:?}",
+        resumed.ending
+    );
+    assert_eq!(harness.read("a.ts"), "let a = 1;\n");
+    assert!(!resumed.run.settings.check_uncommitted);
+}
+
+#[test]
+fn a_resumed_run_that_already_wrote_is_not_checked_again() {
+    let answer = Arc::new(Answer {
+        yes: true,
+        asked: Mutex::default(),
+    });
+    let harness = Harness::with(Arc::new(MemoryStore::default()), answer.clone());
+    dirty(&harness);
+    let failing = WRITES.replace(
+        "\n}\n",
+        "\n  await step(\"Check\", () => { throw new Error(\"not yet\"); });\n}\n",
+    );
+    let report = checked_start(&harness, &failing);
+    assert!(matches!(report.ending, Ending::Failed(_)));
+    assert_eq!(harness.read("a.ts"), "let a = 1;\n");
+    assert!(!report.run.settings.check_uncommitted);
+
+    let resumed = harness.resume(
+        &report,
+        Some(&failing.replace("throw new Error(\"not yet\");", "return 1;")),
+    );
+    assert!(
+        matches!(resumed.ending, Ending::Succeeded(_)),
+        "{:?}",
+        resumed.ending
+    );
+    assert_eq!(answer.asked.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn resuming_with_allow_dirty_skips_the_check() {
+    let answer = Arc::new(Answer {
+        yes: false,
+        asked: Mutex::default(),
+    });
+    let harness = Harness::with(Arc::new(MemoryStore::default()), answer.clone());
+    dirty(&harness);
+    let report = checked_start(&harness, WRITES);
+    assert!(matches!(report.ending, Ending::Failed(_)));
+    let resumed = harness
+        .engine
+        .resume_with(
+            &report.run.id,
+            codemod_workflow::ResumeOptions {
+                allow_dirty: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(
+        matches!(resumed.ending, Ending::Succeeded(_)),
+        "{:?}",
+        resumed.ending
+    );
+    assert_eq!(answer.asked.lock().unwrap().len(), 1);
+    assert!(!resumed.run.settings.check_uncommitted);
+}

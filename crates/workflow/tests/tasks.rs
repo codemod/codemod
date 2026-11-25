@@ -290,7 +290,16 @@ fn a_rejected_approval_ends_the_run_as_rejected_and_keeps_earlier_changes() {
         "{error}"
     );
     let approver = Harness::with(store, ById::new(&["approval:3"]));
-    let resumed = approver.engine.resume_with(&report.run.id, true).unwrap();
+    let resumed = approver
+        .engine
+        .resume_with(
+            &report.run.id,
+            codemod_workflow::ResumeOptions {
+                force: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
     assert!(output(&resumed).is_ok(), "{:?}", resumed.ending);
     assert_eq!(h.read("a.txt"), "a123");
 }
@@ -333,7 +342,16 @@ fn a_canceled_run_is_resumed_only_when_forced() {
         })
     ));
     assert_eq!(h.read("a.txt"), "a1");
-    let second = approver.engine.resume_with(&first.run.id, true).unwrap();
+    let second = approver
+        .engine
+        .resume_with(
+            &first.run.id,
+            codemod_workflow::ResumeOptions {
+                force: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
     assert!(output(&second).is_ok(), "{:?}", second.ending);
     assert_eq!(h.read("a.txt"), "a12");
 }

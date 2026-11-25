@@ -536,8 +536,11 @@ pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutc
     let (engine, renderer, summary) = engine(&settings, Some(run_id.to_string()))?;
     let started = Instant::now();
     let run_id = run_id.to_string();
-    let force = settings.force;
-    let report = run_off_thread(engine, move |engine| engine.resume_with(&run_id, force)).await?;
+    let options = codemod_workflow::ResumeOptions {
+        allow_dirty: settings.allow_dirty,
+        force: settings.force,
+    };
+    let report = run_off_thread(engine, move |engine| engine.resume_with(&run_id, options)).await?;
     renderer.finish();
     let outcome = ExecOutcome {
         report,
