@@ -78,7 +78,8 @@ export function importedBindings<T extends Language>(statement: SgNode<T>): Impo
  *   (`import Modal from "./modal"`), a second one for the same module
  *   `{ default as X }`.
  * - Local names, `import type` and inline `type` modifiers, the original
- *   quote style and the trailing semicolon are kept.
+ *   quote style and the trailing semicolon are kept. A moved group whose
+ *   bindings are all type-only is written `import type { … }`.
  * - Namespace and side-effect imports are left alone.
  *
  * @example
@@ -127,10 +128,17 @@ export function retargetImport<T extends Language>(
   const lines = [...groups]
     .filter(([, g]) => g.default !== undefined || g.named.length > 0)
     .map(([from, g]) => {
-      const parts = [g.default, g.named.length ? `{ ${g.named.join(", ")} }` : undefined].filter(
+      // A moved group of type-only bindings becomes `import type { A, B }`.
+      const allTypes =
+        from !== original &&
+        g.default === undefined &&
+        g.named.every((named) => named.startsWith("type "));
+      const named = allTypes ? g.named.map((n) => n.slice("type ".length)) : g.named;
+      const parts = [g.default, named.length ? `{ ${named.join(", ")} }` : undefined].filter(
         Boolean,
       );
-      return `${keyword} ${parts.join(", ")} from ${quote}${from}${quote}${semicolon}`;
+      const kw = allTypes ? "import type" : keyword;
+      return `${kw} ${parts.join(", ")} from ${quote}${from}${quote}${semicolon}`;
     });
   return statement.replace(lines.join("\n"));
 }

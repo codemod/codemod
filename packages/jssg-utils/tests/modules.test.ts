@@ -36,15 +36,24 @@ equal(
   "all moved",
 );
 
-// Two defaults into one module; inline type modifiers stay inline.
+// Two defaults into one module; a moved type-only group becomes import type.
 equal(
   retarget('import { type Props, X, Y } from "./lib";', {
     Props: { from: "./types", name: "Props" },
     X: { from: "./xy", name: "default" },
     Y: { from: "./xy", name: "default" },
   }),
-  'import { type Props } from "./types";\nimport X, { default as Y } from "./xy";',
+  'import type { Props } from "./types";\nimport X, { default as Y } from "./xy";',
   "two defaults, inline type",
+);
+
+// Moved type-only bindings become an import type statement.
+equal(
+  retarget('import { type Config, load } from "./lib";', {
+    Config: { from: "./lib/config", name: "Config" },
+  }),
+  'import { load } from "./lib";\nimport type { Config } from "./lib/config";',
+  "moved inline types",
 );
 
 // import type stays import type.
