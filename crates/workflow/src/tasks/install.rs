@@ -125,17 +125,32 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         }
     }
     let cloud = butterflow_core::git_ops::is_cloud_mode();
-    let cloud_hint = if cloud {
-        "; cloud runs reach only registry.npmjs.org and GitHub unless your organization allows more hosts"
-    } else {
-        ""
-    };
+    // Where the package manager will fetch from: the package's own config,
+    // else the target's.
+    let registries = project::registries(&manager, &|path| {
+        std::fs::read_to_string(dir.join(path))
+            .or_else(|_| std::fs::read_to_string(root.join(path)))
+            .ok()
+    });
     let program = manager.name.as_str();
     if !on_path(program) {
+        let hint = if cloud {
+            cloud_hint(&registries, "")
+        } else {
+            String::new()
+        };
         return Err(TaskError::Failed(format!(
-            "install: {program} is not installed on this machine (the repository uses {program}, from {}){cloud_hint}",
+            "install: {program} is not installed on this machine (the repository uses {program}, from {}){hint}",
             manager.detected_from
         )));
+    }
+    if cloud {
+        for (host, from) in registries.iter().filter(|(host, _)| !cloud_allows(host)) {
+            task.log(format!(
+                "cloud run: {program} fetches from {host} ({}), which cloud runs reach only when your organization allows it",
+                described(from)
+            ));
+        }
     }
 
     let before = std::fs::read(&lockfile_path).ok();
@@ -181,8 +196,13 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         };
         let lines: Vec<&str> = printed.trim_end().lines().collect();
         let tail = lines[lines.len().saturating_sub(15)..].join("\n");
+        let hint = if cloud {
+            cloud_hint(&registries, printed)
+        } else {
+            String::new()
+        };
         return Err(TaskError::Failed(format!(
-            "install: {command} exited with code {}{cloud_hint}:\n{tail}",
+            "install: {command} exited with code {}:\n{tail}{hint}",
             output.exit_code
         )));
     }
@@ -194,4 +214,110 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         format!("{shown} unchanged")
     });
     Ok(TaskOutcome::new(result(true, changed)))
+}
+
+/// Hosts a cloud run reaches without its organization adding them: the
+/// default egress allowlist of Codemod's cloud runner (codemod-app,
+/// `egress-policy.ts`). `*.` matches any subdomain.
+const CLOUD_ALLOWED: [&str; 8] = [
+    "registry.npmjs.org",
+    "*.npmjs.com",
+    "github.com",
+    "*.github.com",
+    "*.githubusercontent.com",
+    "*.githubassets.com",
+    "codemod.com",
+    "*.codemod.com",
+];
+
+/// Whether a cloud run reaches `host` without its organization allowing it.
+fn cloud_allows(host: &str) -> bool {
+    CLOUD_ALLOWED
+        .iter()
+        .any(|allowed| match allowed.strip_prefix("*.") {
+            Some(domain) => host == domain || host.ends_with(&format!(".{domain}")),
+            None => host == *allowed,
+        })
+}
+
+/// "Yarn's default", or "from .npmrc".
+fn described(from: &str) -> String {
+    if from.ends_with("default") {
+        from.to_string()
+    } else {
+        format!("from {from}")
+    }
+}
+
+/// What a failed install in a cloud run adds to its error: the registries
+/// the package manager uses (host, and where it comes from) and the hosts
+/// the command's output names that cloud runs cannot reach by default; or
+/// the general rule when there are none.
+fn cloud_hint(registries: &[(String, String)], output: &str) -> String {
+    let mut blocked: Vec<String> = registries
+        .iter()
+        .filter(|(host, _)| !cloud_allows(host))
+        .map(|(host, from)| format!("{host} ({})", described(from)))
+        .collect();
+    let named = regex::Regex::new(
+        r"(?i)(?:https?://|ENOTFOUND |EAI_AGAIN |ECONNREFUSED |getaddrinfo \w+ )([a-z0-9][a-z0-9.-]*\.[a-z]{2,})",
+    )
+    .expect("valid regex");
+    for found in named.captures_iter(output) {
+        let host = found[1].to_ascii_lowercase();
+        let known = blocked.iter().any(|b| b.starts_with(&format!("{host} ")));
+        if !cloud_allows(&host) && !known {
+            blocked.push(format!("{host} (in the command's output)"));
+        }
+    }
+    let rule = "This is a cloud run: it reaches only registry.npmjs.org and GitHub unless your organization allows more hosts";
+    if blocked.is_empty() {
+        format!("\n{rule}.")
+    } else {
+        format!(
+            "\n{rule}, and the install needs {}. Allow {} in your organization's egress settings, or point the registry at registry.npmjs.org.",
+            blocked.join(", "),
+            if blocked.len() == 1 { "it" } else { "them" }
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registry(host: &str, from: &str) -> (String, String) {
+        (host.to_string(), from.to_string())
+    }
+
+    #[test]
+    fn a_cloud_failure_names_the_registry_cloud_runs_cannot_reach() {
+        assert_eq!(
+            cloud_hint(&[registry("registry.yarnpkg.com", "Yarn's default")], "YN0001: fetch failed"),
+            "\nThis is a cloud run: it reaches only registry.npmjs.org and GitHub unless your organization allows more hosts, and the install needs registry.yarnpkg.com (Yarn's default). Allow it in your organization's egress settings, or point the registry at registry.npmjs.org."
+        );
+        assert_eq!(
+            cloud_hint(
+                &[
+                    registry("registry.npmjs.org", "npm's default"),
+                    registry("npm.acme.dev", ".npmrc")
+                ],
+                "npm error request to https://npm.acme.dev/@acme%2fui failed\nnpm error getaddrinfo ENOTFOUND cdn.acme.dev"
+            ),
+            "\nThis is a cloud run: it reaches only registry.npmjs.org and GitHub unless your organization allows more hosts, and the install needs npm.acme.dev (from .npmrc), cdn.acme.dev (in the command's output). Allow them in your organization's egress settings, or point the registry at registry.npmjs.org."
+        );
+    }
+
+    #[test]
+    fn a_cloud_failure_with_allowed_registries_states_the_rule() {
+        assert_eq!(
+            cloud_hint(
+                &[registry("registry.npmjs.org", "npm's default")],
+                "npm error 404 https://registry.npmjs.org/nope and https://codeload.github.com/x"
+            ),
+            "\nThis is a cloud run: it reaches only registry.npmjs.org and GitHub unless your organization allows more hosts."
+        );
+        assert!(cloud_allows("objects.githubusercontent.com"));
+        assert!(!cloud_allows("evilgithub.com"));
+    }
 }

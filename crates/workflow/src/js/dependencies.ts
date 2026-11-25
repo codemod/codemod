@@ -210,6 +210,7 @@ interface PackageRecord {
   name: string | null;
   version: string | null;
   declarations: DeclarationRecord[];
+  member: boolean;
 }
 
 interface ProjectRecord {
@@ -245,6 +246,35 @@ interface Scope extends KindOptions {
   in?: unknown;
 }
 
+interface AllOption {
+  /** Every package.json under the target, not just the root and its workspaces. */
+  all?: boolean;
+}
+
+/** A declaration an edit left alone, and why. */
+interface SkippedEdit {
+  file: string;
+  package: string;
+  name: string;
+  kind: string;
+  range: string;
+  reason: string;
+}
+
+function allOf(options: unknown, what: string): boolean {
+  if (options === undefined) return false;
+  if (options === null || typeof options !== "object") {
+    throw new TypeError(`${what}: options must be an object`);
+  }
+  const { all, ...rest } = options as AllOption;
+  const unknown = Object.keys(rest);
+  if (unknown.length) throw new TypeError(`${what}: unknown option '${unknown[0]}'`);
+  if (all !== undefined && typeof all !== "boolean") {
+    throw new TypeError(`${what}: all must be a boolean`);
+  }
+  return all === true;
+}
+
 /** One object per isolate and options: later calls in the step get it back. */
 const made = new Map<string, ReturnType<typeof createDependencies>>();
 
@@ -278,15 +308,19 @@ export function dependencies(options?: { lockfiles?: string | string[] }) {
 function createDependencies(only: string[]) {
   const host = globalThis.__dependencyHost;
   let project: ProjectRecord = { packageManager: null, packages: [], catalogs: [], unreadable: [] };
+  /** Every package.json under the target. */
+  let all: Package[] = [];
+  /** The root and the workspaces it declares. */
   let packages: Package[] = [];
   const edits: unknown[] = [];
 
   const read = () => {
     project = ask<ProjectRecord>(host.project());
-    packages = project.packages.map((record) => new Package(record));
+    all = project.packages.map((record) => new Package(record));
+    packages = all.filter((pkg) => pkg.member);
   };
 
-  const packageByDir = (dir: string) => packages.find((pkg) => pkg.dir === dir);
+  const packageByDir = (dir: string) => all.find((pkg) => pkg.dir === dir);
   const packageRef = (ref: unknown): Package => {
     if (ref instanceof Package) return packageByDir(ref.dir) ?? ref;
     if (typeof ref !== "string") throw new TypeError("expected a package, its dir or its name");
@@ -305,13 +339,51 @@ function createDependencies(only: string[]) {
     return found;
   };
 
-  const apply = (changes: Record<string, unknown>[]) => {
-    if (!changes.length) return Object.freeze([]);
-    const done = ask<Record<string, unknown>[]>(host.edit(JSON.stringify(changes)));
-    const frozen = done.map((edit) => Object.freeze(edit));
+  /** The edits, as an array, with what was left alone as its `skipped`. */
+  const result = (done: unknown[], skipped: SkippedEdit[]) => {
+    const list = [...done];
+    Object.defineProperty(list, "skipped", {
+      value: Object.freeze(skipped.map((skip) => Object.freeze(skip))),
+    });
+    // A step's result records the edits.
+    Object.defineProperty(list, "toJSON", { value: () => [...done] });
+    return Object.freeze(list);
+  };
+
+  const apply = (changes: Record<string, unknown>[], skipped: SkippedEdit[] = []) => {
+    if (!changes.length) return result([], skipped);
+    const done = ask<{ edits: Record<string, unknown>[]; skipped: SkippedEdit[] }>(
+      host.edit(JSON.stringify(changes)),
+    );
+    const frozen = done.edits.map((edit) => Object.freeze(edit));
     edits.push(...frozen);
     read();
-    return Object.freeze(frozen);
+    return result(frozen, [...skipped, ...done.skipped]);
+  };
+
+  /**
+   * The declarations an edit of `name` changes: peers only when `kinds`
+   * names "peer"; the peers it leaves are reported as skipped.
+   */
+  const editable = (dependency: string, options?: Scope) => {
+    const peers = kindList(options)?.includes("peer") ?? false;
+    const kept: Declaration[] = [];
+    const skipped: SkippedEdit[] = [];
+    for (const d of deps.declarations(dependency, options)) {
+      if (d.kind === "peer" && !peers) {
+        skipped.push({
+          file: d.package.manifest,
+          package: d.package.dir,
+          name: d.name,
+          kind: d.kind,
+          range: d.range,
+          reason: "peer",
+        });
+      } else {
+        kept.push(d);
+      }
+    }
+    return { kept, skipped };
   };
 
   class Declaration {
@@ -382,6 +454,8 @@ function createDependencies(only: string[]) {
     readonly version: string | null;
     readonly dir: string;
     readonly manifest: string;
+    /** The root, or a workspace the root declares. */
+    readonly member: boolean;
     readonly #declarations: Declaration[];
 
     constructor(record: PackageRecord) {
@@ -389,6 +463,7 @@ function createDependencies(only: string[]) {
       this.version = record.version;
       this.dir = record.dir;
       this.manifest = record.manifest;
+      this.member = record.member;
       this.#declarations = record.declarations.map((d) => new Declaration(this, d));
       Object.freeze(this);
     }
@@ -444,22 +519,33 @@ function createDependencies(only: string[]) {
       return project.packageManager;
     },
 
-    /** The repository's packages: the root, then the workspaces, by dir. */
-    packages: (): Package[] => [...packages],
+    /**
+     * The repository's packages: the root, then the workspaces it declares,
+     * by dir. `{ all: true }`: every package.json under the target.
+     */
+    packages: (options?: AllOption): Package[] =>
+      allOf(options, "packages") ? [...all] : [...packages],
 
-    /** A package by dir, or by name. */
+    /** A package by dir, or by name (the repository's packages first). */
     package: (ref: string): Package | undefined => {
       if (typeof ref !== "string") throw new TypeError("package(ref): give a dir or a name");
       const dir = ref.replace(/^\.\//, "").replace(/\/$/, "") || ".";
-      return packageByDir(dir) ?? packages.find((pkg) => pkg.name === ref);
+      return (
+        packageByDir(dir) ??
+        packages.find((pkg) => pkg.name === ref) ??
+        all.find((pkg) => pkg.name === ref)
+      );
     },
 
-    /** The package that owns a file: the nearest package.json at or above it. */
-    packageOf: (file: string): Package | undefined => {
+    /**
+     * The package that owns a file: the nearest of the repository's
+     * packages at or above it, or of every package.json with `{ all: true }`.
+     */
+    packageOf: (file: string, options?: AllOption): Package | undefined => {
       if (typeof file !== "string") throw new TypeError("packageOf(file): give a path");
       const path = file.replace(/\\/g, "/").replace(/^\.\//, "");
       let best: Package | undefined;
-      for (const pkg of packages) {
+      for (const pkg of allOf(options, "packageOf") ? all : packages) {
         const inside = pkg.dir === "." || path === pkg.dir || path.startsWith(`${pkg.dir}/`);
         if (!inside) continue;
         if (!best || best.dir === "." || pkg.dir.length > best.dir.length) best = pkg;
@@ -482,10 +568,11 @@ function createDependencies(only: string[]) {
     /** Catalogs: name, file and entries. */
     catalogs: () => project.catalogs.map((catalog) => Object.freeze({ ...catalog })),
 
-    /** Set the range of `name` where it is declared. */
+    /** Set the range of `name` where it is declared (peers only when `kinds` names them). */
     bump: (dependency: string, range: unknown, options?: Scope) => {
       if (typeof range !== "function") rangeText(range);
-      const changes = deps.declarations(dependency, options).flatMap((d) => {
+      const { kept, skipped } = editable(dependency, options);
+      const changes = kept.flatMap((d) => {
         const next =
           typeof range === "function" ? (range as (d: Declaration) => unknown)(d) : range;
         if (next === undefined) return [];
@@ -493,7 +580,7 @@ function createDependencies(only: string[]) {
           { op: "set", dir: d.package.dir, kind: d.kind, name: d.name, range: rangeText(next) },
         ];
       });
-      return apply(changes);
+      return apply(changes, skipped);
     },
 
     /** Declare `name` in a package (default: the root) and section (default: prod). */
@@ -506,22 +593,23 @@ function createDependencies(only: string[]) {
       ]);
     },
 
-    /** Remove `name` wherever it is declared. */
-    remove: (dependency: string, options?: Scope) =>
-      apply(
-        deps
-          .declarations(dependency, options)
-          .map((d) => ({ op: "remove", dir: d.package.dir, kind: d.kind, name: d.name })),
-      ),
+    /** Remove `name` wherever it is declared (peers only when `kinds` names them). */
+    remove: (dependency: string, options?: Scope) => {
+      const { kept, skipped } = editable(dependency, options);
+      return apply(
+        kept.map((d) => ({ op: "remove", dir: d.package.dir, kind: d.kind, name: d.name })),
+        skipped,
+      );
+    },
 
     /** Rename `from` to `to` where declared, keeping the section and range unless `range` is given. */
     rename: (from: string, to: string, options?: Scope & { range?: string }) => {
       name(to, "to");
       const range = options?.range === undefined ? undefined : rangeText(options.range);
+      const { kept, skipped } = editable(from, options);
       return apply(
-        deps
-          .declarations(from, options)
-          .map((d) => ({ op: "rename", dir: d.package.dir, kind: d.kind, from, to, range })),
+        kept.map((d) => ({ op: "rename", dir: d.package.dir, kind: d.kind, from, to, range })),
+        skipped,
       );
     },
 

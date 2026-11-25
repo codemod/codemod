@@ -7,6 +7,7 @@ import type {
   DependencyEdge,
   Dependencies,
   Edit,
+  EditResult,
   InstallResult,
   LocalNode,
   Package,
@@ -36,7 +37,10 @@ export default async function main() {
   const declared = await step(() => dependencies().declarations("react")[0]);
   expectType<Equal<(typeof declared)["resolved"], string | null>>(true);
 
+  // A step records the edits; return `skipped` to keep what was left alone.
   const edits = await step(() => dependencies().bump("react", "^19.0.0"));
+  const skipped = await step(() => dependencies().bump("react", "^19.0.0").skipped);
+  expectType<Equal<(typeof skipped)[number]["reason"], "peer" | "workspace">>(true);
   expectType<
     Equal<
       (typeof edits)[number]["kind"],
@@ -72,6 +76,14 @@ export default async function main() {
     deps.remove("chalk", { in: ["packages/a", "packages/b"], kinds: ["prod", "dev"] });
     deps.rename("react-router-dom", "react-router", { range: "^7.0.0" });
     deps.bump("lodash", (d) => (semver.major(d.resolved ?? "") === 3 ? "^4.17.21" : undefined));
+    const bumped: EditResult = deps.bump("react", "^19.0.0", { kinds: ["prod", "peer"] });
+    const reasons = bumped.skipped.map((skip) => skip.reason);
+    expectType<Equal<typeof reasons, ("peer" | "workspace")[]>>(true);
+    const every = deps.packages({ all: true }).filter((p) => !p.member);
+    deps.packageOf("examples/x/a.ts", { all: true })?.bump("x", "^2.0.0");
+    // @ts-expect-error all is a boolean
+    deps.packages({ all: "yes" });
+    void every;
     // @ts-expect-error kinds are named
     deps.add("x", "1", { kind: "devDependencies" });
     // @ts-expect-error a range is a string or a function

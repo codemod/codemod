@@ -131,6 +131,7 @@ fn project_json(project: &Project) -> Value {
                 "manifest": package.manifest,
                 "name": package.name,
                 "version": package.version,
+                "member": package.member,
                 "declarations": declarations,
             })
         })
@@ -178,14 +179,14 @@ fn edit(files: &Files, changes: &str) -> Result<Value, String> {
         texts.insert(file.clone(), text);
         taken.insert(file, guard);
     }
-    let (out, edits) = manifest_edits::apply(&project, &changes, &texts)?;
+    let (out, edits, skipped) = manifest_edits::apply(&project, &changes, &texts)?;
     for (file, text) in out {
         if let Some(guard) = taken.get(&file) {
             guard.set(text);
         }
     }
     drop(taken);
-    Ok(json!(edits))
+    Ok(json!({ "edits": edits, "skipped": skipped }))
 }
 
 /// Parsed graphs, by a hash of everything the parse read: kept for the

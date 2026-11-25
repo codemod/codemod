@@ -50,6 +50,10 @@ pub struct Manifest {
     pub name: Option<String>,
     pub version: Option<String>,
     pub declarations: Vec<Declared>,
+    /// One of the repository's packages: the root, or a workspace the root
+    /// declares. Other package.json files (fixtures, examples, a repository
+    /// without workspaces) are read too, but are not members.
+    pub member: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -157,11 +161,11 @@ pub struct Resolved {
 
 impl Project {
     /// Read the project at the root of `paths`: every package.json path
-    /// (relative, with `/`) that might be one of its packages. `read` gives a
-    /// file's text by relative path. The root package.json's `workspaces`,
-    /// or pnpm-workspace.yaml's `packages`, pick the packages among
-    /// `paths`; without either, every path is a package. `lockfiles` are
-    /// the root files present, for the package manager.
+    /// (relative, with `/`) under it. `read` gives a file's text by relative
+    /// path. The members are the root package.json and the workspaces its
+    /// `workspaces`, or pnpm-workspace.yaml's `packages`, declare; without
+    /// either, only the root. Every other path is read too, as a non-member.
+    /// `present` are the root lockfiles that exist, for the package manager.
     pub fn read(paths: &[String], present: &[&str], read: &dyn Fn(&str) -> Option<String>) -> Self {
         let mut project = Project::default();
         let root_text = read("package.json");
@@ -202,24 +206,24 @@ impl Project {
                     other => other.strip_suffix("/package.json")?.to_string(),
                 })
             })
-            .filter(|dir| {
-                let Some(globs) = &globs else {
-                    return true;
-                };
-                if dir == "." {
-                    return true;
-                }
-                let included = globs
-                    .iter()
-                    .filter(|glob| !glob.starts_with('!'))
-                    .any(|glob| path_glob_match(&normalize(glob), dir));
-                let excluded = globs
-                    .iter()
-                    .filter_map(|glob| glob.strip_prefix('!'))
-                    .any(|glob| path_glob_match(&normalize(glob), dir));
-                included && !excluded
-            })
             .collect();
+        let member = |dir: &str| {
+            if dir == "." {
+                return true;
+            }
+            let Some(globs) = &globs else {
+                return false;
+            };
+            let included = globs
+                .iter()
+                .filter(|glob| !glob.starts_with('!'))
+                .any(|glob| path_glob_match(&normalize(glob), dir));
+            let excluded = globs
+                .iter()
+                .filter_map(|glob| glob.strip_prefix('!'))
+                .any(|glob| path_glob_match(&normalize(glob), dir));
+            included && !excluded
+        };
         dirs.sort_by(|a, b| (a != ".").cmp(&(b != ".")).then(a.cmp(b)));
         dirs.dedup();
 
@@ -240,6 +244,7 @@ impl Project {
                         .and_then(|v| v.as_str())
                         .map(String::from),
                     declarations: declarations(&json),
+                    member: member(&dir),
                     dir,
                     manifest,
                 }),
@@ -342,7 +347,7 @@ impl Project {
             let local = self
                 .packages
                 .iter()
-                .position(|package| package.name.as_deref() == Some(name))
+                .position(|package| package.member && package.name.as_deref() == Some(name))
                 .or_else(|| {
                     // workspace:packages/x names a path.
                     let dir = spec.trim_start_matches("./").trim_end_matches('/');
@@ -467,6 +472,85 @@ fn detect_package_manager(
     })
 }
 
+/// The registry hosts a package manager installs from, with where each one
+/// comes from: the default (registry.npmjs.org; registry.yarnpkg.com for
+/// Yarn), replaced by `registry=` in .npmrc, plus scoped `@scope:registry=`
+/// ones; for Yarn 2+, `npmRegistryServer` in .yarnrc.yml instead. `read`
+/// gives a file's text relative to the package manager's directory.
+pub fn registries(
+    manager: &PackageManager,
+    read: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, String)> {
+    let host = |url: &str| -> Option<String> {
+        let url = url.trim().trim_matches(|c| c == '"' || c == '\'');
+        let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+        let host = rest.split(['/', ':']).next()?.trim();
+        (!host.is_empty()).then(|| host.to_ascii_lowercase())
+    };
+    let classic_yarn = manager
+        .version
+        .as_deref()
+        .is_some_and(|v| v.starts_with("1."));
+    let berry = manager.name == PackageManagerName::Yarn
+        && !classic_yarn
+        && (manager.version.is_some() || read(".yarnrc.yml").is_some());
+    let mut default = if manager.name == PackageManagerName::Yarn {
+        (
+            "registry.yarnpkg.com".to_string(),
+            "Yarn's default".to_string(),
+        )
+    } else {
+        (
+            "registry.npmjs.org".to_string(),
+            format!("{}'s default", manager.name.as_str()),
+        )
+    };
+    let mut scoped: Vec<(String, String)> = Vec::new();
+    if berry {
+        for line in read(".yarnrc.yml").unwrap_or_default().lines() {
+            let indented = line.starts_with([' ', '\t']);
+            let Some(value) = line.trim().strip_prefix("npmRegistryServer:") else {
+                continue;
+            };
+            if let Some(h) = host(value) {
+                // Top level: the registry; indented: a scope's (npmScopes).
+                if indented {
+                    scoped.push((h, ".yarnrc.yml".into()));
+                } else {
+                    default = (h, ".yarnrc.yml".into());
+                }
+            }
+        }
+    } else {
+        for line in read(".npmrc").unwrap_or_default().lines() {
+            let line = line.trim();
+            if line.starts_with(['#', ';']) {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let key = key.trim();
+            if key == "registry" {
+                if let Some(h) = host(value) {
+                    default = (h, ".npmrc".into());
+                }
+            } else if key.ends_with(":registry") {
+                if let Some(h) = host(value) {
+                    scoped.push((h, ".npmrc".into()));
+                }
+            }
+        }
+    }
+    let mut found = vec![default];
+    for entry in scoped {
+        if !found.iter().any(|(h, _)| *h == entry.0) {
+            found.push(entry);
+        }
+    }
+    found
+}
+
 /// Every package.json under `root`, relative with `/`, root first:
 /// `.gitignore` is respected and `node_modules` skipped.
 pub fn discover(root: &Path) -> Vec<String> {
@@ -539,9 +623,15 @@ mod tests {
             ],
             &["package-lock.json"],
         );
-        let dirs: Vec<&str> = p.packages.iter().map(|p| p.dir.as_str()).collect();
+        let dirs: Vec<&str> = p
+            .packages
+            .iter()
+            .filter(|p| p.member)
+            .map(|p| p.dir.as_str())
+            .collect();
         assert_eq!(dirs, [".", "packages/web"]);
-        assert_eq!(p.packages[1].declarations[0].name, "react");
+        let web = p.packages.iter().find(|p| p.dir == "packages/web").unwrap();
+        assert_eq!(web.declarations[0].name, "react");
         let pm = p.package_manager.unwrap();
         assert_eq!(
             (pm.name, pm.lockfile.as_deref(), pm.detected_from),
@@ -554,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn without_workspaces_every_package_json_is_a_package() {
+    fn without_workspaces_only_the_root_is_a_member() {
         let p = project(
             &[
                 ("package.json", r#"{ "name": "root" }"#),
@@ -562,8 +652,60 @@ mod tests {
             ],
             &[],
         );
-        assert_eq!(p.packages.len(), 2);
+        let members: Vec<(&str, bool)> = p
+            .packages
+            .iter()
+            .map(|p| (p.dir.as_str(), p.member))
+            .collect();
+        assert_eq!(members, [(".", true), ("examples/x", false)]);
         assert_eq!(p.package_manager.unwrap().detected_from, "default");
+    }
+
+    #[test]
+    fn registries_come_from_npmrc_and_yarnrc() {
+        let pm = |name, version: Option<&str>| PackageManager {
+            name,
+            version: version.map(String::from),
+            lockfile: None,
+            detected_from: "lockfile",
+        };
+        let hosts = |manager: PackageManager, files: &[(&str, &str)]| -> Vec<String> {
+            registries(&manager, &|path| {
+                files
+                    .iter()
+                    .find(|(p, _)| *p == path)
+                    .map(|(_, t)| t.to_string())
+            })
+            .into_iter()
+            .map(|(host, from)| format!("{host} ({from})"))
+            .collect()
+        };
+        assert_eq!(
+            hosts(pm(PackageManagerName::Npm, None), &[]),
+            ["registry.npmjs.org (npm's default)"]
+        );
+        assert_eq!(
+            hosts(
+                pm(PackageManagerName::Pnpm, None),
+                &[(".npmrc", "# x\nregistry=https://npm.acme.dev/repo/\n@acme:registry=https://npm.pkg.github.com\n")]
+            ),
+            ["npm.acme.dev (.npmrc)", "npm.pkg.github.com (.npmrc)"]
+        );
+        assert_eq!(
+            hosts(pm(PackageManagerName::Yarn, Some("4.5.0")), &[]),
+            ["registry.yarnpkg.com (Yarn's default)"]
+        );
+        assert_eq!(
+            hosts(
+                pm(PackageManagerName::Yarn, Some("4.5.0")),
+                &[(".yarnrc.yml", "npmRegistryServer: \"https://registry.npmjs.org\"\nnpmScopes:\n  acme:\n    npmRegistryServer: https://npm.acme.dev\n")]
+            ),
+            ["registry.npmjs.org (.yarnrc.yml)", "npm.acme.dev (.yarnrc.yml)"]
+        );
+        assert_eq!(
+            hosts(pm(PackageManagerName::Yarn, Some("1.22.19")), &[]),
+            ["registry.yarnpkg.com (Yarn's default)"]
+        );
     }
 
     #[test]

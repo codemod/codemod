@@ -450,17 +450,17 @@ export default async function main() {
 |---|---|
 | `uses(name, { kinds })` | Whether any of the repository's packages declares `name` |
 | `declarations(name, { kinds, in })` | Every declaration of `name`, by package dir |
-| `packages()` | The repository's packages: the root, then the workspaces it declares |
+| `packages({ all })` | The repository's packages: the root, then the workspaces it declares. `{ all: true }`: every `package.json` under the target |
 | `package(dirOrName)` | One package |
-| `packageOf(file)` | The package that owns a file: its nearest `package.json` |
+| `packageOf(file, { all })` | The package that owns a file: the nearest of the repository's packages at or above it, or with `{ all: true }` the nearest `package.json` |
 | `packageManager` | `{ name, version, lockfile, detectedFrom }`: npm, pnpm, yarn or bun; `null` without a root `package.json` |
 | `catalogs()` | pnpm, bun and Yarn catalogs: `{ name, file, entries }` |
 
-The packages are the root `package.json` and the workspaces it declares (`workspaces`, or `pnpm-workspace.yaml`'s `packages`). Without a workspace declaration, every `package.json` under the target is a package (`.gitignore` respected, `node_modules` skipped).
+The packages are the root `package.json` and the workspaces it declares (`workspaces`, or `pnpm-workspace.yaml`'s `packages`). Without a workspace declaration, only the root counts, so fixtures and examples with their own `package.json` are left out of `packages()`, `uses()` and `declarations()`. `packages({ all: true })` lists every `package.json` under the target (`.gitignore` respected, `node_modules` skipped), with `member: false` on those that aren't the repository's packages; you can edit those too, by the package or with `in`.
 
 A declaration has `package`, `name`, `range` (as written), `kind` (`prod`, `dev`, `peer` or `optional`) and `protocol`. `resolved` is the range it means: a `catalog:` ref gives its catalog entry, a `workspace:` ref the local package's version (`workspace:^` with 1.2.0 gives `^1.2.0`), and an `npm:` alias its range. `readable` says whether `semver` can read `resolved` (git, file, url and tags such as `latest` can't). `d.accepts(version)` and `d.minVersion()` check it, and `d.installed()` gives the node the lockfile installed for it.
 
-**Edits** change the `package.json` files (and catalogs) where a dependency is declared. Each returns what it changed, as `{ file, package, name, kind, from, to }`:
+**Edits** change the `package.json` files (and catalogs) where a dependency is declared. Each returns an array of what it changed, `{ file, package, name, kind, from, to }`, with what it left alone as its `skipped`: `{ file, package, name, kind, range, reason }`, where `reason` is `"peer"` or `"workspace"`:
 
 | Edit | Does |
 |---|---|
@@ -469,7 +469,22 @@ A declaration has `package`, `name`, `range` (as written), `kind` (`prod`, `dev`
 | `remove(name, { kinds, in })` | Removes `name` from every section that declares it |
 | `rename(from, to, { range, kinds, in })` | Renames `from` where declared, keeping its section and, unless `range` is given, its range |
 
-A package has the same edits for itself: `pkg.add(name, range, { kind })`, `pkg.bump(...)`, `pkg.remove(...)`, `pkg.rename(...)`. Edits keep the file's formatting: only the changed value, key or line is touched, and a new key goes where sorted keys put it. A `catalog:` ref is bumped in its catalog, once for every package that uses it. A `workspace:` ref is left alone. An `npm:` alias keeps its target. The edits are the step's file changes: a dry run shows them and later steps see them, and they are written when the step ends.
+A package has the same edits for itself: `pkg.add(name, range, { kind })`, `pkg.bump(...)`, `pkg.remove(...)`, `pkg.rename(...)`. Edits keep the file's formatting: only the changed value, key or line is touched, and a new key goes where sorted keys put it. A `catalog:` ref is bumped in its catalog, once for every package that uses it. An `npm:` alias keeps its target. The edits are the step's file changes: a dry run shows them and later steps see them, and they are written when the step ends.
+
+`bump`, `remove` and `rename` leave `peerDependencies` alone unless `kinds` names `"peer"`: a peer range says which versions a library supports, which is rarely what a migration means to change. They also leave `workspace:` refs alone (they point at one of your own packages), and so does `add`. Both show up in `skipped`:
+
+```ts
+await step(() => {
+  const bumped = dependencies().bump("react", "^19.0.0");
+  // [{ file: "pnpm-workspace.yaml", kind: "catalog", from: "^18.2.0", to: "^19.0.0", ... }]
+  return bumped.skipped;
+  // [{ file: "packages/shared/package.json", name: "react", kind: "peer", range: ">=17", reason: "peer" }]
+});
+
+await step(() => dependencies().bump("react", "^19.0.0", { kinds: ["prod", "dev", "peer"] }));
+```
+
+In a step's result, an edit's result is recorded as its array of edits; return `skipped` to keep that too.
 
 **The lockfile graph** is read the first time you use one of these, and kept for the step:
 
@@ -481,7 +496,7 @@ A package has the same edits for itself: `pkg.add(name, range, { kind })`, `pkg.
 | `nodes(name?)`, `node(name, version?)` | Nodes: every one, every installed version of `name`, or one (throws when several versions are installed and none is given) |
 | `workspaces()` | The repository's own packages as the lockfiles have them, Cargo and Python ones included |
 | `lockfiles`, `skipped` | The lockfiles read, and those that could not be read with why |
-| `needsInstall()` | Whether the lockfile is behind the `package.json` files |
+| `needsInstall()` | Whether the lockfile is behind the `package.json` files (see below for Yarn) |
 
 ```ts
 await step(() => {
@@ -499,11 +514,21 @@ The graph reads the target's `yarn.lock` (Yarn 1 and Yarn 2+), `pnpm-lock.yaml` 
 
 The graph describes the lockfile, so it stays as loaded after an edit: `declarations` show the new range, `installed` the old version, and `needsInstall()` is `true`. After `await step(install())`, the next step reads the new lockfile.
 
+`needsInstall()` compares each package's declarations with what the lockfile recorded for it: a name, section or range the lockfile doesn't have, or a dependency it doesn't resolve. It ignores peers. `yarn.lock` keeps no ranges for your own packages, so on Yarn a changed range shows only in the step that changed it; in a later step `needsInstall()` reads the changed `package.json` and can't tell. Added and removed dependencies show in any step. Call it in the step that edits, or run `install()` after edits on Yarn.
+
 A node has `ecosystem`, `name` and `version`; `local` tells whether it is one of the repository's own packages, and then `dir` is its directory. An edge has `from`, `to` (`null` when the lockfile does not resolve it), `name`, `range` and `kind`, and `edge.accepts(version)`. `node.releases({ accepting, newerThanMine })` lists the package's releases from the registry. What lists dependents is about the repository's own packages: `dependents` and `node.installedBy` return only edges from them unless you pass `includeThirdParty: true`.
 
 In a step's result, packages become `name@version`, nodes `name@version`, declarations `{ package, name, range, kind, resolved }` and edges `{ from, to, kind, range }`, and the step's type says so.
 
-**`install()`** is a step: `await step(install())` runs the repository's package manager in the target (or `install({ dir })`) so the lockfile catches up with the `package.json` files. By default it only refreshes the lockfile (`npm install --package-lock-only`, `pnpm install --lockfile-only`, `yarn install --mode=update-lockfile`, `bun install --lockfile-only`); `install({ lockfileOnly: false })` installs. It asks for approval like a shell command, a dry run does not run it, and it fails at once with a message when the package manager isn't installed. Registry requests fail fast instead of hanging; in Codemod's cloud runs only `registry.npmjs.org` and GitHub are reachable unless your organization allows more hosts.
+**`install()`** is a step: `await step(install())` runs the repository's package manager in the target (or `install({ dir })`) so the lockfile catches up with the `package.json` files. By default it only refreshes the lockfile (`npm install --package-lock-only`, `pnpm install --lockfile-only`, `yarn install --mode=update-lockfile`, `bun install --lockfile-only`); `install({ lockfileOnly: false })` installs. It asks for approval like a shell command, a dry run does not run it, and it fails at once with a message when the package manager isn't installed. Registry requests fail fast instead of hanging.
+
+In Codemod's cloud runs, only `registry.npmjs.org` and GitHub are reachable unless your organization allows more hosts. `install()` reads which registries the package manager uses (`registry=` and `@scope:registry=` in `.npmrc`, `npmRegistryServer` in `.yarnrc.yml`, or the default, which for Yarn is `registry.yarnpkg.com`), logs the ones a cloud run can't reach by default before it runs, and when the install fails, the error names them, with any unreachable host the command's output mentions:
+
+```
+install: yarn install --mode=update-lockfile exited with code 1:
+...
+This is a cloud run: it reaches only registry.npmjs.org and GitHub unless your organization allows more hosts, and the install needs registry.yarnpkg.com (Yarn's default). Allow it in your organization's egress settings, or point the registry at registry.npmjs.org.
+```
 
 `dependencies`, `registry` and `semver` run with the codemod CLI. The Node.js host that `codemod/testing` uses by default doesn't have them yet: test a workflow that uses them with `{ host: "quickjs" }`.
 
