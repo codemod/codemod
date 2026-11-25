@@ -179,6 +179,8 @@ pub struct AccurateAnalyzer {
     /// `resolve_import` answers by (importing directory, specifier, name). Emptied
     /// whenever a file gets new content, since exports may have moved.
     import_targets: RwLock<HashMap<ImportKey, Option<(PathBuf, ByteRange)>>>,
+    /// `resolve_module` answers by (importing directory, specifier).
+    module_paths: RwLock<HashMap<(PathBuf, String), Option<PathBuf>>>,
 }
 
 /// Importing file's directory, module specifier, export name.
@@ -242,6 +244,7 @@ impl AccurateAnalyzer {
             unreadable_files: RwLock::new(HashSet::new()),
             workspace_packages: RwLock::new(None),
             import_targets: RwLock::new(HashMap::new()),
+            module_paths: RwLock::new(HashMap::new()),
         }
     }
 
@@ -487,6 +490,31 @@ impl AccurateAnalyzer {
     /// tsconfig `paths` or `node_modules`. They are retried with the tsconfig
     /// nearest to the importing file, so nested `paths` aliases resolve.
     pub fn resolve_module(
+        &self,
+        specifier: &str,
+        from_path: &Path,
+    ) -> Result<PathBuf, JsSemanticError> {
+        let from_dir = from_path.parent().unwrap_or(&self.workspace_root);
+        let key = (from_dir.to_path_buf(), specifier.to_string());
+        let remembered = self.module_paths.read().get(&key).cloned();
+        let resolved = match remembered {
+            Some(resolved) => resolved,
+            None => {
+                let resolved = self.resolve_module_uncached(specifier, from_path).ok();
+                self.module_paths.write().insert(key, resolved.clone());
+                resolved
+            }
+        };
+        resolved.ok_or_else(|| JsSemanticError::ModuleResolution {
+            specifier: specifier.to_string(),
+            from_path: from_path.to_path_buf(),
+        })
+    }
+
+    /// [`Self::resolve_module`] without the memo. The answer depends on the
+    /// importing file's directory only; the resolvers cache what they read
+    /// from disk, so remembering the answer changes nothing.
+    fn resolve_module_uncached(
         &self,
         specifier: &str,
         from_path: &Path,
@@ -960,21 +988,29 @@ impl AccurateAnalyzer {
     /// hidden-file exclusion. Only useful when the underlying fs_root is
     /// a PhysicalFS whose tree matches `self.workspace_root` on disk.
     fn index_workspace_files_ignore(&self) -> SemanticResult<()> {
-        let walker = ignore::WalkBuilder::new(&self.workspace_root)
+        // The same walk, on several threads: directories are read in
+        // parallel, the set of files is the same.
+        let files = parking_lot::Mutex::new(Vec::new());
+        ignore::WalkBuilder::new(&self.workspace_root)
             .hidden(true)
             .git_ignore(true)
             .git_exclude(true)
-            .build();
-
-        let files: Vec<PathBuf> = walker
-            .flatten()
-            .map(|entry| entry.into_path())
-            .filter(|path| {
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                path.is_file() && matches!(ext, "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs")
-            })
-            .collect();
-        self.index_files(&files);
+            .build_parallel()
+            .run(|| {
+                Box::new(|entry| {
+                    if let Ok(entry) = entry {
+                        let path = entry.path();
+                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        if path.is_file()
+                            && matches!(ext, "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs")
+                        {
+                            files.lock().push(entry.into_path());
+                        }
+                    }
+                    ignore::WalkState::Continue
+                })
+            });
+        self.index_files(&files.into_inner());
 
         Ok(())
     }
@@ -1588,6 +1624,7 @@ impl AccurateAnalyzer {
         self.canonical_paths.write().clear();
         self.unreadable_files.write().clear();
         self.import_targets.write().clear();
+        self.module_paths.write().clear();
         *self.workspace_packages.write() = None;
     }
 
