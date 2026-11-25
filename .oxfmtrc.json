@@ -9,6 +9,7 @@
     "crates/cli/npm/types/llrt/**",
     "crates/cli/npm/type-tests/protocol-samples.ts",
     "packages/jssg-types/src/**",
-    "schemas/*.json"
+    "schemas/*.json",
+    "crates/codemod-sandbox/tests/integration/semantic/fixtures/javascript/codemods/*/expected/**"
   ]
 }

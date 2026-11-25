@@ -140,6 +140,9 @@ pub struct TestConfig<'a> {
     pub scope: ProviderScope,
     pub preprocess_files: Vec<&'a str>,
     pub expected_file: Option<&'a str>,
+    /// A fixture directory whose files the workspace must match after the
+    /// run, for codemods that also write other files.
+    pub expected_dir: Option<&'a str>,
     pub no_provider: bool,
 }
 
@@ -158,6 +161,7 @@ impl<'a> TestConfig<'a> {
             scope: ProviderScope::File,
             preprocess_files: Vec::new(),
             expected_file: None,
+            expected_dir: None,
             no_provider: false,
         }
     }
@@ -174,6 +178,11 @@ impl<'a> TestConfig<'a> {
 
     pub fn with_expected(mut self, expected: &'a str) -> Self {
         self.expected_file = Some(expected);
+        self
+    }
+
+    pub fn with_expected_dir(mut self, expected_dir: &'a str) -> Self {
+        self.expected_dir = Some(expected_dir);
         self
     }
 
@@ -259,6 +268,34 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
     };
 
     let result = execute_codemod_with_quickjs(options).await;
+
+    if let Some(expected_dir) = config.expected_dir {
+        // The target's own result is returned, not written: apply it first.
+        if let Ok(CodemodOutput {
+            primary: ExecutionResult::Modified(modified),
+            ..
+        }) = &result
+        {
+            fs::write(&target_path, &modified.content).expect("Failed to write target");
+        }
+        if let Err(e) = &result {
+            return Err(format!("Execution failed: {:?}", e));
+        }
+        let (_expected_temp, expected_files) = setup_test_workspace(expected_dir);
+        let mut names: Vec<_> = expected_files.keys().collect();
+        names.sort();
+        for name in names {
+            let expected = fs::read_to_string(&expected_files[name]).unwrap();
+            let actual = fs::read_to_string(temp_dir.path().join(name))
+                .unwrap_or_else(|_| format!("<{name} is missing>"));
+            if actual.trim() != expected.trim() {
+                return Err(format!(
+                    "{name} does not match.\nExpected:\n{expected}\n\nGot:\n{actual}"
+                ));
+            }
+        }
+        return Ok(None);
+    }
 
     match result {
         Ok(CodemodOutput {
@@ -373,6 +410,29 @@ macro_rules! jssg_test {
                 .with_preprocess(vec![$($preprocess),*]);
             let result = run_test(config).await;
             assert!(result.is_ok(), "Test failed: {:?}", result.err());
+        }
+    };
+
+    // Workspace scope; every file of the expected directory must match
+    (
+        name: $name:ident,
+        language: $lang:expr,
+        codemod: $codemod:literal,
+        fixture_dir: $fixture_dir:literal,
+        target: $target:literal,
+        scope: workspace,
+        expected_dir: $expected_dir:literal
+        $(,)?
+    ) => {
+        #[tokio::test]
+        async fn $name() {
+            use super::fixtures::{TestConfig, run_test, ProviderScope};
+
+            let config = TestConfig::new($codemod, $fixture_dir, $target, $lang)
+                .with_scope(ProviderScope::Workspace)
+                .with_expected_dir($expected_dir);
+            let result = run_test(config).await;
+            assert!(result.is_ok(), "Test failed: {}", result.err().unwrap_or_default());
         }
     };
 

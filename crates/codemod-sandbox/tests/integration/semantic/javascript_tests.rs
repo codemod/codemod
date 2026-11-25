@@ -73,6 +73,50 @@ jssg_test! {
     target: "view.jsx",
 }
 
+// Realistic codemods built on data flow and the call graph. They are the
+// yardstick for the API's ergonomics: each rewrites its fixture and the
+// result must match the expected directory.
+
+jssg_test! {
+    name: test_codemod_moment_to_immutable_dates,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "codemod_moment_immutable.js",
+    fixture_dir: "javascript/codemods/moment_immutable/input",
+    target: "schedule.js",
+    scope: workspace,
+    expected_dir: "javascript/codemods/moment_immutable/expected",
+}
+
+jssg_test! {
+    name: test_codemod_sql_taint_to_parameterized_queries,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "codemod_sql_taint.js",
+    fixture_dir: "javascript/codemods/sql_taint/input",
+    target: "routes.js",
+    scope: workspace,
+    expected_dir: "javascript/codemods/sql_taint/expected",
+}
+
+jssg_test! {
+    name: test_codemod_safe_delete_uncalled_exports,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "codemod_safe_delete.js",
+    fixture_dir: "javascript/codemods/safe_delete/input",
+    target: "utils.js",
+    scope: workspace,
+    expected_dir: "javascript/codemods/safe_delete/expected",
+}
+
+jssg_test! {
+    name: test_codemod_sync_to_async_propagation,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "codemod_async_propagation.js",
+    fixture_dir: "javascript/codemods/async_propagation/input",
+    target: "config.js",
+    scope: workspace,
+    expected_dir: "javascript/codemods/async_propagation/expected",
+}
+
 jssg_test! {
     name: test_definition_resolve_external_false,
     language: CodemodLang::Static(SupportLang::JavaScript),
