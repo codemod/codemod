@@ -38,6 +38,8 @@
 //! ```
 
 mod accurate;
+#[cfg(test)]
+mod bench;
 mod cache;
 mod dataflow;
 mod error;

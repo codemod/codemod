@@ -28,4 +28,5 @@ yarn_pnp = ["oxc_resolver/yarn_pnp"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+libc = "0.2"
 

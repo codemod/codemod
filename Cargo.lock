@@ -3624,6 +3624,7 @@ version = "1.18.7"
 dependencies = [
  "ignore",
  "language-core",
+ "libc",
  "log",
  "oxc 0.99.0",
  "oxc_resolver",
