@@ -283,13 +283,7 @@ export interface HostTask {
   readonly callbacks?: Readonly<Record<string, Extracted>>;
 }
 
-export interface DependencyGraphTask {
-  readonly [TASK]: "dependencyGraph";
-  readonly lockfiles: string[] | undefined;
-  readonly callback: Extracted;
-}
-
-export type Task = ForEachFileTask | DependencyGraphTask | HostTask;
+export type Task = ForEachFileTask | HostTask;
 
 const HANDLER = Symbol.for("codemod.workflow.handler");
 
@@ -451,28 +445,23 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
   }
 
   /**
-   * Read the target's lockfiles into one dependency graph and run `callback`
-   * with a live handle on it, in its own isolate. Only what the callback
-   * returns is recorded.
+   * Run the repository's package manager so its lockfile catches up with
+   * the manifests (`codemod/deps`): `install({ dir, lockfileOnly })`.
    */
-  function dependencyGraph(...args: unknown[]): DependencyGraphTask {
-    // `dependencyGraph(callback)` or `dependencyGraph(options, callback)`.
-    const [options, callback] = args.length < 2 ? [undefined, args[0]] : args;
-    const extracted = callbackOf(callback);
-    if (!extracted || extracted.fn) {
-      throw new TypeError(
-        "dependencyGraph: the callback was not extracted by the build; run the workflow through the codemod-workflow build",
-      );
+  function install(options?: unknown): HostTask {
+    if (options !== undefined && !isRecord(options)) {
+      throw new TypeError("install: options must be an object");
     }
-    const { lockfiles, ...rest } = isRecord(options) ? options : {};
+    const { dir, lockfileOnly, ...rest } = options ?? {};
     const unknown = Object.keys(rest);
-    if (unknown.length) throw new TypeError(`dependencyGraph: unknown option '${unknown[0]}'`);
-    return Object.freeze({
-      [TASK]: "dependencyGraph" as const,
-      lockfiles:
-        lockfiles === undefined ? undefined : globs(lockfiles, "lockfiles", "dependencyGraph: "),
-      callback: extracted,
-    });
+    if (unknown.length) throw new TypeError(`install: unknown option '${unknown[0]}'`);
+    if (dir !== undefined && typeof dir !== "string") {
+      throw new TypeError("install: dir must be a path relative to the target");
+    }
+    if (lockfileOnly !== undefined && typeof lockfileOnly !== "boolean") {
+      throw new TypeError("install: lockfileOnly must be a boolean");
+    }
+    return hostTask("install", { dir, lockfileOnly });
   }
 
   /**
@@ -656,7 +645,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     __callback,
     __importedCallback,
     forEachFile,
-    dependencyGraph,
+    install,
     shell,
     astGrep,
     shard,
@@ -1003,13 +992,6 @@ export function createRuntime(host: Host) {
         reducer = task.reducer.callback.fn;
       }
       fn = task.callback.fn;
-    } else if (isTask(task) && task[TASK] === "dependencyGraph") {
-      content = withoutUndefined({
-        kind: "dependencyGraph",
-        lockfiles: task.lockfiles,
-        callback: task.callback.id,
-        captures: capturesOf(task.callback),
-      }) as TaskContent;
     } else if (isTask(task) && task[TASK] === "host") {
       content = task.content;
       for (const [field, callback] of Object.entries(task.callbacks ?? {})) {
@@ -1364,10 +1346,8 @@ function defaultLabel(position: number, content: TaskContent): string {
       return `wait for ${String(content.name)}`;
     case "codemod":
       return `codemod ${String(content.source)}`;
-    case "dependencyGraph": {
-      const lockfiles = content.lockfiles as string[] | undefined;
-      return lockfiles ? `dependencyGraph ${lockfiles.join(", ")}` : "dependencyGraph";
-    }
+    case "install":
+      return content.dir ? `install ${String(content.dir)}` : "install";
     case "agent":
       return `agent: ${truncate(content.prompt)}`;
     default:

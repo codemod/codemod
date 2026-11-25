@@ -757,16 +757,26 @@ export default async function main() {
 fn importing_a_dependency_api_from_the_workflow_module_says_it_moved_to_codemod_deps() {
     let error = build_error(
         r#"
+import { step, semver } from "codemod/workflow";
+export default async function main() {
+  await step(() => semver.compare("1.0.0", "2.0.0"));
+}
+"#,
+    );
+    assert!(
+        error.contains(r#"import { semver } from "codemod/deps""#),
+        "{error}"
+    );
+    // dependencyGraph is gone from both modules.
+    let error = build_error(
+        r#"
 import { step, dependencyGraph } from "codemod/workflow";
 export default async function main() {
   await step(dependencyGraph({}, (g) => g.workspaces()));
 }
 "#,
     );
-    assert!(
-        error.contains(r#"import { dependencyGraph } from "codemod/deps""#),
-        "{error}"
-    );
+    assert!(error.contains("dependencyGraph() was removed"), "{error}");
 }
 
 #[test]

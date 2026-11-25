@@ -63,8 +63,8 @@ export const {
   __callback,
   __importedCallback,
   __evaluate,
-  // `codemod/deps` exports it as `dependencyGraph`.
-  dependencyGraph: __dependencyGraph,
+  // `codemod/deps` exports it as `install`.
+  install: __install,
   forEachFile,
   shell,
   astGrep,

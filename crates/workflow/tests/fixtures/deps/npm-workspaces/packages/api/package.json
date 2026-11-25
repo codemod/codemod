@@ -1,0 +1,8 @@
+{
+  "name": "@demo/api",
+  "version": "1.0.0",
+  "dependencies": {
+    "@demo/shared": "*",
+    "moment": "^2.29.4"
+  }
+}

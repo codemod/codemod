@@ -385,7 +385,7 @@ export default async function main() {
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
 | `agent(prompt, options)` | Hand a prompt to a coding agent. See [Coding agents](#coding-agents). |
 | `installSkill({ package, path, harness, scope, force })` | Install a package's agent skill. |
-| `dependencyGraph(callback)`, `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback`, written inline, on it. Imported from `codemod/deps`. See [Dependencies](#dependencies). Result: what the callback returns. |
+| `install({ dir, lockfileOnly })` | Run the repository's package manager so its lockfile catches up with its `package.json` files. Imported from `codemod/deps`. See [Dependencies](#dependencies). Result: `{ packageManager, command, ran, lockfile, changed }`. |
 | `approval(message)` | Wait for a person to approve. See [Approvals](#approvals). |
 | `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base, branch })` | Git automation. Imported from `codemod/git`. See [Git steps](#git-steps). |
 
@@ -421,67 +421,120 @@ Steps without git can still run in parallel, before or after. Separate checkouts
 
 ### Dependencies
 
-`dependencyGraph`, `registry` and `semver` come from `codemod/deps`. `dependencyGraph` reads the target's `yarn.lock` (Yarn 1 and Yarn 2+), `pnpm-lock.yaml` (lockfile 6.0 and later), `package-lock.json` and `npm-shrinkwrap.json` (v1, v2 and v3), `bun.lock`, `Cargo.lock`, `uv.lock`, `poetry.lock` and `Pipfile.lock`, with each workspace's `package.json`, `Cargo.toml`, `pyproject.toml` or `Pipfile` for declared ranges and dependency kinds. A Yarn 1 project's workspaces are the directories its root `package.json`'s `workspaces` globs match. Bun's binary `bun.lockb` and Go lockfiles are not read.
+`codemod/deps` answers what a codemod needs to know about the repository's dependencies, and edits them:
 
-Python packages have the ecosystem `pypi`, and their names are normalized as PyPI does, so `Typing_Extensions` is `typing-extensions`. `Pipfile.lock` keeps no dependencies between packages, so only the packages the `Pipfile` names are reached from the project.
+```ts
+import { dependencies, install, registry, semver } from "codemod/deps";
+```
 
-Without `lockfiles`, only the lockfiles at the target's root are read, since nested ones are usually fixtures or examples, and one that cannot be read is left out and listed in `g.skipped` as `{ lockfile, error }`. A target with no lockfile at its root, or none that can be read, gets an empty graph: `g.lockfiles` is empty, and the callback still runs. `lockfiles` picks which lockfiles are read instead, as a glob or a list of globs relative to the target: `**/yarn.lock` reads every `yarn.lock`, the root's included. When you name lockfiles you expect them, so globs that match no lockfile fail the step, and so does a lockfile they match that cannot be read.
-
-`dependencyGraph`, `registry` and `semver` run with the codemod CLI. The Node.js host that `codemod/testing` uses by default doesn't have them yet: test a workflow that uses them with `{ host: "quickjs" }`.
-
-The callback gets the graph itself, not a copy. It runs in its own isolate, like a `forEachFile` callback, may be `async`, and only what it returns is recorded:
+`dependencies()` works inside a step: a function step, a `forEachFile` callback, or a file they import. It reads the repository's `package.json` files right away, which needs no lockfile, and reads the lockfiles only when you first ask a lockfile question. In the workflow body it throws, so what it reads is always recorded with a step.
 
 ```ts
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies, install } from "codemod/deps";
 
-const usesMui = await step(
-  dependencyGraph((g) =>
-    g.dependents("@material-ui/core", { kinds: "prod" }).map((edge) => edge.from.dir),
-  ),
-);
+export default async function main() {
+  const users = await step("Who uses moment", () =>
+    dependencies().declarations("moment").map((d) => ({ dir: d.package.dir, range: d.resolved })),
+  );
+  if (!users.length) return { skipped: "moment is not declared" };
+
+  await step("Bump moment", () => dependencies().bump("moment", "^2.30.1"));
+  await step("Refresh the lockfile", install());
+}
 ```
 
-| On the graph | Returns |
+**Packages and declarations** (read from `package.json`; no lockfile needed):
+
+| On `dependencies()` | Returns |
 |---|---|
-| `g.workspaces()` | The repository's own packages |
-| `g.nodes(name?)` | Every node, or every installed version of `name` |
-| `g.node(name, version?)` | One node, or `undefined` when none matches. Throws when several versions of `name` are installed and no version is given: use `g.nodes(name)` |
-| `g.dependents(name, { kinds, includeThirdParty })` | Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the peer it was installed with) |
-| `g.chains({ from, to, kinds })` | The shortest chain from each `from` node (default: every one of the repository's own packages) to a `to` node, `from` first. Chains pass through the repository's own packages |
-| `node.dependencies({ kinds })` | Edges the node declares |
-| `node.installedBy({ kinds, includeThirdParty })` | Edges installed onto this exact node |
-| `node.releases({ accepting, newerThanMine })` | The package's releases from the registry, each with `breaking` relative to the installed version |
-| `edge.accepts(version)` | Whether the edge's declared range accepts a version: `true`, `false`, or `null` when it cannot tell |
+| `uses(name, { kinds })` | Whether any of the repository's packages declares `name` |
+| `declarations(name, { kinds, in })` | Every declaration of `name`, by package dir |
+| `packages({ all })` | The repository's packages: the root, then the workspaces it declares. `{ all: true }`: every `package.json` under the target |
+| `package(dirOrName)` | One package |
+| `packageOf(file, { all })` | The package that owns a file: the nearest of the repository's packages at or above it, or with `{ all: true }` the nearest `package.json` |
+| `packageManager` | `{ name, version, lockfile, detectedFrom }`: npm, pnpm, yarn or bun; `null` without a root `package.json` |
+| `catalogs()` | pnpm, bun and Yarn catalogs: `{ name, file, entries }` |
 
-What lists dependents is about the repository's own packages: `g.dependents` and `node.installedBy` return only edges from them unless you pass `includeThirdParty: true`, and `g.chains` starts from them unless you pass the `from` nodes. So `g.dependents("react")` is the repository's packages that declare React, not every library that does.
+The packages are the root `package.json` and the workspaces it declares (`workspaces`, or `pnpm-workspace.yaml`'s `packages`). Without a workspace declaration, only the root counts, so fixtures and examples with their own `package.json` are left out of `packages()`, `uses()` and `declarations()`. `packages({ all: true })` lists every `package.json` under the target (`.gitignore` respected, `node_modules` skipped), with `member: false` on those that aren't the repository's packages; you can edit those too, by the package or with `in`.
 
-A node has `ecosystem`, `name` and `version`, and `dir` (the directory, relative to the target) when it is one of the repository's own packages, which `local` tells. Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to` (`null` when the lockfile does not resolve it), `name`, `range` and `kind`. In a step's result, nodes become `name@version` text and edges `{ from, to, kind, range }`.
+A declaration has `package`, `name`, `range` (as written), `kind` (`prod`, `dev`, `peer` or `optional`) and `protocol`. `resolved` is the range it means: a `catalog:` ref gives its catalog entry, a `workspace:` ref the local package's version (`workspace:^` with 1.2.0 gives `^1.2.0`), and an `npm:` alias its range. `readable` says whether `semver` can read `resolved` (git, file, url and tags such as `latest` can't). `d.accepts(version)` and `d.minVersion()` check it, and `d.installed()` gives the node the lockfile installed for it.
 
-Who uses a package, and how: `g.dependents` gives the repository's packages that declare it, with their ranges, and `g.chains` the ones that reach it through other packages. A chain goes through the repository's own packages, so in a monorepo where `packages/web` depends on `@demo/shared`, which depends on `moment`, web reaches moment through `@demo/shared`:
+**Edits** change the `package.json` files (and catalogs) where a dependency is declared. Each returns an array of what it changed, `{ file, package, name, kind, from, to }`, with what it left alone as its `skipped`: `{ file, package, name, kind, range, reason }`, where `reason` is `"peer"` or `"workspace"`:
+
+| Edit | Does |
+|---|---|
+| `bump(name, range, { kinds, in })` | Sets the range everywhere `name` is declared. `range` can be a function of the declaration; returning `undefined` leaves it |
+| `add(name, range, { to, kind })` | Declares `name` in a package (default: the root) and section (default: `prod`) |
+| `remove(name, { kinds, in })` | Removes `name` from every section that declares it |
+| `rename(from, to, { range, kinds, in })` | Renames `from` where declared, keeping its section and, unless `range` is given, its range |
+
+A package has the same edits for itself: `pkg.add(name, range, { kind })`, `pkg.bump(...)`, `pkg.remove(...)`, `pkg.rename(...)`. Edits keep the file's formatting: only the changed value, key or line is touched, and a new key goes where sorted keys put it. A `catalog:` ref is bumped in its catalog, once for every package that uses it. An `npm:` alias keeps its target. The edits are the step's file changes: a dry run shows them and later steps see them, and they are written when the step ends.
+
+`bump`, `remove` and `rename` leave `peerDependencies` alone unless `kinds` names `"peer"`: a peer range says which versions a library supports, which is rarely what a migration means to change. They also leave `workspace:` refs alone (they point at one of your own packages), and so does `add`. Both show up in `skipped`:
 
 ```ts
-const moment = await step(dependencyGraph((g) => {
-  const installed = g.nodes("moment");
-  return {
-    installed: installed.map((node) => node.version),
-    // Declared in a package.json, Cargo.toml or pyproject.toml.
-    declaredBy: g.dependents("moment")
-      .map((edge) => ({ dir: edge.from.dir, range: edge.range, kind: edge.kind })),
-    // Reached only through other packages.
-    reachedBy: g.chains({ to: installed })
-      .filter((chain) => chain.length > 2)
-      .map((chain) => ({ dir: chain[0].dir, via: chain.slice(1, -1).map((node) => node.name) })),
-  };
-}));
-// { installed: ["2.29.4"],
-//   declaredBy: [{ dir: "packages/api", range: "^2.29.4", kind: "prod" }, { dir: "packages/shared", range: "^2.29.4", kind: "prod" }],
-//   reachedBy: [{ dir: "packages/web", via: ["@demo/shared"] }] }
+await step(() => {
+  const bumped = dependencies().bump("react", "^19.0.0");
+  // [{ file: "pnpm-workspace.yaml", kind: "catalog", from: "^18.2.0", to: "^19.0.0", ... }]
+  return bumped.skipped;
+  // [{ file: "packages/shared/package.json", name: "react", kind: "peer", range: ">=17", reason: "peer" }]
+});
+
+await step(() => dependencies().bump("react", "^19.0.0", { kinds: ["prod", "dev", "peer"] }));
 ```
+
+In a step's result, an edit's result is recorded as its array of edits; return `skipped` to keep that too.
+
+**The lockfile graph** is read the first time you use one of these, and kept for the step:
+
+| On `dependencies()` | Returns |
+|---|---|
+| `installed(name)` | Installed versions of `name`, lowest first |
+| `chains({ from, to, kinds })` | The shortest chain from each `from` (default: every one of the repository's own packages) to a `to`, `from` first. `to` and `from` take package names, packages or nodes |
+| `dependents(name, { kinds, includeThirdParty })` | Edges that declare a dependency on `name` |
+| `nodes(name?)`, `node(name, version?)` | Nodes: every one, every installed version of `name`, or one (throws when several versions are installed and none is given) |
+| `workspaces()` | The repository's own packages as the lockfiles have them, Cargo and Python ones included |
+| `lockfiles`, `skipped` | The lockfiles read, and those that could not be read with why |
+| `needsInstall()` | Whether the lockfile is behind the `package.json` files (see below for Yarn) |
+
+```ts
+await step(() => {
+  const deps = dependencies();
+  return {
+    chains: deps.chains({ to: "moment" }).map((chain) => chain.join(" > ")),
+    // ["@demo/api@1.0.0 > moment@2.29.4", "@demo/web@1.0.0 > @demo/shared@1.0.0 > moment@2.29.4", ...]
+    lodash: deps.nodes("lodash").map((node) => [String(node), node.installedBy({ includeThirdParty: true }).map((e) => String(e.from))]),
+    sharedUsers: deps.dependents("@demo/shared").map((edge) => edge.from.dir),
+  };
+});
+```
+
+The graph reads the target's `yarn.lock` (Yarn 1 and Yarn 2+), `pnpm-lock.yaml` (lockfile 6.0 and later), `package-lock.json` and `npm-shrinkwrap.json` (v1, v2 and v3), `bun.lock`, `Cargo.lock`, `uv.lock`, `poetry.lock` and `Pipfile.lock`, with each workspace's `package.json`, `Cargo.toml`, `pyproject.toml` or `Pipfile`. Bun's binary `bun.lockb` and Go lockfiles are not read. Python packages have the ecosystem `pypi`, with names normalized as PyPI does. Only the lockfiles at the target's root are read; `dependencies({ lockfiles: "**/yarn.lock" })` picks others, and then a lockfile that cannot be read fails the call. With no lockfile the graph is empty.
+
+The graph describes the lockfile, so it stays as loaded after an edit: `declarations` show the new range, `installed` the old version, and `needsInstall()` is `true`. After `await step(install())`, the next step reads the new lockfile.
+
+`needsInstall()` compares each package's declarations with what the lockfile recorded for it: a name, section or range the lockfile doesn't have, or a dependency it doesn't resolve. It ignores peers. `yarn.lock` keeps no ranges for your own packages, so on Yarn a changed range shows only in the step that changed it; in a later step `needsInstall()` reads the changed `package.json` and can't tell. Added and removed dependencies show in any step. Call it in the step that edits, or run `install()` after edits on Yarn.
+
+A node has `ecosystem`, `name` and `version`; `local` tells whether it is one of the repository's own packages, and then `dir` is its directory. An edge has `from`, `to` (`null` when the lockfile does not resolve it), `name`, `range` and `kind`, and `edge.accepts(version)`. `node.releases({ accepting, newerThanMine })` lists the package's releases from the registry. What lists dependents is about the repository's own packages: `dependents` and `node.installedBy` return only edges from them unless you pass `includeThirdParty: true`.
+
+In a step's result, packages become `name@version`, nodes `name@version`, declarations `{ package, name, range, kind, resolved }` and edges `{ from, to, kind, range }`, and the step's type says so.
+
+**`install()`** is a step: `await step(install())` runs the repository's package manager in the target (or `install({ dir })`) so the lockfile catches up with the `package.json` files. By default it only refreshes the lockfile (`npm install --package-lock-only`, `pnpm install --lockfile-only`, `yarn install --mode=update-lockfile`, `bun install --lockfile-only`); `install({ lockfileOnly: false })` installs. It asks for approval like a shell command, a dry run does not run it, and it fails at once with a message when the package manager isn't installed. Registry requests fail fast instead of hanging.
+
+In Codemod's cloud runs, only `registry.npmjs.org` and GitHub are reachable unless your organization allows more hosts. `install()` reads which registries the package manager uses (`registry=` and `@scope:registry=` in `.npmrc`, `npmRegistryServer` in `.yarnrc.yml`, or the default, which for Yarn is `registry.yarnpkg.com`), logs the ones a cloud run can't reach by default before it runs, and when the install fails, the error names them, with any unreachable host the command's output mentions:
+
+```
+install: yarn install --mode=update-lockfile exited with code 1:
+...
+This is a cloud run: it reaches only registry.npmjs.org and GitHub unless your organization allows more hosts, and the install needs registry.yarnpkg.com (Yarn's default). Allow it in your organization's egress settings, or point the registry at registry.npmjs.org.
+```
+
+`dependencies`, `registry` and `semver` run with the codemod CLI. The Node.js host that `codemod/testing` uses by default doesn't have them yet: test a workflow that uses them with `{ host: "quickjs" }`.
 
 ### `registry` and `semver`
 
-`registry.npm(name)`, `registry.cargo(name)` and `registry.pypi(name)` resolve to `{ ecosystem, name, versions }`, oldest first, with each release's `dependencies`, `peerDependencies` and `optionalDependencies`. PyPI lists dependencies per file rather than per release, so PyPI releases have none, and `releases({ accepting })` on a Python package throws. They work inside a function step or a `forEachFile` or `dependencyGraph` callback, and in the files those import, so the answer is recorded with the step and a resumed run does not ask again; in the workflow body they reject. Canceling the run, or a step's `timeout`, stops a lookup in progress. Each package is fetched once per run, and lookups started together are fetched together:
+`registry.npm(name)`, `registry.cargo(name)` and `registry.pypi(name)` resolve to `{ ecosystem, name, versions }`, oldest first, with each release's `dependencies`, `peerDependencies` and `optionalDependencies`. PyPI lists dependencies per file rather than per release, so PyPI releases have none, and `releases({ accepting })` on a Python package throws. They work inside a function step or a `forEachFile` callback, and in the files those import, so the answer is recorded with the step and a resumed run does not ask again; in the workflow body they reject. Canceling the run, or a step's `timeout`, stops a lookup in progress. Each package is fetched once per run, and lookups started together are fetched together:
 
 ```ts
 import { step } from "codemod/workflow";
@@ -493,7 +546,7 @@ const ready = await step("Releases accepting React 19", async () => {
 });
 ```
 
-`semver` has `satisfies(version, range)` (`null` for ranges it cannot read, such as `workspace:`), `compare`, `gt`, `lt`, `isBreaking(from, to)` and `isPrerelease`. Pass `{ ecosystem: "cargo" }` for Cargo's rules, or `{ ecosystem: "pypi" }` for PEP 440, which also reads Poetry's `^1.2`, `~1.2` and `||`.
+`semver` has `satisfies(version, range)` (`null` for ranges it cannot read, such as `workspace:`), `compare`, `gt`, `gte`, `lt`, `lte`, `isBreaking(from, to)`, `isPrerelease`, `minVersion(range)` (`^18.2.0` gives `18.2.0`), `major(versionOrRange)`, `coerce(text)` (`pnpm@10.1` gives `10.1.0`), `maxSatisfying(versions, range)` and `validRange(range)`, so a codemod needs no regex on version strings. Pass `{ ecosystem: "cargo" }` for Cargo's rules, or `{ ecosystem: "pypi" }` for PEP 440, which also reads Poetry's `^1.2`, `~1.2` and `||`.
 
 ### Shell commands
 
@@ -699,7 +752,7 @@ The answers are typed from the questions: `answers.smell` above is `"swallowed" 
 - **Dry runs ask too**: asking changes no files. A dry run of a workflow that uses `codemod/assess` costs the same requests as a real one.
 - **Rate limits.** At most 4 requests are in flight at once across the run (`DECISION_CONCURRENCY` changes it). Requests that hit a rate limit (429), time out or fail with a server error are retried up to 3 times, waiting as the server's `Retry-After` says, or 0.5 s doubling to 8 s.
 - **Usage.** A `forEachFile` step whose callback asked has `assessed: { assessments, calls, inputTokens, outputTokens }` in its result, and both kinds of steps log it.
-- **Where it works.** In `forEachFile` callbacks and function steps, and in the files they import. In the workflow body, `assess()` rejects; the question builders work anywhere. Reducers, `shard` functions and `dependencyGraph` callbacks cannot assess.
+- **Where it works.** In `forEachFile` callbacks and function steps, and in the files they import. In the workflow body, `assess()` rejects; the question builders work anywhere. Reducers and `shard` functions cannot assess.
 - An answer the model declines (OpenAI's refusals), or one outside the question's options, fails the file.
 
 ### Choosing the model

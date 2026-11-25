@@ -99,9 +99,12 @@ declare module "codemod:workflow" {
                   ? NotJson<"a Date: use date.toISOString()">
                   : T extends RegExp
                     ? NotJson<"a RegExp: use its source string">
-                    : T extends object
-                      ? { [K in keyof T]: JsonCompatible<T[K]> }
-                      : NotJson<"not JSON">;
+                    : // Recorded as what its toJSON() gives, such as a codemod/deps package.
+                      T extends { toJSON(): unknown }
+                      ? T
+                      : T extends object
+                        ? { [K in keyof T]: JsonCompatible<T[K]> }
+                        : NotJson<"not JSON">;
 
   /** Step results are deeply frozen. */
   export type Frozen<T> = T extends (...args: never[]) => unknown
@@ -250,8 +253,26 @@ declare module "codemod:workflow" {
    */
   export type Checked<T> = T & NoInfer<JsonCompatible<T>>;
 
-  /** A function step that returns nothing records `null`. */
-  export type StepValue<T> = [T] extends [void | undefined] ? null : Exclude<T, void | undefined>;
+  /**
+   * What a value becomes in a step's result: objects with `toJSON()` (such as
+   * `codemod/deps` packages and nodes) are recorded as what it returns.
+   */
+  export type Recorded<T> = unknown extends T
+    ? T
+    : T extends { toJSON(): infer Json }
+      ? Recorded<Json>
+      : T extends (...args: never[]) => unknown
+        ? T
+        : T extends readonly (infer U)[]
+          ? Recorded<U>[]
+          : T extends object
+            ? { [K in keyof T]: Recorded<T[K]> }
+            : T;
+
+  /** A function step that returns nothing records `null`; `toJSON()` values are recorded as their JSON. */
+  export type StepValue<T> = [T] extends [void | undefined]
+    ? null
+    : Recorded<Exclude<T, void | undefined>>;
 
   /** One glob or several. */
   export type Globs = string | readonly string[];

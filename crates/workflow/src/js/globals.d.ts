@@ -34,23 +34,24 @@ interface RawHost {
   stop(): void;
 }
 
+/** Answers marked "answer" are JSON `{ ok: true, value }` or `{ ok: false, error }`. */
 interface DependencyHost {
   /** One batch of lookups: `{ ok: true, found: { name: releases } }` or `{ ok: false, error }`. */
   releases(ecosystem: string, names: string): Promise<string>;
   semver(op: string, ecosystem: string, a: string, b: string): string;
-}
-
-interface GraphHost {
-  /** The lockfiles read, as JSON. */
-  lockfiles: string;
-  /** Lockfiles found but not read, as JSON `{ lockfile, error }[]`. */
-  skipped: string;
-  node(id: number): string;
+  /** The manifests, read through the step's files (answer). */
+  project(): string;
+  /** Apply manifest changes (JSON) through the step's files; the edits (answer). */
+  edit(changes: string): string;
+  /** Load the lockfile graph for `only` (JSON globs): `{ id, lockfiles, skipped }` (answer). */
+  graph(only: string): string;
+  node(graph: number, id: number): string;
   /** `"all"`, `"workspaces"` or `"named"`, with the name. */
-  nodes(which: string, name: string): string;
-  /** `"out"` or `"in"` with a node id, or `"named"` with a package name; kinds comma-separated. */
-  edges(direction: string, key: string, kinds: string): string;
-  chains(from: string, to: string, kinds: string): string;
+  nodes(graph: number, which: string, name: string): string;
+  /** `"out"` or `"in"` with a node id, or `"named"` with a package name; kinds comma-separated (answer). */
+  edges(graph: number, direction: string, key: string, kinds: string): string;
+  /** (answer) */
+  chains(graph: number, from: string, to: string, kinds: string): string;
 }
 
 // `var` is how a global is declared; these are properties of `globalThis`.
@@ -62,12 +63,8 @@ declare var __workflowSettle: (id: number, ok: boolean, payload: string) => void
 declare var __workflowReplayNext: () => boolean;
 /** No step starts from here on. */
 declare var __workflowClose: () => void;
-/** In isolates (crates/workflow/src/deps_host.rs): `registry` and `semver`. */
+/** In isolates (crates/workflow/src/deps_host.rs): `dependencies()`, `registry` and `semver`. */
 declare var __dependencyHost: DependencyHost;
-/** In dependencyGraph isolates (tasks/dependency_graph.rs): the graph, over node ids and JSON. */
-declare var __graphHost: GraphHost;
-/** In dependencyGraph isolates: the live graph handed to the callback. */
-declare var __dependencyGraph: unknown;
 /* eslint-enable no-var */
 
 /** What `jssg_compat.ts` uses of `codemod/ast-grep` (crates/cli/npm/types/modules/ast-grep.d.ts). */

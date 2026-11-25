@@ -1,0 +1,14 @@
+{
+  "name": "bun-demo",
+  "workspaces": {
+    "packages": [
+      "packages/*"
+    ],
+    "catalog": {
+      "react": "^18.2.0"
+    }
+  },
+  "dependencies": {
+    "react": "catalog:"
+  }
+}

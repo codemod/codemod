@@ -1,0 +1,79 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+catalogs:
+  default:
+    react:
+      specifier: ^18.2.0
+      version: 18.2.0
+  legacy:
+    moment:
+      specifier: 2.29.4
+      version: 2.29.4
+
+importers:
+
+  .: {}
+
+  packages/shared:
+    dependencies:
+      lodash:
+        specifier: ^3.10.0
+        version: 3.10.1
+      moment:
+        specifier: catalog:legacy
+        version: 2.29.4
+
+  packages/web:
+    dependencies:
+      '@demo/shared':
+        specifier: workspace:^
+        version: link:../shared
+      lodash:
+        specifier: ^4.17.21
+        version: 4.17.21
+      react:
+        specifier: 'catalog:'
+        version: 18.2.0
+
+packages:
+
+  js-tokens@4.0.0:
+    resolution: {integrity: sha512-a}
+
+  lodash@3.10.1:
+    resolution: {integrity: sha512-b}
+
+  lodash@4.17.21:
+    resolution: {integrity: sha512-c}
+
+  loose-envify@1.4.0:
+    resolution: {integrity: sha512-d}
+    hasBin: true
+
+  moment@2.29.4:
+    resolution: {integrity: sha512-e}
+
+  react@18.2.0:
+    resolution: {integrity: sha512-f}
+
+snapshots:
+
+  js-tokens@4.0.0: {}
+
+  lodash@3.10.1: {}
+
+  lodash@4.17.21: {}
+
+  loose-envify@1.4.0:
+    dependencies:
+      js-tokens: 4.0.0
+
+  moment@2.29.4: {}
+
+  react@18.2.0:
+    dependencies:
+      loose-envify: 1.4.0
