@@ -185,6 +185,12 @@ pub struct FlowOptions {
     /// (`flowsTo({ stopAt: ["jsx-child"] })`: the first sink, not every
     /// element around it).
     pub stop_at: KindSet<FlowEdgeKind>,
+    /// Cross function boundaries inside the workspace: a parameter continues
+    /// at its callers' arguments, a call's result at the callee's return
+    /// values (and forward: an argument into the callee's parameter, a return
+    /// value out to the call sites). A value that enters a function through
+    /// a call leaves it through that same call. Default: false.
+    pub interprocedural: bool,
 }
 
 impl Default for FlowOptions {
@@ -194,6 +200,7 @@ impl Default for FlowOptions {
             through_calls: true,
             max_depth: None,
             stop_at: KindSet::default(),
+            interprocedural: false,
         }
     }
 }
@@ -219,6 +226,10 @@ pub struct FlowStep {
     /// `steps`. None for a step reached directly from the queried node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<u32>,
+    /// With `interprocedural`, the step `from` points at can be in another
+    /// file: its index in the result's `files`. None means this step's file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_file: Option<u32>,
 }
 
 /// Steps in one file, with its content so callers can build a syntax tree.

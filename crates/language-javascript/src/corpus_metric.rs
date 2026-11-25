@@ -55,6 +55,12 @@ struct Totals {
     named_callers_known: usize,
     named_unknown_why: BTreeMap<&'static str, usize>,
     blocking_names: HashMap<String, usize>,
+    /// Sampled argument queries: parameter boundaries reached without and
+    /// with `interprocedural`, and the time the interprocedural ones took.
+    ip_samples: usize,
+    ip_param_boundaries: (usize, usize),
+    ip_steps: (usize, usize),
+    ip_time: std::time::Duration,
 }
 
 /// Globals whose methods are the platform's, never workspace functions:
@@ -482,6 +488,56 @@ fn write_edges(
     std::fs::write(out, text).unwrap();
 }
 
+/// Every 25th call argument: `flowsFrom()` with and without
+/// `interprocedural`, counting the parameters still marked as boundaries.
+fn measure_interprocedural(
+    analyzer: &AccurateAnalyzer,
+    files: &[(PathBuf, std::sync::Arc<FileFlow>)],
+    totals: &mut Totals,
+) {
+    use language_core::FlowOptions;
+    // 1 when the answer reaches a real source (literal, object, function…).
+    let count = |result: &language_core::FlowResult| {
+        usize::from(
+            result
+                .files
+                .iter()
+                .flat_map(|f| &f.steps)
+                .any(|s| real_source(s.kind)),
+        )
+    };
+    let mut n = 0usize;
+    for (file, flow) in files {
+        for call in &flow.calls {
+            for argument in &call.args {
+                n += 1;
+                if !n.is_multiple_of(25) {
+                    continue;
+                }
+                let range = flow.nodes[*argument as usize].range;
+                let plain =
+                    crate::flow_query::data_flow(analyzer, file, range, FlowOptions::default());
+                let started = std::time::Instant::now();
+                let ip = crate::flow_query::data_flow(
+                    analyzer,
+                    file,
+                    range,
+                    FlowOptions {
+                        interprocedural: true,
+                        ..FlowOptions::default()
+                    },
+                );
+                totals.ip_time += started.elapsed();
+                totals.ip_samples += 1;
+                totals.ip_param_boundaries.0 += count(&plain);
+                totals.ip_param_boundaries.1 += count(&ip);
+                totals.ip_steps.0 += plain.files.iter().map(|f| f.steps.len()).sum::<usize>();
+                totals.ip_steps.1 += ip.files.iter().map(|f| f.steps.len()).sum::<usize>();
+            }
+        }
+    }
+}
+
 fn measure_repo(root: &Path, totals: &mut Totals) {
     let analyzer = AccurateAnalyzer::new(root.to_path_buf());
     let files = analyzer.workspace_files();
@@ -542,6 +598,7 @@ fn measure_repo(root: &Path, totals: &mut Totals) {
         }
     }
     measure_callers_known(&analyzer, &repo_files, totals);
+    measure_interprocedural(&analyzer, &repo_files, totals);
     if let Ok(out) = std::env::var("DATAFLOW_EDGES_OUT") {
         write_edges(&analyzer, root, &repo_files, Path::new(&out));
     }
@@ -667,6 +724,16 @@ fn corpus_metric() {
         top(&t.unresolved_names, 15)
     );
     let _ = writeln!(out, "arguments: {}  reach a real source {} ({})  boundary only {} ({})  hit a dead end {} ({})  capped {}", t.arguments, t.arg_real, percent(t.arg_real, t.arguments), t.arg_boundary_only, percent(t.arg_boundary_only, t.arguments), t.arg_dead_end, percent(t.arg_dead_end, t.arguments), t.arg_capped);
+    let _ = writeln!(
+        out,
+        "interprocedural (every 25th argument, {} queries): reach a real source {} -> {}; steps per answer {:.1} -> {:.1}; {:?} per query",
+        t.ip_samples,
+        percent(t.ip_param_boundaries.0, t.ip_samples),
+        percent(t.ip_param_boundaries.1, t.ip_samples),
+        t.ip_steps.0 as f64 / t.ip_samples.max(1) as f64,
+        t.ip_steps.1 as f64 / t.ip_samples.max(1) as f64,
+        t.ip_time / t.ip_samples.max(1) as u32
+    );
     let _ = writeln!(out, "boundary steps by kind: {:?}", t.boundary_kinds);
     let _ = writeln!(out, "dead ends by kind: {:?}", t.dead_end_kinds);
     let _ = writeln!(out, "top dead ends: {:#?}", top(&t.dead_end_samples, 25));

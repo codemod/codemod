@@ -1766,10 +1766,13 @@ impl<'js> SgNodeRjs<'js> {
                 &ctx,
                 options,
                 method,
-                &["throughCalls", "maxDepth", "stopAt"],
+                &["throughCalls", "maxDepth", "stopAt", "interprocedural"],
             )? {
                 if let Some(through_calls) = opts.get::<_, Option<bool>>("throughCalls")? {
                     flow_options.through_calls = through_calls;
+                }
+                if let Some(interprocedural) = opts.get::<_, Option<bool>>("interprocedural")? {
+                    flow_options.interprocedural = interprocedural;
                 }
                 flow_options.max_depth = max_depth(&ctx, &opts, method)?;
                 flow_options.stop_at = stop_at(
@@ -1805,7 +1808,13 @@ impl<'js> SgNodeRjs<'js> {
             for (index, (at, step, node, root)) in steps.into_iter().enumerate() {
                 let object = rquickjs::Object::new(ctx.clone())?;
                 objects.insert(at, object.clone());
-                links.push((object.clone(), step.from.map(|from| (at.0, from as usize))));
+                links.push((
+                    object.clone(),
+                    step.from.map(|from| {
+                        let file = step.from_file.map_or(at.0, |file| file as usize);
+                        (file, from as usize)
+                    }),
+                ));
                 object.set("node", node)?;
                 object.set(
                     "root",

@@ -119,6 +119,9 @@ pub(crate) fn data_flow(
     range: ByteRange,
     options: FlowOptions,
 ) -> FlowResult {
+    if options.interprocedural {
+        return data_flow_interprocedural(host, path, range, options);
+    }
     let path = host.canonical(path);
     let (Some(flow), Some(content)) = (host.flow(&path), host.content(&path)) else {
         return FlowResult::default();
@@ -206,6 +209,7 @@ pub(crate) fn data_flow(
                                 | FlowNodeKind::Call
                         ),
                     from: reached_by,
+                    from_file: None,
                 });
                 Some(steps.len() as u32 - 1)
             };
@@ -1629,5 +1633,434 @@ fn callers(
         |file| index.contents.get(file).cloned(),
         truncated,
         index.unparsed.clone(),
+    )
+}
+
+/// One file of an interprocedural walk: its facts and the steps found in it.
+struct WalkFile {
+    path: PathBuf,
+    flow: Arc<FileFlow>,
+    content: Arc<str>,
+    steps: Vec<FlowStep>,
+    /// (node, edge, index) -> step, so a step is reported once.
+    step_at: HashMap<(u32, FlowEdgeKind, Option<u32>), u32>,
+}
+
+/// Where an interprocedural walk is: a file (index), a node, and the call
+/// the current function was entered through, if it was entered from a call
+/// site the walk came from. Leaving the function goes back to that call only.
+type WalkAt = (usize, u32, Option<(usize, u32)>);
+/// A step in a walk: file index, step index.
+type StepRef = (usize, u32);
+/// A queued node: where, depth, and the step it was reached by.
+type Queued = (WalkAt, u32, Option<StepRef>);
+/// A step to report: file, node, via, index, boundary, keep walking from
+/// it, and the call its function was entered through.
+type NextStep = (
+    usize,
+    u32,
+    FlowEdgeKind,
+    Option<u32>,
+    bool,
+    bool,
+    Option<StepRef>,
+);
+
+struct Walk<'h> {
+    host: &'h dyn FlowHost,
+    backward: bool,
+    files: Vec<WalkFile>,
+    file_ids: HashMap<PathBuf, usize>,
+    callers: Option<Arc<CallerIndex>>,
+    truncated: bool,
+    step_count: usize,
+}
+
+impl<'h> Walk<'h> {
+    fn open(&mut self, path: &Path) -> Option<usize> {
+        if let Some(&id) = self.file_ids.get(path) {
+            return Some(id);
+        }
+        let flow = self.host.flow(path)?;
+        let content = self.host.content(path)?;
+        let id = self.files.len();
+        self.files.push(WalkFile {
+            path: path.to_path_buf(),
+            flow,
+            content,
+            steps: Vec::new(),
+            step_at: HashMap::new(),
+        });
+        self.file_ids.insert(path.to_path_buf(), id);
+        Some(id)
+    }
+
+    /// The workspace functions a call resolves to (not `new`, not JSX).
+    fn targets(&mut self, file: usize, call_node: u32) -> Vec<(usize, u32)> {
+        let flow = Arc::clone(&self.files[file].flow);
+        let Some(&call) = flow.call_by_node.get(&call_node) else {
+            return Vec::new();
+        };
+        let call = &flow.calls[call as usize];
+        if call.is_jsx {
+            return Vec::new();
+        }
+        let path = self.files[file].path.clone();
+        call_targets(self.host, &path, &flow, call)
+            .into_iter()
+            .filter_map(|(target_path, function, _)| Some((self.open(&target_path)?, function)))
+            .collect()
+    }
+
+    /// Call sites of a function, from the workspace callers table: (file,
+    /// call node), for calls that pass arguments positionally.
+    fn call_sites(&mut self, file: usize, function: u32) -> Vec<(usize, u32)> {
+        let index = match &self.callers {
+            Some(index) => Arc::clone(index),
+            None => {
+                let index = match self.host.caller_index() {
+                    Some(slot) => slot.get_or_build(self.host),
+                    None => Arc::new(CallerIndex::build(self.host)),
+                };
+                self.callers = Some(Arc::clone(&index));
+                index
+            }
+        };
+        let key = (self.files[file].path.clone(), Some(function));
+        let Some(key) = index.key_for(self.host, &key) else {
+            return Vec::new();
+        };
+        let mut sites = Vec::new();
+        for (file_id, call_index, via) in index.calls_of.get(&key).into_iter().flatten() {
+            if matches!(via, CallEdgeKind::Callback) {
+                continue;
+            }
+            let path = index.paths[*file_id as usize].clone();
+            let Some(site_file) = self.open(&path) else {
+                continue;
+            };
+            let flow = &self.files[site_file].flow;
+            // The table is a snapshot: skip a call the file no longer has.
+            let Some(call) = flow.calls.get(*call_index as usize) else {
+                continue;
+            };
+            let expected = index
+                .sites
+                .get(&path)
+                .and_then(|sites| sites.calls.get(*call_index as usize))
+                .map(|(range, _)| *range);
+            if expected != Some(call.range) {
+                continue;
+            }
+            if let Some(node) = flow.exact(call.range) {
+                sites.push((site_file, node));
+            }
+        }
+        sites
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push(
+        &mut self,
+        file: usize,
+        node: u32,
+        via: FlowEdgeKind,
+        index: Option<u32>,
+        depth: u32,
+        from: Option<(usize, u32)>,
+        boundary: bool,
+    ) -> Option<(usize, u32)> {
+        if let Some(&existing) = self.files[file].step_at.get(&(node, via, index)) {
+            return Some((file, existing));
+        }
+        if self.step_count >= RESULT_LIMIT {
+            self.truncated = true;
+            return None;
+        }
+        self.step_count += 1;
+        let target = &mut self.files[file];
+        let n = &target.flow.nodes[node as usize];
+        let step = FlowStep {
+            range: n.range,
+            kind: n.kind,
+            via,
+            name: n.name.as_deref().map(str::to_string),
+            index,
+            depth,
+            boundary,
+            from: from.map(|(_, step)| step),
+            from_file: from
+                .and_then(|(from_file, _)| (from_file != file).then_some(from_file as u32)),
+        };
+        target.steps.push(step);
+        let at = target.steps.len() as u32 - 1;
+        target.step_at.insert((node, via, index), at);
+        Some((file, at))
+    }
+
+    /// Parameter bindings of a function at a position (several for a
+    /// destructured parameter).
+    fn parameters(&self, file: usize, function: u32, position: u32) -> Vec<u32> {
+        let flow = &self.files[file].flow;
+        (0..flow.nodes.len() as u32)
+            .filter(|&n| {
+                let node = &flow.nodes[n as usize];
+                node.binding
+                    && node.kind == FlowNodeKind::Parameter
+                    && node.index == Some(position)
+                    && node.function == Some(function)
+            })
+            .collect()
+    }
+}
+
+/// [`data_flow`] with `interprocedural: true`.
+fn data_flow_interprocedural(
+    host: &dyn FlowHost,
+    path: &Path,
+    range: ByteRange,
+    options: FlowOptions,
+) -> FlowResult {
+    let mut walk = Walk {
+        host,
+        backward: options.direction == FlowDirection::Backward,
+        files: Vec::new(),
+        file_ids: HashMap::new(),
+        callers: None,
+        truncated: false,
+        step_count: 0,
+    };
+    let Some(file) = walk.open(&host.canonical(path)) else {
+        return FlowResult::default();
+    };
+    let Some(start) = walk.files[file].flow.locate(range) else {
+        return FlowResult::default();
+    };
+    let backward = walk.backward;
+    let mut seen: HashSet<WalkAt> = HashSet::from([(file, start, None)]);
+    let mut queue: VecDeque<Queued> = VecDeque::from([((file, start, None), 0, None)]);
+
+    while let Some(((file, current, entered), depth, reached_by)) = queue.pop_front() {
+        if walk.truncated || options.max_depth.is_some_and(|max| depth >= max) {
+            continue;
+        }
+        let flow = Arc::clone(&walk.files[file].flow);
+        let node = flow.nodes[current as usize].clone();
+        // (file, node, via, index, boundary, follow, entered call)
+        let mut next: Vec<NextStep> = Vec::new();
+
+        // A call into the workspace: its result is what the callee returns.
+        let resolved_call = node.kind == FlowNodeKind::Call && {
+            let targets = walk.targets(file, current);
+            if backward {
+                for &(target_file, function) in &targets {
+                    let target_flow = Arc::clone(&walk.files[target_file].flow);
+                    let function_node = target_flow.functions[function as usize].node;
+                    for &(value, edge) in &target_flow.in_edges[function_node as usize] {
+                        if edge == FlowEdgeKind::Return {
+                            next.push((
+                                target_file,
+                                value,
+                                FlowEdgeKind::Return,
+                                None,
+                                is_boundary(target_flow.nodes[value as usize].kind),
+                                true,
+                                Some((file, current)),
+                            ));
+                        }
+                    }
+                }
+            }
+            !targets.is_empty()
+        };
+
+        // A parameter: the arguments at its callers (only the call the walk
+        // came in through, when it did).
+        if backward && node.binding && node.kind == FlowNodeKind::Parameter {
+            if let (Some(function), Some(position)) = (node.function, node.index) {
+                let sites = match entered {
+                    Some(site) => vec![site],
+                    None => walk.call_sites(file, function),
+                };
+                for (site_file, call_node) in sites {
+                    let site_flow = Arc::clone(&walk.files[site_file].flow);
+                    let call = &site_flow.calls[site_flow.call_by_node[&call_node] as usize];
+                    if let Some(&argument) = call.args.get(position as usize) {
+                        let n = &site_flow.nodes[argument as usize];
+                        let boundary = is_boundary(n.kind);
+                        next.push((
+                            site_file,
+                            argument,
+                            FlowEdgeKind::Assign,
+                            Some(position),
+                            boundary,
+                            true,
+                            None,
+                        ));
+                    }
+                }
+            }
+        }
+
+        let edges: Vec<(u32, FlowEdgeKind)> = if backward {
+            flow.in_edges[current as usize].to_vec()
+        } else {
+            flow.out_edges[current as usize].to_vec()
+        };
+        for (other, edge) in edges {
+            let call_edge = matches!(edge, FlowEdgeKind::Argument | FlowEdgeKind::Receiver);
+            if backward && (edge == FlowEdgeKind::Return || (call_edge && !options.through_calls)) {
+                continue;
+            }
+            // The callee is known: its returns stand for "derived from the
+            // arguments".
+            if backward && call_edge && resolved_call {
+                continue;
+            }
+            if !options.through_calls {
+                let pair = if backward {
+                    (other, current)
+                } else {
+                    (current, other)
+                };
+                if flow.model_edges.contains(&pair) {
+                    continue;
+                }
+            }
+            if !backward && edge == FlowEdgeKind::Argument {
+                let targets = walk.targets(file, other);
+                if !targets.is_empty() {
+                    // Into the callee's parameter, remembering the call.
+                    let position = flow.call_by_node.get(&other).and_then(|c| {
+                        flow.calls[*c as usize]
+                            .args
+                            .iter()
+                            .position(|a| *a == current)
+                    });
+                    if let Some(position) = position {
+                        for (target_file, function) in targets {
+                            for parameter in walk.parameters(target_file, function, position as u32)
+                            {
+                                next.push((
+                                    target_file,
+                                    parameter,
+                                    FlowEdgeKind::Assign,
+                                    Some(position as u32),
+                                    false,
+                                    true,
+                                    Some((file, other)),
+                                ));
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+            if !backward && edge == FlowEdgeKind::Return {
+                // Out of the function: to the call it was entered through, or
+                // to every call site.
+                let Some(&function) = flow.fn_by_node.get(&other) else {
+                    continue;
+                };
+                let sites = match entered {
+                    Some(site) => vec![site],
+                    None => walk.call_sites(file, function),
+                };
+                for (site_file, call_node) in sites {
+                    next.push((
+                        site_file,
+                        call_node,
+                        FlowEdgeKind::Return,
+                        None,
+                        false,
+                        true,
+                        None,
+                    ));
+                }
+                continue;
+            }
+            let n = &flow.nodes[other as usize];
+            let index = if edge == FlowEdgeKind::Argument {
+                let (call, argument) = if backward {
+                    (current, other)
+                } else {
+                    (other, current)
+                };
+                flow.call_by_node.get(&call).and_then(|c| {
+                    flow.calls[*c as usize]
+                        .args
+                        .iter()
+                        .position(|a| *a == argument)
+                        .map(|p| p as u32)
+                })
+            } else {
+                n.index
+            };
+            let follow = !(!backward
+                && (edge == FlowEdgeKind::Store || (call_edge && !options.through_calls)));
+            next.push((
+                file,
+                other,
+                edge,
+                index,
+                backward && is_boundary(n.kind),
+                follow,
+                entered,
+            ));
+        }
+
+        for (to_file, to, via, index, boundary, follow, to_entered) in next {
+            // Parameters and calls are boundaries only when the walk cannot
+            // go on through them.
+            let boundary = boundary && {
+                let kind = walk.files[to_file].flow.nodes[to as usize].kind;
+                match kind {
+                    FlowNodeKind::Call => walk.targets(to_file, to).is_empty(),
+                    FlowNodeKind::Parameter => {
+                        let n = walk.files[to_file].flow.nodes[to as usize].clone();
+                        match (n.function, n.binding) {
+                            (Some(function), true) => {
+                                to_entered.is_none()
+                                    && walk.call_sites(to_file, function).is_empty()
+                            }
+                            _ => true,
+                        }
+                    }
+                    _ => true,
+                }
+            };
+            let Some(step) = walk.push(to_file, to, via, index, depth + 1, reached_by, boundary)
+            else {
+                break;
+            };
+            let stop = !follow || options.stop_at.contains(via);
+            if !stop && seen.insert((to_file, to, to_entered)) {
+                queue.push_back(((to_file, to, to_entered), depth + 1, Some(step)));
+            }
+        }
+    }
+
+    FlowResult {
+        files: walk
+            .files
+            .into_iter()
+            .map(|f| FileFlowSteps {
+                file_path: f.path,
+                content: f.content.to_string(),
+                steps: f.steps,
+            })
+            .collect(),
+        truncated: walk.truncated,
+    }
+}
+
+fn is_boundary(kind: FlowNodeKind) -> bool {
+    matches!(
+        kind,
+        FlowNodeKind::Parameter
+            | FlowNodeKind::Import
+            | FlowNodeKind::Global
+            | FlowNodeKind::This
+            | FlowNodeKind::Call
     )
 }

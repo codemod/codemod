@@ -184,6 +184,15 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_flow_interprocedural,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_flow_interprocedural.js",
+    fixture_dir: "typescript/interprocedural",
+    target: "app.ts",
+    scope: workspace,
+}
+
+jssg_test! {
     name: test_callees_jsx_member_tag,
     language: CodemodLang::Static(SupportLang::Tsx),
     codemod: "tsx_callees_jsx_element.js",
