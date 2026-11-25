@@ -513,6 +513,109 @@ fn symbol_bytes(analyzer: &AccurateAnalyzer) -> Vec<(&'static str, usize)> {
     ]
 }
 
+/// Several threads (like `forEachFile` workers) ask `callers()` of
+/// different files at once on a fresh analyzer. Exits the process if they
+/// are not done in `DATAFLOW_BENCH_DEADLINE` seconds (default 60).
+#[test]
+#[ignore]
+fn concurrent_callers() {
+    let Some((root, scale)) = bench_root() else {
+        return;
+    };
+    let threads: usize = std::env::var("DATAFLOW_BENCH_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3);
+    let deadline: u64 = std::env::var("DATAFLOW_BENCH_DEADLINE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+    let files = walk(&root, is_source);
+    // `DATAFLOW_BENCH_SITES=rel/path.tsx:Name,...` picks the functions;
+    // otherwise the first named function of files spread over the tree.
+    let picked: Option<Vec<(PathBuf, String)>> =
+        std::env::var("DATAFLOW_BENCH_SITES").ok().map(|list| {
+            list.split(',')
+                .filter_map(|site| {
+                    let (path, name) = site.split_once(':')?;
+                    Some((root.join(path), name.to_string()))
+                })
+                .collect()
+        });
+    let sites: Vec<(PathBuf, String, ByteRange)> = match picked {
+        Some(picked) => picked
+            .into_iter()
+            .filter_map(|(path, name)| {
+                let content = std::fs::read_to_string(&path).ok()?;
+                let flow = build_file_flow(&path, &content).ok()?;
+                let function = flow
+                    .functions
+                    .iter()
+                    .find(|f| f.name.as_deref() == Some(name.as_str()))?;
+                Some((path, content, function.name_range.unwrap_or(function.range)))
+            })
+            .collect(),
+        None => files
+            .iter()
+            .step_by((files.len() / (threads * 4)).max(1))
+            .filter_map(|path| {
+                let content = std::fs::read_to_string(path).ok()?;
+                let flow = build_file_flow(path, &content).ok()?;
+                let range = flow.functions.iter().find(|f| f.name.is_some())?.range;
+                Some((path.clone(), content, range))
+            })
+            .take(threads)
+            .collect(),
+    };
+    println!("BENCH concurrent sites={}", sites.len());
+    let analyzer = std::sync::Arc::new(AccurateAnalyzer::new(root.clone()));
+    // As a workflow step does: every selected file is handed over first.
+    if std::env::var("DATAFLOW_BENCH_NOTIFY").is_ok_and(|v| v == "1") {
+        for path in &files {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                let _ = analyzer.process_file(path, &content);
+            }
+        }
+    }
+    let (done, finished) = std::sync::mpsc::channel();
+    let started = Instant::now();
+    for (path, content, range) in sites.clone() {
+        let analyzer = std::sync::Arc::clone(&analyzer);
+        let done = done.clone();
+        std::thread::spawn(move || {
+            let result = analyzer.call_graph(
+                &path,
+                &content,
+                range,
+                CallGraphOptions {
+                    direction: CallGraphDirection::Callers,
+                    ..Default::default()
+                },
+            );
+            let _ = done.send((path, result.map(|r| r.files.len()).ok(), started.elapsed()));
+        });
+    }
+    for _ in 0..sites.len() {
+        match finished.recv_timeout(Duration::from_secs(deadline)) {
+            Ok((path, files, elapsed)) => println!(
+                "BENCH concurrent done {} files={files:?} in {:.0} ms",
+                path.display(),
+                ms(elapsed)
+            ),
+            Err(_) => {
+                println!(
+                    "BENCH concurrent HANG after {deadline}s (scale={scale}, threads={threads})"
+                );
+                std::process::exit(2);
+            }
+        }
+    }
+    println!(
+        "BENCH concurrent scale={scale} threads={threads} all_ms={:.0}",
+        ms(started.elapsed())
+    );
+}
+
 #[test]
 #[ignore]
 fn workspace() {

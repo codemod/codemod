@@ -5,13 +5,13 @@
 //! import/re-export resolution that answers go-to-definition.
 
 use crate::facts::{Accessor, CallFact, CalleeFact, FileFlow, Name};
+use crate::once::BuildOnce;
 use language_core::{
     ByteRange, CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
     CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
     FlowResult, FlowStep, FunctionRef, Mutation, MutationKind, MutationOptions, MutationsResult,
     SemanticError, UnparsedFile,
 };
-use parking_lot::RwLock;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1592,29 +1592,25 @@ fn file_calls(
     calls
 }
 
-/// Holds the [CallerIndex] between queries.
+/// Holds the [CallerIndex] between queries. Built once: threads that ask
+/// while it is being built wait for that build (see [`BuildOnce`]).
 #[derive(Default)]
-pub struct CallerIndexSlot(RwLock<Option<Arc<CallerIndex>>>);
+pub struct CallerIndexSlot(BuildOnce<CallerIndex>);
 
 impl CallerIndexSlot {
     fn get_or_build(&self, host: &dyn FlowHost) -> Arc<CallerIndex> {
-        if let Some(index) = self.0.read().as_ref() {
-            return Arc::clone(index);
-        }
-        let index = Arc::new(CallerIndex::build(host));
-        *self.0.write() = Some(Arc::clone(&index));
-        index
+        self.0.get_or_build(|| CallerIndex::build(host))
     }
 
     pub fn clear(&self) {
-        *self.0.write() = None;
+        self.0.clear();
     }
 }
 
 impl std::fmt::Debug for CallerIndexSlot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CallerIndexSlot")
-            .field("built", &self.0.read().is_some())
+            .field("built", &self.0.get().is_some())
             .finish()
     }
 }
