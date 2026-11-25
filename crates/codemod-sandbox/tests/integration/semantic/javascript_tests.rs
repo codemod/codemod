@@ -134,6 +134,15 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_call_graph_commonjs,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "js_callees_commonjs.js",
+    fixture_dir: "javascript/commonjs",
+    target: "main.js",
+    scope: workspace,
+}
+
+jssg_test! {
     name: test_definition_resolve_external_false,
     language: CodemodLang::Static(SupportLang::JavaScript),
     codemod: "js_definition_resolve_external.js",

@@ -34,6 +34,11 @@ pub(crate) trait FlowHost {
         specifier: &str,
         export_name: &str,
     ) -> Option<(PathBuf, ByteRange)>;
+    /// The file a module specifier (in the file from) resolves to, for
+    /// `require()`. None when it does not resolve to a workspace file.
+    fn module_path(&self, _from: &Path, _specifier: &str) -> Option<PathBuf> {
+        None
+    }
     /// Every file a "who calls this" query has to look at.
     fn workspace_files(&self) -> Vec<PathBuf>;
     /// Why the module specifier (imported from the file from) could not be
@@ -266,11 +271,19 @@ fn origins(
         if !seen.insert((path.to_path_buf(), current)) {
             continue;
         }
-        match flow.nodes[current as usize].kind {
-            FlowNodeKind::Function
-            | FlowNodeKind::Class
-            | FlowNodeKind::Object
-            | FlowNodeKind::Call => {
+        let node = &flow.nodes[current as usize];
+        match node.kind {
+            FlowNodeKind::Call => {
+                // require("./m") is the module's exports.
+                if let Some(specifier) = flow.requires.get(&current) {
+                    out.push(Origin::Namespace(path.to_path_buf(), specifier.clone()));
+                    commonjs_export(host, path, specifier, None, seen, out);
+                } else {
+                    out.push(Origin::Node(path.to_path_buf(), Arc::clone(flow), current));
+                }
+                continue;
+            }
+            FlowNodeKind::Function | FlowNodeKind::Class | FlowNodeKind::Object => {
                 out.push(Origin::Node(path.to_path_buf(), Arc::clone(flow), current));
                 continue;
             }
@@ -282,11 +295,37 @@ fn origins(
                         host.resolve_import(path, &import.module, &import.name)
                     {
                         origins_at(host, &target, range, seen, out);
+                    } else {
+                        // A CommonJS module imported with `import`.
+                        let name = (import.name != "default").then_some(import.name.as_str());
+                        commonjs_export(host, path, &import.module, name, seen, out);
                     }
                 }
                 continue;
             }
             _ => {}
+        }
+        // `obj.f`, `ns.f`, `require("./m").f`, `const { f } = obj`: the
+        // property of whatever the object may be.
+        for &(object, edge) in &flow.in_edges[current as usize] {
+            if edge != FlowEdgeKind::Property {
+                continue;
+            }
+            let name = match node.kind {
+                FlowNodeKind::Member => node.name.as_deref(),
+                _ => flow
+                    .property_keys
+                    .get(&(object, current))
+                    .map(String::as_str),
+            };
+            let Some(name) = name else {
+                continue;
+            };
+            let mut bases = Vec::new();
+            origins(host, path, flow, object, seen, &mut bases);
+            for base in &bases {
+                member_origins(host, base, name, seen, out);
+            }
         }
         for &(source, edge) in &flow.in_edges[current as usize] {
             if matches!(
@@ -294,6 +333,50 @@ fn origins(
                 FlowEdgeKind::Read | FlowEdgeKind::Assign | FlowEdgeKind::Alias
             ) {
                 stack.push(source);
+            }
+        }
+    }
+}
+
+/// What a CommonJS module exports: `module.exports` as a whole (name
+/// None), or one property of it (`exports.f = …`, `module.exports = { f }`).
+fn commonjs_export(
+    host: &dyn FlowHost,
+    from: &Path,
+    specifier: &str,
+    name: Option<&str>,
+    seen: &mut HashSet<(PathBuf, u32)>,
+    out: &mut Vec<Origin>,
+) {
+    let Some(target) = host.module_path(from, specifier) else {
+        return;
+    };
+    let Some(flow) = host.flow(&target) else {
+        return;
+    };
+    let mut whole = Vec::new();
+    for (export, value) in &flow.commonjs_exports {
+        match (name, export) {
+            (_, None) => whole.push(*value),
+            (Some(name), Some(export)) if name == export => {
+                origins(host, &target, &flow, *value, seen, out);
+            }
+            _ => {}
+        }
+    }
+    match name {
+        None => {
+            for value in whole {
+                origins(host, &target, &flow, value, seen, out);
+            }
+        }
+        Some(name) => {
+            let mut bases = Vec::new();
+            for value in whole {
+                origins(host, &target, &flow, value, seen, &mut bases);
+            }
+            for base in &bases {
+                member_origins(host, base, name, seen, out);
             }
         }
     }
@@ -382,19 +465,22 @@ fn functions_of(origin: &Origin, out: &mut Vec<(PathBuf, u32)>) {
     }
 }
 
-/// The functions origin.property(…) may call.
-fn member_functions(
+/// The values origin.property may be: a namespace or module export, an
+/// object literal member, a class's method or static field, or the method
+/// of an instance made with `new`.
+fn member_origins(
     host: &dyn FlowHost,
     origin: &Origin,
     property: &str,
-    out: &mut Vec<(PathBuf, u32)>,
+    seen: &mut HashSet<(PathBuf, u32)>,
+    out: &mut Vec<Origin>,
 ) {
-    let mut found = Vec::new();
-    let mut seen = HashSet::new();
     match origin {
         Origin::Namespace(from, specifier) => {
             if let Some((target, range)) = host.resolve_import(from, specifier, property) {
-                origins_at(host, &target, range, &mut seen, &mut found);
+                origins_at(host, &target, range, seen, out);
+            } else {
+                commonjs_export(host, from, specifier, Some(property), seen, out);
             }
         }
         Origin::Node(path, flow, node) => match flow.nodes[*node as usize].kind {
@@ -404,14 +490,10 @@ fn member_functions(
                     .get(node)
                     .and_then(|members| members.iter().find(|(name, _)| name == property));
                 if let Some((_, value)) = member {
-                    origins(host, path, flow, *value, &mut seen, &mut found);
+                    origins(host, path, flow, *value, seen, out);
                 }
             }
-            FlowNodeKind::Class => {
-                if let Some(function) = method_of(flow, *node, property) {
-                    out.push((path.clone(), function));
-                }
-            }
+            FlowNodeKind::Class => class_member(path, flow, *node, property, host, seen, out),
             // new C().method()
             FlowNodeKind::Call => {
                 let constructed = flow
@@ -425,14 +507,19 @@ fn member_functions(
                 }) = constructed
                 {
                     let mut classes = Vec::new();
-                    origins(host, path, flow, *callee, &mut seen, &mut classes);
+                    origins(host, path, flow, *callee, seen, &mut classes);
                     for class in &classes {
                         if let Origin::Node(class_path, class_flow, class_node) = class {
                             if class_flow.nodes[*class_node as usize].kind == FlowNodeKind::Class {
-                                if let Some(function) = method_of(class_flow, *class_node, property)
-                                {
-                                    out.push((class_path.clone(), function));
-                                }
+                                class_member(
+                                    class_path,
+                                    class_flow,
+                                    *class_node,
+                                    property,
+                                    host,
+                                    seen,
+                                    out,
+                                );
                             }
                         }
                     }
@@ -441,6 +528,37 @@ fn member_functions(
             _ => {}
         },
     }
+}
+
+/// A class's method, or the value of its field.
+fn class_member(
+    path: &Path,
+    flow: &Arc<FileFlow>,
+    class_node: u32,
+    property: &str,
+    host: &dyn FlowHost,
+    seen: &mut HashSet<(PathBuf, u32)>,
+    out: &mut Vec<Origin>,
+) {
+    if let Some(function) = method_of(flow, class_node, property) {
+        let node = flow.functions[function as usize].node;
+        out.push(Origin::Node(path.to_path_buf(), Arc::clone(flow), node));
+        return;
+    }
+    for value in field_values(flow, class_node, property) {
+        origins(host, path, flow, value, seen, out);
+    }
+}
+
+/// The functions origin.property(…) may call.
+fn member_functions(
+    host: &dyn FlowHost,
+    origin: &Origin,
+    property: &str,
+    out: &mut Vec<(PathBuf, u32)>,
+) {
+    let mut found = Vec::new();
+    member_origins(host, origin, property, &mut HashSet::new(), &mut found);
     for origin in &found {
         functions_of(origin, out);
     }

@@ -1069,6 +1069,11 @@ impl FlowHost for AccurateAnalyzer {
         }
     }
 
+    fn module_path(&self, from: &Path, specifier: &str) -> Option<PathBuf> {
+        let module = self.resolve_module(specifier, from).ok()?;
+        Some(self.canonical(&module))
+    }
+
     fn workspace_files(&self) -> Vec<PathBuf> {
         // Every file's facts are about to be needed: build them in the
         // indexing parse.

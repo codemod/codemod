@@ -175,6 +175,14 @@ pub struct FileFlow {
     /// Class node -> (field name, the field's node). The initializer flows
     /// into the field's node with a `store` edge.
     pub class_fields: FxHashMap<u32, Vec<(String, u32)>>,
+    /// `require("m")` call node -> "m".
+    pub requires: FxHashMap<u32, String>,
+    /// CommonJS exports: `module.exports = v` (None) and `exports.f = v`,
+    /// `module.exports.f = v` (Some("f")), with the value's node.
+    pub commonjs_exports: Vec<(Option<String>, u32)>,
+    /// The key of a `property` edge into a destructured binding:
+    /// `const { f: g } = o` gives (o, g) -> "f".
+    pub property_keys: FxHashMap<(u32, u32), String>,
     pub loops: Vec<ByteRange>,
     /// Syntax the builder saw but does not model, by what it is. Values that
     /// pass through it are not connected to where they go. Used to measure
@@ -687,6 +695,22 @@ impl<'s, 'a> Builder<'s, 'a> {
             BindingPatternKind::ObjectPattern(object) => {
                 for property in &object.properties {
                     self.bind_pattern(&property.value, from, FlowEdgeKind::Property);
+                    // `{ f: g }`, `{ f = d }`: remember that g is from.f.
+                    let leaf = match &property.value.kind {
+                        BindingPatternKind::AssignmentPattern(assignment) => &assignment.left.kind,
+                        other => other,
+                    };
+                    if let (BindingPatternKind::BindingIdentifier(ident), Some(key)) =
+                        (leaf, property.key.static_name())
+                    {
+                        if !property.computed {
+                            if let Some(binding) = self.binding_for_symbol(ident.symbol_id()) {
+                                self.flow
+                                    .property_keys
+                                    .insert((from, binding), key.to_string());
+                            }
+                        }
+                    }
                 }
                 if let Some(rest) = &object.rest {
                     self.bind_pattern(&rest.argument, from, FlowEdgeKind::Capture);
@@ -736,6 +760,9 @@ impl<'s, 'a> Builder<'s, 'a> {
                         AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(short) => {
                             if let Some(binding) = self.binding_of(&short.binding) {
                                 self.edge(from, binding, FlowEdgeKind::Property);
+                                self.flow
+                                    .property_keys
+                                    .insert((from, binding), short.binding.name.to_string());
                                 if let Some(init) = &short.init {
                                     let value = self.node(init.span());
                                     self.edge(value, binding, FlowEdgeKind::Assign);
@@ -744,6 +771,24 @@ impl<'s, 'a> Builder<'s, 'a> {
                         }
                         AssignmentTargetProperty::AssignmentTargetPropertyProperty(long) => {
                             self.bind_target_default(&long.binding, from, FlowEdgeKind::Property);
+                            let leaf = match &long.binding {
+                                AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) => {
+                                    Some(&d.binding)
+                                }
+                                other => other.as_assignment_target(),
+                            };
+                            if let (
+                                Some(AssignmentTarget::AssignmentTargetIdentifier(ident)),
+                                Some(key),
+                                false,
+                            ) = (leaf, long.name.static_name(), long.computed)
+                            {
+                                if let Some(binding) = self.binding_of(ident) {
+                                    self.flow
+                                        .property_keys
+                                        .insert((from, binding), key.to_string());
+                                }
+                            }
                         }
                     }
                 }
@@ -1069,8 +1114,20 @@ impl<'s, 'a> Builder<'s, 'a> {
         is_new: bool,
     ) -> String {
         let call_node = self.node(span);
-        if self.is_global(callee, "require") {
-            self.skip("commonjs-require");
+        if self.is_global(callee, "require") && !is_new {
+            let specifier = match arguments.first() {
+                Some(Argument::StringLiteral(literal)) => Some(literal.value.to_string()),
+                Some(Argument::TemplateLiteral(template)) if template.expressions.is_empty() => {
+                    template.quasis.first().map(|q| q.value.raw.to_string())
+                }
+                _ => None,
+            };
+            match specifier {
+                Some(specifier) => {
+                    self.flow.requires.insert(call_node, specifier);
+                }
+                None => self.skip("commonjs-require-dynamic"),
+            }
         }
         if matches!(callee.get_inner_expression(), Expression::Super(_)) {
             self.skip("super-call");
@@ -1203,13 +1260,6 @@ impl<'s, 'a> Builder<'s, 'a> {
             }
             _ => (None, MutationKind::Reassign, None),
         };
-        if let AssignmentTarget::StaticMemberExpression(member) = &assignment.left {
-            if self.is_global(&member.object, "exports")
-                || (self.is_global(&member.object, "module") && member.property.name == "exports")
-            {
-                self.skip("commonjs-export");
-            }
-        }
         self.mutation(
             binding,
             assignment.span,
@@ -1247,6 +1297,11 @@ impl<'s, 'a> Builder<'s, 'a> {
                 let whole = self.node(assignment.span);
                 self.edge(index, whole, FlowEdgeKind::Alias);
                 self.bind_target(&assignment.left, index, FlowEdgeKind::Assign);
+                if assignment.operator == AssignmentOperator::Assign {
+                    if let Some(export) = self.commonjs_export(&assignment.left) {
+                        self.flow.commonjs_exports.push((export, index));
+                    }
+                }
             }
             AstKind::CallExpression(call) => {
                 if call.callee.span() != span {
@@ -1441,6 +1496,25 @@ impl<'s, 'a> Builder<'s, 'a> {
                 }
             }
         }
+    }
+
+    /// What an assignment target exports, for CommonJS: `module.exports`
+    /// (Some(None)), `exports.f` or `module.exports.f` (Some(Some("f"))).
+    fn commonjs_export(&self, target: &AssignmentTarget<'a>) -> Option<Option<String>> {
+        let AssignmentTarget::StaticMemberExpression(member) = target else {
+            return None;
+        };
+        let is_module_exports = |expr: &Expression<'a>| {
+            matches!(expr.get_inner_expression(), Expression::StaticMemberExpression(inner)
+                if inner.property.name == "exports" && self.is_global(&inner.object, "module"))
+        };
+        if member.property.name == "exports" && self.is_global(&member.object, "module") {
+            return Some(None);
+        }
+        if self.is_global(&member.object, "exports") || is_module_exports(&member.object) {
+            return Some(Some(member.property.name.to_string()));
+        }
+        None
     }
 
     /// The node for a class field, registered on its class.
