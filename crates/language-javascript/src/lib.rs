@@ -49,6 +49,7 @@ mod flow_query;
 mod lightweight;
 mod oxc_adapter;
 mod provider;
+mod ts_api;
 mod vfs_fs;
 mod workspace_packages;
 

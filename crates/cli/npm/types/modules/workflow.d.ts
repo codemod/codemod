@@ -286,6 +286,7 @@ declare module "codemod:workflow" {
      * find: `"file"` (the default) looks within each file, `"workspace"`
      * across the selected files of the target (or under `root`), and
      * `"none"` turns it off. Analysis runs only when they are called.
+     * `{ mode: "workspace", types: "ts7" }` adds types (experimental).
      */
     semanticAnalysis?: SemanticAnalysis;
     /**
@@ -303,7 +304,21 @@ declare module "codemod:workflow" {
     | "file"
     | "workspace"
     | "none"
-    | { mode: "file" | "workspace"; root?: string };
+    | { mode: "file" | "workspace"; root?: string }
+    | {
+        mode: "workspace";
+        root?: string;
+        /**
+         * Types from the TypeScript 7 checker: `node.typeInfo()`, and
+         * `callees()` / `callers()` that follow `x.m()` by the type of `x`
+         * (`via: "type"`). Needs `typescript@7.0` in the target's
+         * `node_modules` (or `CODEMOD_TS_API` naming its `tsc`), and a full
+         * install of the target's dependencies before this step for library
+         * types. Off by default.
+         * @experimental
+         */
+        types?: "ts7" | "none";
+      };
 
   /**
    * Which files `forEachFile` visits, and how: a glob, a list of globs, or an

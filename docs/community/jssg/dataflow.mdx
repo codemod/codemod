@@ -178,8 +178,49 @@ const component = element.callees().find((c) => c.resolved && c.via === "jsx");
 const sideEffects = root.root().callees(); // does importing this module run code?
 ```
 
-`via` says why the edge exists: `direct`, `method`, `constructor`, `jsx`, or `callback` (the
-function is passed to code the analysis cannot see, `items.map(f)`, and is assumed to be called).
+`via` says why the edge exists: `direct`, `method`, `constructor`, `jsx`, `callback` (the
+function is passed to code the analysis cannot see, `items.map(f)`, and is assumed to be called),
+or `type` (resolved by the receiver's type, see [Types](#types-the-typescript-7-checker)).
+
+## Types: the TypeScript 7 checker
+
+Values alone can't resolve `repo.save()` when `repo` is a parameter, a context object or a call
+result. With types on, the TypeScript 7 checker answers instead (experimental):
+
+- `callees()` and `callers()` follow `x.m()` by the type of `x`, marked `via: "type"`. For an
+  interface or property-signature member, the edge goes to every class member or object property
+  that implements it (up to 16; past that the call stays unresolved).
+- An unresolved call gets a `declaration` (`{ node, root, name }`) when the checker knows where the
+  member is declared but it is not workspace code: `list.push()` in `lib.es5.d.ts`, a Solid
+  `isOpen: Accessor<boolean>`.
+- `node.typeInfo()` returns the type as the checker prints it: `"UserRepo"`,
+  `"{ id: string; }"`. It is `null` with types off.
+
+Turn them on for a step:
+
+```ts
+forEachFile(
+  {
+    include: "src/**/*.{ts,tsx}",
+    semanticAnalysis: { mode: "workspace", types: "ts7" },
+  },
+  (file) => { /* ... */ },
+);
+```
+
+In `workflow.yaml`: `semantic_analysis: { mode: workspace, types: ts7 }`.
+
+What types need:
+
+| Need | Why |
+| --- | --- |
+| `typescript@7.0.x` in the target's `node_modules`, or `CODEMOD_TS_API` set to its `tsc` binary (`node_modules/@typescript/typescript-<os>-<arch>/lib/tsc`) | The checker. Other versions are not used: its protocol changes between minors. `CODEMOD_TS_API=off` turns types off everywhere |
+| The target's dependencies installed (`node_modules` present), from a full install that runs before this step | Without them, everything from a library is `any` and calls on it stay unresolved. Measured: 7.6% of all calls resolved through types in a repository with dependencies installed, 1.2% across repositories without |
+| A tsconfig (or jsconfig with `allowJs`) | The checker uses the nearest one; files outside any get default options. JSDoc types work in `.js` files |
+
+Types are a snapshot: the checker reads the files once, so edits made during the run are not
+reflected (the same rule as `callers()`). They cost a side process (about 200–350 MB of memory)
+and a few seconds on a large workspace, the first time a query needs them.
 
 ## Is it changed: `mutations()`
 
@@ -397,7 +438,8 @@ it models and says where it stops. Build automatic rewrites only on complete ans
 | Namespace members (`ns.fn` stored or passed as a value) | `references()` finds `ns.fn` uses through `import * as ns`; check it alongside `callers()` before deleting |
 | Files that do not parse | Listed in `unparsed` on call-graph answers; asking about one throws |
 | Result limits (50,000 steps or entries) | `truncated: true` on the array |
-| Edits during a run | `flowsFrom`, `flowsTo`, `mutations` use current content. `callers()` and `importers()` answer from tables built on their first query: snapshots. A file rewritten later still counts as calling or importing what it did then |
+| Edits during a run | `flowsFrom`, `flowsTo`, `mutations` use current content. `callers()` and `importers()` answer from tables built on their first query: snapshots. A file rewritten later still counts as calling or importing what it did then. Types are a snapshot too |
+| Types (with `types: "ts7"`) | `via: "type"` edges trust the declared type: a value cast with `as` or typed `any` is followed as declared, or not at all |
 
 ### When the answer is "can't tell"
 

@@ -21,7 +21,7 @@
 use crate::accurate::AccurateAnalyzer;
 use crate::dataflow::{CalleeFact, FileFlow};
 use crate::flow_query::{call_targets, callback_targets, functions_from, FlowHost};
-use language_core::{FlowEdgeKind, FlowNodeKind};
+use language_core::{CallEdgeKind, FlowEdgeKind, FlowNodeKind};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
@@ -35,6 +35,15 @@ struct Totals {
     failure_messages: BTreeMap<String, (usize, String)>,
     calls: usize,
     resolved: usize,
+    /// Resolved only through the TypeScript checker (`via: "type"`).
+    resolved_by_type: usize,
+    /// Unresolved method calls the checker has a workspace declaration
+    /// for, by the declaration's syntax kind: what the type path misses.
+    typed_unmapped: BTreeMap<u32, usize>,
+    typed_unmapped_samples: HashMap<u32, HashMap<String, usize>>,
+    typed_samples: HashMap<String, usize>,
+    /// Checker round trips by method: count and time.
+    checker_time: Vec<String>,
     callback_only: usize,
     unresolved_why: BTreeMap<&'static str, usize>,
     unresolved_names: HashMap<String, usize>,
@@ -580,6 +589,10 @@ fn distribution(sizes: &[usize]) -> String {
 
 fn measure_repo(root: &Path, totals: &mut Totals) {
     let analyzer = AccurateAnalyzer::new(root.to_path_buf());
+    // CODEMOD_TS_API set (and not "off"): measure with types on.
+    if std::env::var("CODEMOD_TS_API").is_ok_and(|v| !v.is_empty() && v != "off") {
+        analyzer.enable_types();
+    }
     let files = analyzer.workspace_files();
     let failures = analyzer.parse_failures();
     totals.parse_failures += failures.len();
@@ -608,11 +621,60 @@ fn measure_repo(root: &Path, totals: &mut Totals) {
         }
         for call in &flow.calls {
             totals.calls += 1;
-            if !call_targets(&analyzer, &file, &flow, call).is_empty() {
+            let targets = call_targets(&analyzer, &file, &flow, call);
+            if !targets.is_empty() {
                 totals.resolved += 1;
+                if targets.iter().any(|(_, _, via)| *via == CallEdgeKind::Type) {
+                    totals.resolved_by_type += 1;
+                    let to: Vec<String> = targets
+                        .iter()
+                        .filter_map(|(path, function, _)| {
+                            let target = analyzer.flow(path)?;
+                            let name = target.functions[*function as usize].name.clone();
+                            Some(format!(
+                                "{}@{}",
+                                name.as_deref().unwrap_or("?"),
+                                path.file_name()?.to_string_lossy()
+                            ))
+                        })
+                        .collect();
+                    *totals
+                        .typed_samples
+                        .entry(format!(
+                            "{} ({}) -> {}",
+                            call.callee_text.chars().take(40).collect::<String>(),
+                            file.file_name().unwrap_or_default().to_string_lossy(),
+                            to.join(", ")
+                        ))
+                        .or_default() += 1;
+                }
             } else {
                 if !callback_targets(&analyzer, &file, &flow, call, &[]).is_empty() {
                     totals.callback_only += 1;
+                }
+                if let (CalleeFact::Member { object, .. }, Some(types)) =
+                    (&call.callee, analyzer.types())
+                {
+                    let end = flow.nodes[*object as usize].range.end;
+                    let name = crate::ts_api::skip_trivia(&content, end) as usize;
+                    let name = content[name..]
+                        .find(|c: char| c.is_alphanumeric() || c == '_' || c == '$' || c == '#')
+                        .map(|i| (name + i) as u32);
+                    if let Some(name) = name {
+                        for decl in types.declarations_at(&file, &content, name) {
+                            *totals.typed_unmapped.entry(decl.kind()).or_default() += 1;
+                            *totals
+                                .typed_unmapped_samples
+                                .entry(decl.kind())
+                                .or_default()
+                                .entry(format!(
+                                    "{} -> {}",
+                                    call.callee_text.chars().take(40).collect::<String>(),
+                                    decl.path.file_name().unwrap_or_default().to_string_lossy()
+                                ))
+                                .or_default() += 1;
+                        }
+                    }
                 }
                 let why = why_unresolved(&analyzer, &file, &flow, &call.callee);
                 *totals.unresolved_why.entry(why).or_default() += 1;
@@ -641,6 +703,13 @@ fn measure_repo(root: &Path, totals: &mut Totals) {
     measure_interprocedural(&analyzer, &repo_files, totals);
     if let Ok(out) = std::env::var("DATAFLOW_EDGES_OUT") {
         write_edges(&analyzer, root, &repo_files, Path::new(&out));
+    }
+    if let Some(types) = analyzer.types() {
+        for (method, count, time) in types.stats() {
+            totals
+                .checker_time
+                .push(format!("{method}: {count} in {time:?}"));
+        }
     }
 }
 
@@ -700,6 +769,28 @@ fn corpus_metric() {
         percent(t.calls - t.resolved, t.calls),
         t.callback_only
     );
+    let _ = writeln!(
+        out,
+        "resolved through types (via: \"type\"): {} ({})",
+        t.resolved_by_type,
+        percent(t.resolved_by_type, t.calls)
+    );
+    let _ = writeln!(
+        out,
+        "unresolved method calls with a workspace declaration, by TS SyntaxKind: {:?}",
+        t.typed_unmapped
+    );
+    if std::env::var("DATAFLOW_CORPUS_SAMPLES").is_ok() {
+        let _ = writeln!(
+            out,
+            "  resolved through types: {:#?}",
+            top(&t.typed_samples, 25)
+        );
+        for (kind, samples) in &t.typed_unmapped_samples {
+            let _ = writeln!(out, "  kind {kind}: {:?}", top(samples, 10));
+        }
+    }
+    let _ = writeln!(out, "checker round trips: {:?}", t.checker_time);
     let outside: usize = t
         .unresolved_why
         .iter()

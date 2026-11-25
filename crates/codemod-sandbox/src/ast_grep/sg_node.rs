@@ -1781,13 +1781,13 @@ impl<'js> SgNodeRjs<'js> {
         }
     }
 
-    /// Get type information for the symbol at this node's position.
-    ///
-    /// TODO: Currently, this is not implemented by any of the semantic providers. So it's not publicly available.
+    /// The type of the expression at this node's range, printed by the
+    /// TypeScript 7 checker. Experimental; JavaScript/TypeScript in workspace
+    /// scope with types on (`types: "ts7"`).
     ///
     /// Returns null if:
     /// - No semantic provider is configured
-    /// - Type information is not available
+    /// - Types are off, or no expression has exactly this range
     #[qjs(rename = "typeInfo")]
     pub fn type_info(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
         #[cfg(not(feature = "native"))]
@@ -2032,6 +2032,32 @@ impl<'js> SgNodeRjs<'js> {
                 object.set("resolved", entry.resolved)?;
                 object.set("via", entry.via.as_str())?;
                 object.set("depth", entry.depth)?;
+                // Types on: where the checker says an unresolved call's
+                // member is declared (a library `.d.ts`, an interface).
+                if let Some(declaration) = &entry.declaration {
+                    let found = (|| {
+                        let content = match contents.get(declaration.file_path.as_path()) {
+                            Some(content) => (*content).to_string(),
+                            None => std::fs::read_to_string(&declaration.file_path).ok()?,
+                        };
+                        let root = self.root_for(&mut roots, &declaration.file_path, &content)?;
+                        let node = Self::node_in(&root, declaration.range)?;
+                        Some((node, root))
+                    })();
+                    if let Some((node, root)) = found {
+                        let target = rquickjs::Object::new(ctx.clone())?;
+                        target.set("node", node)?;
+                        target.set(
+                            "root",
+                            SgRootRjs {
+                                inner: root,
+                                _phantom: PhantomData,
+                            },
+                        )?;
+                        target.set("name", or_null(&ctx, declaration.name.clone())?)?;
+                        object.set("declaration", target)?;
+                    }
+                }
 
                 let call_site = entry.call_site.as_ref().and_then(|(path, call_range)| {
                     let content = match contents.get(path.as_path()) {

@@ -2613,6 +2613,63 @@ export default async function main() {{
     }
 }
 
+/// `semanticAnalysis.types: "ts7"` turns on the TypeScript 7 checker for
+/// `typeInfo()`; without it there are no types, and bad values are refused.
+/// The checked answer needs a checker (`CODEMOD_TS_API`, set in CI).
+#[test]
+fn semantic_analysis_types_turn_on_the_checker() {
+    let h = Harness::new();
+    h.write(
+        "src/a.ts",
+        "const value: number = 1;\nconsole.log(value);\n",
+    );
+    let workflow = |options: &str| {
+        format!(
+            r#"
+import {{ step, forEachFile }} from "codemod/workflow";
+import {{ parse }} from "codemod/ast-grep";
+export default async function main() {{
+  const found = await step(forEachFile({{ include: "src/**/*.ts", language: "typescript"{options} }}, (file) => {{
+    return parse(file).root().find({{ rule: {{ pattern: "console.log($A)" }} }}).getMatch("A").typeInfo();
+  }}));
+  return found.outputs;
+}}
+"#
+        )
+    };
+    assert_eq!(
+        output(&h.start(&workflow(r#", semanticAnalysis: "workspace""#), Value::Null)).unwrap(),
+        json!([null]),
+        "types are off by default"
+    );
+    for bad in [
+        r#"{ mode: "workspace", types: "ts9" }"#,
+        r#"{ mode: "file", types: "ts7" }"#,
+    ] {
+        assert!(
+            output(&h.start(
+                &workflow(&format!(", semanticAnalysis: {bad}")),
+                Value::Null
+            ))
+            .is_err(),
+            "{bad} is refused"
+        );
+    }
+    let checker = std::env::var("CODEMOD_TS_API").is_ok_and(|v| !v.is_empty() && v != "off");
+    assert_eq!(
+        output(&h.start(
+            &workflow(r#", semanticAnalysis: { mode: "workspace", types: "ts7" }"#),
+            Value::Null
+        ))
+        .unwrap(),
+        if checker {
+            json!(["number"])
+        } else {
+            json!([null])
+        },
+    );
+}
+
 /// A callback gets the capabilities its selector asks for once they are
 /// approved, and never `fs` or `child_process` in a dry run.
 #[test]

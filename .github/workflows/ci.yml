@@ -167,6 +167,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         id: toolchain
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # The TypeScript 7 checker behind `semanticAnalysis.types: "ts7"`
+      # speaks an unversioned protocol: test against the pinned minor
+      # (ts_api::PINNED_VERSION). The type tests skip without it.
+      - name: Install the pinned TypeScript 7 checker
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ts7" --no-save --no-audit --no-fund typescript@~7.0.0
+          echo "CODEMOD_TS_API=$RUNNER_TEMP/ts7/node_modules/@typescript/typescript-linux-x64/lib/tsc" >> "$GITHUB_ENV"
       - name: Run tests
         run: cargo test
       - name: Check schema generation
