@@ -81,6 +81,15 @@ jssg_test! {
     target: "cart.js",
 }
 
+jssg_test! {
+    name: test_dataflow_helpers_identity_booleans_from_and_callee,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "js_dataflow_helpers.js",
+    fixture_dir: "javascript/dataflow",
+    target: "server.js",
+    scope: workspace,
+}
+
 // Realistic codemods built on data flow and the call graph. They are the
 // yardstick for the API's ergonomics: each rewrites its fixture and the
 // result must match the expected directory.

@@ -14,8 +14,8 @@ mod types;
 pub use dataflow::{
     CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
     CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
-    FlowResult, FlowStep, KindSet, Mutation, MutationConfidence, MutationKind, MutationOptions,
-    MutationsResult, UnparsedFile,
+    FlowResult, FlowStep, FunctionRef, KindSet, Mutation, MutationConfidence, MutationKind,
+    MutationOptions, MutationsResult, UnparsedFile,
 };
 pub use error::{SemanticError, SemanticResult};
 pub use modules::{SpecifierOptions, SpecifierStyle};

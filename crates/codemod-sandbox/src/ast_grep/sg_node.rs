@@ -67,6 +67,8 @@ pub(crate) struct SgRootInner {
     target_directory: Option<std::path::PathBuf>,
     /// Optional rename target path set by root.rename()
     pub(crate) rename_to: Mutex<Option<String>>,
+    /// `filename`, canonicalized once, for `SgNode.key()`.
+    canonical_filename: std::sync::OnceLock<String>,
     /// Optional semantic provider for symbol indexing (native only)
     #[cfg(feature = "native")]
     pub(crate) semantic_provider: Option<Arc<dyn SemanticProvider>>,
@@ -444,6 +446,23 @@ fn in_callback_isolate(ctx: &Ctx<'_>) -> bool {
         .is_some()
 }
 
+impl SgRootInner {
+    /// The file this root was parsed from, canonicalized (so two roots for
+    /// one file agree), or "" for a root parsed from a string.
+    fn canonical_filename(&self) -> &str {
+        self.canonical_filename
+            .get_or_init(|| match &self.filename {
+                #[cfg(feature = "native")]
+                Some(name) => std::fs::canonicalize(name)
+                    .map(|path| path.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| name.clone()),
+                #[cfg(not(feature = "native"))]
+                Some(name) => name.clone(),
+                None => String::new(),
+            })
+    }
+}
+
 impl<'js> SgRootRjs<'js> {
     /// Mark a root `jssgTransform` made for the file it changes.
     #[cfg(feature = "native")]
@@ -493,6 +512,7 @@ impl<'js> SgRootRjs<'js> {
                     target_directory: target_directory.map(|path| path.to_path_buf()),
                     filename,
                     rename_to: Mutex::new(None),
+                    canonical_filename: std::sync::OnceLock::new(),
                 }),
                 _phantom: PhantomData,
             })
@@ -516,6 +536,7 @@ impl<'js> SgRootRjs<'js> {
                     target_directory: target_directory.map(|path| path.to_path_buf()),
                     filename,
                     rename_to: Mutex::new(None),
+                    canonical_filename: std::sync::OnceLock::new(),
                     #[cfg(feature = "native")]
                     semantic_provider: None,
                     #[cfg(feature = "native")]
@@ -542,6 +563,7 @@ impl<'js> SgRootRjs<'js> {
                     target_directory: target_directory.map(|path| path.to_path_buf()),
                     filename,
                     rename_to: Mutex::new(None),
+                    canonical_filename: std::sync::OnceLock::new(),
                     #[cfg(feature = "native")]
                     semantic_provider: None,
                     #[cfg(feature = "native")]
@@ -566,6 +588,7 @@ impl<'js> SgRootRjs<'js> {
                 target_directory: target_directory.map(|path| path.to_path_buf()),
                 filename,
                 rename_to: Mutex::new(None),
+                canonical_filename: std::sync::OnceLock::new(),
                 #[cfg(feature = "native")]
                 semantic_provider: None,
                 #[cfg(feature = "native")]
@@ -593,6 +616,7 @@ impl<'js> SgRootRjs<'js> {
                 target_directory: target_directory.map(|path| path.to_path_buf()),
                 filename,
                 rename_to: Mutex::new(None),
+                canonical_filename: std::sync::OnceLock::new(),
                 semantic_provider,
                 current_file_path,
                 transformed_file: false,
@@ -1330,6 +1354,56 @@ impl<'js> SgNodeRjs<'js> {
         }
     }
 
+    /// A string naming this node across answers and roots: its file, range
+    /// and kind. Two nodes with the same key are the same syntax node, even
+    /// when they come from different queries (which wrap nodes in new
+    /// objects, and other files in new roots). Use it in a Set or Map.
+    #[qjs(rename = "key")]
+    pub fn key(&self) -> String {
+        let range = self.inner_node.range();
+        format!(
+            "{}:{}-{}:{}",
+            self.root.canonical_filename(),
+            range.start,
+            range.end,
+            self.inner_node.kind()
+        )
+    }
+
+    /// Whether `other` is the same syntax node (same file, range and kind),
+    /// even from another query or root. False for anything but an SgNode.
+    #[qjs(rename = "equals")]
+    pub fn equals(&self, other: Value<'js>) -> bool {
+        rquickjs::Class::<SgNodeRjs>::from_value(&other)
+            .is_ok_and(|other| other.borrow().key() == self.key())
+    }
+
+    /// Whether this node's value is computed from `source`: a node, or a
+    /// predicate over the steps of `flowsFrom(options)`.
+    #[qjs(rename = "dependsOn")]
+    pub fn depends_on(
+        &self,
+        ctx: Ctx<'js>,
+        source: Value<'js>,
+        options: Opt<Value<'js>>,
+    ) -> Result<bool> {
+        let steps = self.data_flow(ctx.clone(), options, true)?;
+        any_step(&ctx, "dependsOn", steps, source)
+    }
+
+    /// Whether this node's value reaches `target`: a node, or a predicate
+    /// over the steps of `flowsTo(options)`.
+    #[qjs(rename = "reaches")]
+    pub fn reaches(
+        &self,
+        ctx: Ctx<'js>,
+        target: Value<'js>,
+        options: Opt<Value<'js>>,
+    ) -> Result<bool> {
+        let steps = self.data_flow(ctx.clone(), options, false)?;
+        any_step(&ctx, "reaches", steps, target)
+    }
+
     /// Follow this node's value backward: what it is computed from.
     ///
     /// Returns an array of steps, nearest first. Each step has the `node` and
@@ -1555,20 +1629,25 @@ impl<'js> SgNodeRjs<'js> {
 
             let mut roots = Vec::new();
             let mut steps = Vec::new();
-            for file in &flow.files {
+            for (file_index, file) in flow.files.iter().enumerate() {
                 let Some(root) = self.root_for(&mut roots, &file.file_path, &file.content) else {
                     continue;
                 };
-                for step in &file.steps {
+                for (step_index, step) in file.steps.iter().enumerate() {
                     if let Some(node) = Self::node_in(&root, step.range) {
-                        steps.push((step, node, Arc::clone(&root)));
+                        steps.push(((file_index, step_index), step, node, Arc::clone(&root)));
                     }
                 }
             }
-            steps.sort_by_key(|(step, _, _)| step.depth);
+            steps.sort_by_key(|(_, step, _, _)| step.depth);
 
-            for (index, (step, node, root)) in steps.into_iter().enumerate() {
+            // `from` points at another step object: make them all first.
+            let mut objects = std::collections::HashMap::new();
+            let mut links = Vec::new();
+            for (index, (at, step, node, root)) in steps.into_iter().enumerate() {
                 let object = rquickjs::Object::new(ctx.clone())?;
+                objects.insert(at, object.clone());
+                links.push((object.clone(), step.from.map(|from| (at.0, from as usize))));
                 object.set("node", node)?;
                 object.set(
                     "root",
@@ -1584,6 +1663,12 @@ impl<'js> SgNodeRjs<'js> {
                 object.set("depth", step.depth)?;
                 object.set("boundary", step.boundary)?;
                 result.set(index, object)?;
+            }
+            for (object, from) in links {
+                match from.and_then(|at| objects.get(&at)) {
+                    Some(previous) => object.set("from", previous.clone())?,
+                    None => object.set("from", Value::new_null(ctx.clone()))?,
+                }
             }
             result.as_object().set("truncated", flow.truncated)?;
             result.into_js(&ctx)
@@ -1683,6 +1768,33 @@ impl<'js> SgNodeRjs<'js> {
                     let node = Self::node_in(&root, *call_range)?;
                     Some((node, root))
                 });
+                if !callees {
+                    let callee = entry.callee.as_ref().and_then(|callee| {
+                        let content = match contents.get(callee.file_path.as_path()) {
+                            Some(content) => (*content).to_string(),
+                            None => std::fs::read_to_string(&callee.file_path).ok()?,
+                        };
+                        let root = self.root_for(&mut roots, &callee.file_path, &content)?;
+                        let node = Self::node_in(&root, callee.range)?;
+                        Some((node, root, callee.name.clone()))
+                    });
+                    match callee {
+                        Some((node, root, name)) => {
+                            let callee = rquickjs::Object::new(ctx.clone())?;
+                            callee.set("node", node)?;
+                            callee.set(
+                                "root",
+                                SgRootRjs {
+                                    inner: root,
+                                    _phantom: PhantomData,
+                                },
+                            )?;
+                            callee.set("name", or_null(&ctx, name)?)?;
+                            object.set("callee", callee)?;
+                        }
+                        None => object.set("callee", Value::new_null(ctx.clone()))?,
+                    }
+                }
                 match call_site {
                     Some((node, root)) => {
                         let site = rquickjs::Object::new(ctx.clone())?;
@@ -1929,6 +2041,46 @@ fn definition_value<'js>(
     result_obj.set("kind", def_result.kind.as_str())?;
     result_obj.set("exportName", or_null(ctx, def_result.export_name.clone())?)?;
     result_obj.into_js(ctx)
+}
+
+/// Whether a step of `steps` matches `target`: an SgNode (the step's node
+/// is that node) or a predicate called with each step.
+fn any_step<'js>(
+    ctx: &Ctx<'js>,
+    method: &str,
+    steps: Value<'js>,
+    target: Value<'js>,
+) -> Result<bool> {
+    let Some(steps) = steps.into_array() else {
+        return Ok(false);
+    };
+    if let Some(predicate) = target.as_function() {
+        for step in steps.iter::<Value>() {
+            let step = step?;
+            let hit: Value = predicate.call((step,))?;
+            if hit.as_bool().unwrap_or(false)
+                || hit.as_int().is_some_and(|n| n != 0)
+                || (hit.is_object() && !hit.is_null())
+            {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    let Ok(node) = rquickjs::Class::<SgNodeRjs>::from_value(&target) else {
+        return Err(Exception::throw_type(
+            ctx,
+            &format!("{method}(target): target must be an SgNode or a function of a step"),
+        ));
+    };
+    let key = node.borrow().key();
+    for step in steps.iter::<rquickjs::Object>() {
+        let value: Value = step?.get("node")?;
+        if rquickjs::Class::<SgNodeRjs>::from_value(&value).is_ok_and(|n| n.borrow().key() == key) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// `null`, not `undefined`, for a missing value: the public types say

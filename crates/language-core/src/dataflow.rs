@@ -215,6 +215,10 @@ pub struct FlowStep {
     /// The analysis stops here because the value comes from outside what was
     /// analyzed: a parameter, an import, a global, `this`, or a call result.
     pub boundary: bool,
+    /// The step this one was reached from: its index in the same file's
+    /// `steps`. None for a step reached directly from the queried node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<u32>,
 }
 
 /// Steps in one file, with its content so callers can build a syntax tree.
@@ -289,6 +293,19 @@ pub struct CallGraphEntry {
     pub depth: u32,
     /// The call that made this edge.
     pub call_site: Option<(PathBuf, ByteRange)>,
+    /// Callers only: the function this entry's call reaches (the queried
+    /// function at depth 1, a caller found at the previous depth deeper).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callee: Option<FunctionRef>,
+}
+
+/// A function in the workspace, by file and range.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionRef {
+    pub file_path: PathBuf,
+    pub range: ByteRange,
+    pub name: Option<String>,
 }
 
 /// Call-graph entries in one file.

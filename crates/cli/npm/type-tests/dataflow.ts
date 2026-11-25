@@ -85,3 +85,20 @@ if (def) {
   const nameText: string | undefined = def.nameNode?.text();
   void [exportName, nameText];
 }
+
+// Helpers: identity, booleans, step.from, callee, stopAt.
+export const sameNode: boolean = node.equals(root.root()) || node.key() === root.root().key();
+export const fromReq: boolean = node.dependsOn(
+  (step) => step.kind === "parameter" && step.name === "req",
+);
+export const toQuery: boolean = node.reaches(root.root(), { stopAt: ["argument", "jsx-child"] });
+for (const step of node.flowsFrom()) {
+  const previous: string | undefined = step.from?.kind;
+  void previous;
+}
+for (const caller of node.callers({ transitive: true, stopAt: ["callback"] })) {
+  const callee: string | null | undefined = caller.callee?.name;
+  void callee;
+}
+// @ts-expect-error stopAt takes edge kinds
+node.flowsTo({ stopAt: ["callback"] });

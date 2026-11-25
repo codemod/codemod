@@ -432,6 +432,41 @@ impl SgNode {
         Vec::new()
     }
 
+    /// A string naming this node across roots: its file, range and kind.
+    #[napi]
+    pub fn key(&self) -> String {
+        let range = self.node.range();
+        let file = self
+            .root
+            .filename
+            .as_ref()
+            .map(|name| {
+                std::fs::canonicalize(name)
+                    .map(|path| path.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| name.clone())
+            })
+            .unwrap_or_default();
+        format!("{file}:{}-{}:{}", range.start, range.end, self.node.kind())
+    }
+
+    /// Whether `other` is the same syntax node (same file, range and kind).
+    #[napi]
+    pub fn equals(&self, other: &SgNode) -> bool {
+        self.key() == other.key()
+    }
+
+    /// Throws, as `flowsFrom()` does.
+    #[napi]
+    pub fn depends_on(&self, _source: Unknown<'_>, _options: Option<Value>) -> Result<bool> {
+        Err(no_semantic_provider("dependsOn"))
+    }
+
+    /// Throws, as `flowsFrom()` does.
+    #[napi]
+    pub fn reaches(&self, _target: Unknown<'_>, _options: Option<Value>) -> Result<bool> {
+        Err(no_semantic_provider("reaches"))
+    }
+
     /// Throws: roots parsed in Node have no semantic provider, and an empty
     /// answer would read as "no sources".
     #[napi]

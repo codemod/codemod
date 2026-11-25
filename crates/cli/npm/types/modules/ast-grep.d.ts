@@ -89,6 +89,29 @@ declare module "codemod:ast-grep" {
      */
     references(): Array<FileReferences<M>>;
 
+    /**
+     * A string naming this node across answers and roots: its file, range and
+     * kind. Each semantic query wraps nodes in new objects (and other files in
+     * new roots), so `===` and `id()` do not match across queries; keys do.
+     * Use it in a `Set` or `Map` to dedupe or remember nodes.
+     *
+     * @example
+     * ```ts
+     * const seen = new Set<string>();
+     * for (const caller of fn.callers({ transitive: true })) {
+     *   if (seen.has(caller.node.key())) continue; // one edit per function
+     *   seen.add(caller.node.key());
+     * }
+     * ```
+     */
+    key(): string;
+
+    /**
+     * Whether `other` is the same syntax node (same file, range and kind),
+     * even when it comes from another query or root. Same as comparing `key()`.
+     */
+    equals(other: SgNode<M>): boolean;
+
     // Data flow and call graph (experimental; JavaScript and TypeScript only).
     // Every answer is a "may" answer: see the soundness notes on each method
     // and the result types, and https://docs.codemod.com/community/jssg/dataflow.
@@ -157,6 +180,38 @@ declare module "codemod:ast-grep" {
      * ```
      */
     flowsTo(options?: FlowOptions): FlowSteps<M>;
+
+    /**
+     * Whether this node's value is computed from `source`: `true` when a step
+     * of `flowsFrom(options)` is that node, or matches the predicate.
+     * Same soundness as `flowsFrom()`: `false` means "not found", and a
+     * `boundary` step can hide more sources.
+     *
+     * @throws as `flowsFrom()` does, and when `source` is neither.
+     * @experimental
+     * @example
+     * ```ts
+     * // Is the SQL text built from request data?
+     * sql.dependsOn((step) => step.kind === "parameter" && step.name === "req");
+     * // Is this argument created by moment(...) directly, not through an alias?
+     * name.dependsOn((step) => step.kind === "call" && step.name === "moment", { maxDepth: 1 });
+     * ```
+     */
+    dependsOn(source: SgNode<M> | ((step: FlowStep<M>) => boolean), options?: FlowOptions): boolean;
+
+    /**
+     * Whether this node's value reaches `target`: `true` when a step of
+     * `flowsTo(options)` is that node, or matches the predicate.
+     *
+     * @throws as `flowsTo()` does, and when `target` is neither.
+     * @experimental
+     * @example
+     * ```ts
+     * // Does req.body reach a db.query(...) call?
+     * body.reaches((step) => step.via === "argument" && step.name === "db.query");
+     * ```
+     */
+    reaches(target: SgNode<M> | ((step: FlowStep<M>) => boolean), options?: FlowOptions): boolean;
 
     /**
      * Functions called from the function at this node. The node can be a
@@ -787,6 +842,12 @@ declare module "codemod:ast-grep" {
     throughCalls?: boolean;
     /** Stop after this many steps from the node. `1` gives the direct sources (or uses) only. */
     maxDepth?: number;
+    /**
+     * Report steps reached through these edges, but do not walk past them:
+     * "the first sink". `flowsTo({ stopAt: ["jsx-child", "jsx-attribute", "argument"] })`
+     * answers where a value is first used, not every place its uses go on to.
+     */
+    stopAt?: FlowEdgeKind[];
   }
 
   /** Fields every data-flow step has. */
@@ -796,6 +857,18 @@ declare module "codemod:ast-grep" {
     root: SgRoot<M>;
     /** Number of edges from the queried node (1 = a direct source or use). */
     depth: number;
+    /**
+     * The step this one was reached from, or null for a step reached directly
+     * from the queried node (`depth` 1). Follow `from` to print the whole
+     * path, or to find the step right before one, without counting depths.
+     *
+     * @example
+     * ```ts
+     * // The value a variable passed to query() was initialized with
+     * const init = sql.flowsFrom().find((s) => s.via === "assign" && s.from?.kind === "variable");
+     * ```
+     */
+    from: FlowStep<M> | null;
     /**
      * Backward answers only: the value comes from outside the analyzed code
      * (a parameter, an import, a global, `this`, a call result) and the trail
@@ -884,6 +957,13 @@ declare module "codemod:ast-grep" {
     transitive?: boolean;
     /** With `transitive`, stop after this many calls from the node. */
     maxDepth?: number;
+    /**
+     * With `transitive`, report edges of these kinds but do not walk past
+     * them. `callers({ transitive: true, stopAt: ["callback"] })` does not
+     * continue from a function that only passes the queried one to unknown
+     * code (`names.map(getSetting)`).
+     */
+    stopAt?: CallEdgeKind[];
   }
 
   /**
@@ -957,6 +1037,12 @@ declare module "codemod:ast-grep" {
     depth: number;
     /** The call, in the calling function. For a callback, the call it is passed to. */
     callSite: CallSite<M>;
+    /**
+     * The function this entry's call reaches: the queried function at depth
+     * 1, a caller from the previous depth deeper. Null when the call reaches
+     * module code.
+     */
+    callee: { node: SgNode<M>; root: SgRoot<M>; name: string | null } | null;
   }
 
   /** An entry of either call-graph answer. */

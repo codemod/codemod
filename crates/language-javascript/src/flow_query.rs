@@ -8,7 +8,8 @@ use crate::dataflow::{CallFact, CalleeFact, FileFlow};
 use language_core::{
     ByteRange, CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
     CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
-    FlowResult, FlowStep, Mutation, MutationKind, MutationOptions, MutationsResult, UnparsedFile,
+    FlowResult, FlowStep, FunctionRef, Mutation, MutationKind, MutationOptions, MutationsResult,
+    UnparsedFile,
 };
 use parking_lot::RwLock;
 use rayon::prelude::*;
@@ -70,10 +71,11 @@ pub(crate) fn data_flow(
     let mut steps = Vec::new();
     let mut truncated = false;
     let mut seen_nodes = HashSet::from([start]);
-    let mut seen_steps = HashSet::new();
-    let mut queue = VecDeque::from([(start, 0u32)]);
+    // Each step's index, so a node reached later can point back at it.
+    let mut seen_steps: HashMap<(u32, FlowEdgeKind, Option<u32>), u32> = HashMap::new();
+    let mut queue = VecDeque::from([(start, 0u32, None::<u32>)]);
 
-    while let Some((current, depth)) = queue.pop_front() {
+    while let Some((current, depth, reached_by)) = queue.pop_front() {
         if options.max_depth.is_some_and(|max| depth >= max) {
             continue;
         }
@@ -118,11 +120,15 @@ pub(crate) fn data_flow(
             } else {
                 node.index
             };
-            if seen_steps.insert((other, edge, index)) {
+            let key = (other, edge, index);
+            let this_step = if let Some(&existing) = seen_steps.get(&key) {
+                Some(existing)
+            } else {
                 if steps.len() >= RESULT_LIMIT {
                     truncated = true;
                     break;
                 }
+                seen_steps.insert(key, steps.len() as u32);
                 steps.push(FlowStep {
                     range: node.range,
                     kind: node.kind,
@@ -139,8 +145,10 @@ pub(crate) fn data_flow(
                                 | FlowNodeKind::This
                                 | FlowNodeKind::Call
                         ),
+                    from: reached_by,
                 });
-            }
+                Some(steps.len() as u32 - 1)
+            };
             // A returned or stored value leaves the function or goes into the
             // heap: reported, not followed.
             let stop = options.stop_at.contains(edge)
@@ -148,7 +156,7 @@ pub(crate) fn data_flow(
                     && (matches!(edge, FlowEdgeKind::Return | FlowEdgeKind::Store)
                         || (call_edge && !options.through_calls)));
             if !stop && seen_nodes.insert(other) {
-                queue.push_back((other, depth + 1));
+                queue.push_back((other, depth + 1, this_step));
             }
         }
     }
@@ -976,6 +984,7 @@ fn callees(
                     via: unresolved_kind(call),
                     depth: depth + 1,
                     call_site: Some((path.clone(), call.range)),
+                    callee: None,
                 };
                 if !entries.push(&path, unresolved) {
                     truncated = true;
@@ -999,6 +1008,7 @@ fn callees(
                     via,
                     depth: depth + 1,
                     call_site: Some((path.clone(), call.range)),
+                    callee: None,
                 };
                 if !entries.push(&target_path, entry) {
                     truncated = true;
@@ -1143,6 +1153,16 @@ impl std::fmt::Debug for CallerIndexSlot {
     }
 }
 
+/// The function `key` stands for, as the callers walk reports it.
+fn callee_ref(index: &CallerIndex, key: &FunctionKey) -> Option<FunctionRef> {
+    let function = index.flows.get(&key.0)?.functions.get(key.1? as usize)?;
+    Some(FunctionRef {
+        file_path: key.0.clone(),
+        range: function.range,
+        name: function.name.as_deref().map(str::to_string),
+    })
+}
+
 fn callers(
     host: &dyn FlowHost,
     start: Vec<FunctionKey>,
@@ -1188,6 +1208,7 @@ fn callers(
                 via: *via,
                 depth: depth + 1,
                 call_site: Some((file.clone(), call.range)),
+                callee: callee_ref(&index, &key),
             };
             if !entries.push(file, entry) {
                 truncated = true;
