@@ -316,69 +316,75 @@ fn cold() {
 /// Heap bytes held by facts, by part, estimated from capacities (allocator
 /// overhead not counted). `(name, bytes)`.
 fn flow_bytes(flow: &crate::dataflow::FileFlow) -> Vec<(&'static str, usize)> {
-    use std::mem::size_of_val;
-    let string = |s: &Option<String>| s.as_ref().map_or(0, String::capacity);
-    let vec_bytes = |len: usize, item: usize| len * item;
-    let nodes = vec_bytes(
-        flow.nodes.capacity(),
-        std::mem::size_of::<crate::dataflow::FlowNode>(),
-    );
-    let names: usize = flow.nodes.iter().map(|n| string(&n.name)).sum();
-    let edges = flow.out_edges.heap_bytes() + flow.in_edges.heap_bytes();
-    let calls = vec_bytes(
-        flow.calls.capacity(),
-        std::mem::size_of::<crate::dataflow::CallFact>(),
-    ) + flow
-        .calls
-        .iter()
-        .map(|c| {
-            c.callee_text.capacity()
-                + c.args.capacity() * 4
-                + match &c.callee {
-                    crate::dataflow::CalleeFact::Member { property, .. } => property.capacity(),
-                    _ => 0,
-                }
-        })
-        .sum::<usize>();
-    let functions = vec_bytes(
-        flow.functions.capacity(),
-        std::mem::size_of::<crate::dataflow::FunctionFact>(),
-    ) + flow
-        .functions
-        .iter()
-        .map(|f| string(&f.name))
-        .sum::<usize>();
-    let mutations = vec_bytes(
-        flow.mutations.capacity(),
-        std::mem::size_of::<crate::dataflow::MutationFact>(),
-    ) + flow
-        .mutations
-        .iter()
-        .map(|m| string(&m.name))
-        .sum::<usize>();
+    use crate::dataflow::{CallFact, CalleeFact, FlowNode, FunctionFact, MutationFact, Name};
+    use std::mem::size_of;
+    // Names are shared: count each distinct one once (16 bytes of Arc header).
+    let mut seen = std::collections::HashSet::new();
+    let mut name_bytes = 0usize;
+    let mut name = |name: Option<&Name>| {
+        if let Some(name) = name {
+            if seen.insert(std::sync::Arc::as_ptr(name) as *const u8 as usize) {
+                name_bytes += name.len() + 16;
+            }
+        }
+    };
+    for node in &flow.nodes {
+        name(node.name.as_ref());
+    }
+    for function in &flow.functions {
+        name(function.name.as_ref());
+    }
+    for mutation in &flow.mutations {
+        name(mutation.name.as_ref());
+    }
+    let mut args = 0;
+    for call in &flow.calls {
+        name(Some(&call.callee_text));
+        if let CalleeFact::Member { property, .. } = &call.callee {
+            name(Some(property));
+        }
+        args += call.args.len() * 4;
+    }
     let map = |cap: usize, entry: usize| cap * (entry + 1);
-    let lookup = flow.span_index_bytes()
-        + map(flow.fn_by_node.capacity(), 8)
-        + map(flow.call_by_node.capacity(), 8);
-    let members = map(flow.object_members.capacity(), 32)
-        + flow
-            .object_members
-            .values()
-            .chain(flow.class_methods.values())
-            .chain(flow.class_fields.values())
-            .map(|v| v.capacity() * 32 + v.iter().map(|(s, _)| s.capacity()).sum::<usize>())
-            .sum::<usize>()
+    let mut members = map(flow.object_members.capacity(), 32)
         + map(flow.class_methods.capacity(), 32)
         + map(flow.class_fields.capacity(), 32);
-    let _ = size_of_val(flow);
+    for list in flow
+        .object_members
+        .values()
+        .chain(flow.class_methods.values())
+        .chain(flow.class_fields.values())
+    {
+        members += list.capacity() * size_of::<(Name, u32)>();
+        for (member, _) in list {
+            name(Some(member));
+        }
+    }
     vec![
-        ("nodes", nodes),
-        ("node names", names),
-        ("edges", edges),
-        ("span index + id maps", lookup),
-        ("calls", calls),
-        ("functions", functions),
-        ("mutations", mutations),
+        ("nodes", flow.nodes.capacity() * size_of::<FlowNode>()),
+        ("names", name_bytes),
+        (
+            "edges",
+            flow.out_edges.heap_bytes() + flow.in_edges.heap_bytes(),
+        ),
+        (
+            "span index + id maps",
+            flow.span_index_bytes()
+                + map(flow.fn_by_node.capacity(), 8)
+                + map(flow.call_by_node.capacity(), 8),
+        ),
+        (
+            "calls",
+            flow.calls.capacity() * size_of::<CallFact>() + args,
+        ),
+        (
+            "functions",
+            flow.functions.capacity() * size_of::<FunctionFact>(),
+        ),
+        (
+            "mutations",
+            flow.mutations.capacity() * size_of::<MutationFact>(),
+        ),
         ("members", members),
     ]
 }

@@ -127,7 +127,7 @@ pub(crate) fn data_flow(
                     range: node.range,
                     kind: node.kind,
                     via: edge,
-                    name: node.name.clone(),
+                    name: node.name.as_deref().map(str::to_string),
                     index,
                     depth: depth + 1,
                     boundary: backward
@@ -248,7 +248,7 @@ pub(crate) fn mutations(
             range: fact.range,
             kind: fact.kind,
             confidence: fact.confidence,
-            name: fact.name.clone(),
+            name: fact.name.as_deref().map(str::to_string),
             deferred,
             via_alias,
         });
@@ -452,7 +452,7 @@ fn method_of(flow: &FileFlow, class_node: u32, name: &str) -> Option<u32> {
     flow.class_methods
         .get(&class_node)?
         .iter()
-        .find(|(method, _)| method == name)
+        .find(|(method, _)| &**method == name)
         .map(|(_, function)| *function)
 }
 
@@ -462,7 +462,7 @@ fn field_values(flow: &FileFlow, class_node: u32, name: &str) -> Vec<u32> {
         .get(&class_node)
         .into_iter()
         .flatten()
-        .filter(|(field, _)| field == name)
+        .filter(|(field, _)| &**field == name)
         .flat_map(|(_, node)| {
             flow.in_edges[*node as usize]
                 .iter()
@@ -515,7 +515,7 @@ fn member_origins(
                 let member = flow
                     .object_members
                     .get(node)
-                    .and_then(|members| members.iter().find(|(name, _)| name == property));
+                    .and_then(|members| members.iter().find(|(name, _)| &**name == property));
                 if let Some((_, value)) = member {
                     origins(host, path, flow, *value, seen, out);
                 }
@@ -971,7 +971,7 @@ fn callees(
             if targets.is_empty() {
                 let unresolved = CallGraphEntry {
                     range: call.range,
-                    name: Some(call.callee_text.clone()),
+                    name: Some(call.callee_text.to_string()),
                     resolved: false,
                     via: unresolved_kind(call),
                     depth: depth + 1,
@@ -994,7 +994,7 @@ fn callees(
                 let fact = &target_flow.functions[target as usize];
                 let entry = CallGraphEntry {
                     range: fact.range,
-                    name: fact.name.clone(),
+                    name: fact.name.as_deref().map(str::to_string),
                     resolved: true,
                     via,
                     depth: depth + 1,
@@ -1174,7 +1174,7 @@ fn callers(
                 range: caller.map_or(call.range, |f| f.range),
                 name: Some(
                     caller
-                        .map(|f| f.name.clone().unwrap_or_else(|| "<anonymous>".to_string()))
+                        .map(|f| f.name.as_deref().unwrap_or("<anonymous>").to_string())
                         .unwrap_or_else(|| "<module>".to_string()),
                 ),
                 resolved: true,

@@ -84,12 +84,15 @@ const PURE_METHODS: &[&str] = &[
     "finally",
 ];
 
+/// A name in the facts: one shared copy per distinct name in a file.
+pub type Name = Arc<str>;
+
 /// A node of the value-flow graph.
 #[derive(Debug, Clone)]
 pub struct FlowNode {
     pub range: ByteRange,
     pub kind: FlowNodeKind,
-    pub name: Option<String>,
+    pub name: Option<Name>,
     /// Parameter position.
     pub index: Option<u32>,
     /// Innermost enclosing function (index into [`FileFlow::functions`]).
@@ -104,7 +107,7 @@ pub struct FunctionFact {
     pub range: ByteRange,
     /// The function's node in the value-flow graph.
     pub node: u32,
-    pub name: Option<String>,
+    pub name: Option<Name>,
     /// Where the name is written: the declaration's identifier, the variable
     /// or property it is assigned to, or the method key.
     pub name_range: Option<ByteRange>,
@@ -120,7 +123,7 @@ pub enum CalleeFact {
     /// The callee expression's node.
     Node(u32),
     /// `object.property(…)`.
-    Member { object: u32, property: String },
+    Member { object: u32, property: Name },
 }
 
 /// A call, `new` or JSX element.
@@ -130,8 +133,8 @@ pub struct CallFact {
     /// Function the call is made from. `None` for module top-level code.
     pub function: Option<u32>,
     pub callee: CalleeFact,
-    pub callee_text: String,
-    pub args: Vec<u32>,
+    pub callee_text: Name,
+    pub args: Box<[u32]>,
     pub is_new: bool,
     pub is_jsx: bool,
 }
@@ -144,7 +147,7 @@ pub struct MutationFact {
     pub range: ByteRange,
     pub kind: MutationKind,
     pub confidence: MutationConfidence,
-    pub name: Option<String>,
+    pub name: Option<Name>,
     pub function: Option<u32>,
 }
 
@@ -174,12 +177,12 @@ pub struct FileFlow {
     pub mutations: Vec<MutationFact>,
     pub imports: FxHashMap<u32, ImportFact>,
     /// Object literal node -> (property name, value node).
-    pub object_members: FxHashMap<u32, Vec<(String, u32)>>,
+    pub object_members: FxHashMap<u32, Vec<(Name, u32)>>,
     /// Class node -> (method name, function).
-    pub class_methods: FxHashMap<u32, Vec<(String, u32)>>,
+    pub class_methods: FxHashMap<u32, Vec<(Name, u32)>>,
     /// Class node -> (field name, the field's node). The initializer flows
     /// into the field's node with a `store` edge.
-    pub class_fields: FxHashMap<u32, Vec<(String, u32)>>,
+    pub class_fields: FxHashMap<u32, Vec<(Name, u32)>>,
     /// `require("m")` call node -> "m".
     pub requires: FxHashMap<u32, String>,
     /// CommonJS exports: `module.exports = v` (None) and `exports.f = v`,
@@ -396,6 +399,7 @@ pub(crate) fn facts_from_semantic(semantic: &Semantic<'_>, content: &str) -> Fil
         out_edges: Vec::new(),
         in_edges: Vec::new(),
         by_span: FxHashMap::default(),
+        names: FxHashSet::default(),
     };
     builder.collect_functions();
     builder.collect_bindings();
@@ -507,6 +511,8 @@ struct Builder<'s, 'a> {
     in_edges: Vec<Vec<(u32, FlowEdgeKind)>>,
     /// Node by range while building.
     by_span: FxHashMap<(u32, u32), u32>,
+    /// Names seen so far, so each distinct name is stored once.
+    names: FxHashSet<Name>,
 }
 
 /// A class member's name: `m`, or `#m` for a private member.
@@ -544,6 +550,16 @@ impl<'s, 'a> Builder<'s, 'a> {
         flow
     }
 
+    /// The shared copy of a name.
+    fn intern(&mut self, name: &str) -> Name {
+        if let Some(found) = self.names.get(name) {
+            return Arc::clone(found);
+        }
+        let name: Name = name.into();
+        self.names.insert(Arc::clone(&name));
+        name
+    }
+
     fn node(&mut self, span: Span) -> u32 {
         if let Some(found) = self.by_span.get(&(span.start, span.end)) {
             return *found;
@@ -573,12 +589,13 @@ impl<'s, 'a> Builder<'s, 'a> {
         function: Option<u32>,
     ) -> u32 {
         let index = self.node(span);
+        if self.flow.nodes[index as usize].name.is_none() {
+            let name = name.map(|name| self.intern(&name));
+            self.flow.nodes[index as usize].name = name;
+        }
         let node = &mut self.flow.nodes[index as usize];
         if node.kind == FlowNodeKind::Expression {
             node.kind = kind;
-        }
-        if node.name.is_none() {
-            node.name = name;
         }
         if node.function.is_none() {
             node.function = function;
@@ -762,6 +779,7 @@ impl<'s, 'a> Builder<'s, 'a> {
             return;
         };
         let function = self.enclosing_fn(at);
+        let name = name.map(|name| self.intern(&name));
         self.flow.mutations.push(MutationFact {
             binding,
             range: range_of(span),
@@ -810,10 +828,11 @@ impl<'s, 'a> Builder<'s, 'a> {
             });
             let index = self.flow.functions.len() as u32;
             let flow_node = self.node(span);
+            let name = named.as_ref().map(|(name, _)| self.intern(name));
             self.flow.functions.push(FunctionFact {
                 range: range_of(span),
                 node: flow_node,
-                name: named.as_ref().map(|(name, _)| name.clone()),
+                name,
                 name_range: named.map(|(_, range)| range),
                 parent: None,
                 class_node: None,
@@ -851,11 +870,12 @@ impl<'s, 'a> Builder<'s, 'a> {
                 if let (Some(class_span), Some(name)) = (class_span, member_name) {
                     let class_node = self.node(class_span);
                     self.flow.functions[index as usize].class_node = Some(class_node);
+                    let name = self.intern(&name);
                     self.flow
                         .class_methods
                         .entry(class_node)
                         .or_default()
-                        .push((name.to_string(), index));
+                        .push((name, index));
                 }
             }
         }
@@ -1424,7 +1444,7 @@ impl<'s, 'a> Builder<'s, 'a> {
                 }
                 CalleeFact::Member {
                     object,
-                    property: name.to_string(),
+                    property: self.intern(name),
                 }
             }
             // `this.#method()`.
@@ -1433,7 +1453,7 @@ impl<'s, 'a> Builder<'s, 'a> {
                 self.edge(object, call_node, FlowEdgeKind::Receiver);
                 CalleeFact::Member {
                     object,
-                    property: format!("#{}", member.field.name),
+                    property: self.intern(&format!("#{}", member.field.name)),
                 }
             }
             other => CalleeFact::Node(self.node(other.span())),
@@ -1464,6 +1484,7 @@ impl<'s, 'a> Builder<'s, 'a> {
 
         let function = self.enclosing_fn(id);
         let callee_text = self.text(callee.span());
+        let callee_name = self.intern(&callee_text);
         self.flow
             .call_by_node
             .insert(call_node, self.flow.calls.len() as u32);
@@ -1471,8 +1492,8 @@ impl<'s, 'a> Builder<'s, 'a> {
             range: range_of(span),
             function,
             callee: callee_fact,
-            callee_text: callee_text.clone(),
-            args,
+            callee_text: callee_name,
+            args: args.into_boxed_slice(),
             is_new,
             is_jsx: false,
         });
@@ -1493,7 +1514,7 @@ impl<'s, 'a> Builder<'s, 'a> {
                     JSXMemberExpressionObject::IdentifierReference(object) => (
                         CalleeFact::Member {
                             object: self.node(object.span),
-                            property: member.property.name.to_string(),
+                            property: self.intern(&member.property.name),
                         },
                         text,
                     ),
@@ -1509,12 +1530,13 @@ impl<'s, 'a> Builder<'s, 'a> {
         self.flow
             .call_by_node
             .insert(call_node, self.flow.calls.len() as u32);
+        let callee_text = self.intern(&callee_text);
         self.flow.calls.push(CallFact {
             range: range_of(element.span),
             function,
             callee,
             callee_text,
-            args: Vec::new(),
+            args: Box::default(),
             is_new: false,
             is_jsx: true,
         });
@@ -1679,11 +1701,12 @@ impl<'s, 'a> Builder<'s, 'a> {
                 if let AstKind::ObjectProperty(property) = node.kind() {
                     if let Some(name) = property.key.static_name() {
                         let value = self.node(property.value.span());
+                        let name = self.intern(&name);
                         self.flow
                             .object_members
                             .entry(whole)
                             .or_default()
-                            .push((name.to_string(), value));
+                            .push((name, value));
                     }
                 }
             }
@@ -1819,6 +1842,7 @@ impl<'s, 'a> Builder<'s, 'a> {
             });
         if let (Some(class_span), Some(name)) = (class_span, name) {
             let class_node = self.node(class_span);
+            let name = self.intern(&name);
             let fields = self.flow.class_fields.entry(class_node).or_default();
             if !fields.iter().any(|(_, node)| *node == field) {
                 fields.push((name, field));
@@ -1957,8 +1981,8 @@ mod tests {
                 (
                     *kind,
                     n.name
-                        .clone()
-                        .unwrap_or_else(|| n.kind.as_str().to_string()),
+                        .as_deref()
+                        .map_or_else(|| n.kind.as_str().to_string(), str::to_string),
                 )
             })
             .collect()
@@ -2010,7 +2034,7 @@ mod tests {
         let stores: Vec<_> = flow.out_edges[vals as usize]
             .iter()
             .filter(|(_, kind)| *kind == FlowEdgeKind::Store)
-            .map(|(to, _)| flow.nodes[*to as usize].name.clone().unwrap())
+            .map(|(to, _)| flow.nodes[*to as usize].name.as_deref().unwrap())
             .collect();
         assert_eq!(stores, ["p", "q"]);
         let rebinds = flow
@@ -2030,7 +2054,7 @@ mod tests {
         let class = node_at(&flow, source, source);
         let fields: Vec<&str> = flow.class_fields[&class]
             .iter()
-            .map(|(name, _)| name.as_str())
+            .map(|(name, _)| &**name)
             .collect();
         assert_eq!(fields, ["items", "#count", "shared", "onClick"]);
         let items = flow.class_fields[&class][0].1;
@@ -2041,7 +2065,7 @@ mod tests {
         // An arrow-function field is a method.
         let methods: Vec<&str> = flow.class_methods[&class]
             .iter()
-            .map(|(name, _)| name.as_str())
+            .map(|(name, _)| &**name)
             .collect();
         assert_eq!(methods, ["onClick"]);
         assert!(flow.skipped.is_empty(), "{:?}", flow.skipped);
@@ -2062,6 +2086,6 @@ mod tests {
         assert!(flow
             .calls
             .iter()
-            .any(|c| c.is_jsx && c.callee_text == "Card"));
+            .any(|c| c.is_jsx && &*c.callee_text == "Card"));
     }
 }
