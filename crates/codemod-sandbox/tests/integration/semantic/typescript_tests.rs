@@ -166,6 +166,15 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_callees_overloads_resolve_to_implementation,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_callees_overloads.js",
+    fixture_dir: "typescript/overloads",
+    target: "main.ts",
+    scope: workspace,
+}
+
+jssg_test! {
     name: test_callees_jsx_member_tag,
     language: CodemodLang::Static(SupportLang::Tsx),
     codemod: "tsx_callees_jsx_element.js",

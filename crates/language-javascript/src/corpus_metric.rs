@@ -408,6 +408,62 @@ fn measure_callers_known(
     }
 }
 
+/// 1-based line and 0-based column (in characters) of a byte offset.
+fn line_col(content: &str, offset: u32) -> (usize, usize) {
+    let before = &content[..(offset as usize).min(content.len())];
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().unwrap_or("").chars().count();
+    (line, column)
+}
+
+/// Every resolved call edge of a repo, one per line, for comparing with
+/// another call graph (Jelly): `file  call-start  call-end  target-file
+/// target-end  via`, positions as line:column (1-based line, 0-based column).
+fn write_edges(
+    analyzer: &AccurateAnalyzer,
+    root: &Path,
+    files: &[(PathBuf, std::sync::Arc<FileFlow>)],
+    out: &Path,
+) {
+    use std::fmt::Write;
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let relative = |path: &Path| {
+        path.strip_prefix(&root)
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    };
+    let mut text = String::new();
+    for (file, flow) in files {
+        let Some(content) = analyzer.content(file) else {
+            continue;
+        };
+        for call in &flow.calls {
+            let targets = call_targets(analyzer, file, flow, call);
+            let callbacks = callback_targets(analyzer, file, flow, call, &targets);
+            for (target_path, target, via) in targets.into_iter().chain(callbacks) {
+                let (Some(target_flow), Some(target_content)) =
+                    (analyzer.flow(&target_path), analyzer.content(&target_path))
+                else {
+                    continue;
+                };
+                let function = &target_flow.functions[target as usize];
+                let (sl, sc) = line_col(&content, call.range.start);
+                let (el, ec) = line_col(&content, call.range.end);
+                let (tl, tc) = line_col(&target_content, function.range.end);
+                let _ = writeln!(
+                    text,
+                    "{}\t{sl}:{sc}\t{el}:{ec}\t{}\t{tl}:{tc}\t{}",
+                    relative(file),
+                    relative(&target_path),
+                    via.as_str()
+                );
+            }
+        }
+    }
+    std::fs::write(out, text).unwrap();
+}
+
 fn measure_repo(root: &Path, totals: &mut Totals) {
     let analyzer = AccurateAnalyzer::new(root.to_path_buf());
     let files = analyzer.workspace_files();
@@ -468,6 +524,9 @@ fn measure_repo(root: &Path, totals: &mut Totals) {
         }
     }
     measure_callers_known(&analyzer, &repo_files, totals);
+    if let Ok(out) = std::env::var("DATAFLOW_EDGES_OUT") {
+        write_edges(&analyzer, root, &repo_files, Path::new(&out));
+    }
 }
 
 fn percent(part: usize, whole: usize) -> String {
@@ -497,6 +556,9 @@ fn corpus_metric() {
         .filter(|p| p.is_dir())
         .collect();
     repos.sort();
+    if let Ok(only) = std::env::var("DATAFLOW_CORPUS_ONLY") {
+        repos.retain(|repo| repo.file_name().is_some_and(|name| name == only.as_str()));
+    }
     let mut totals = Totals::default();
     let started = std::time::Instant::now();
     for repo in &repos {

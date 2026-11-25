@@ -925,6 +925,9 @@ impl<'s, 'a> Builder<'s, 'a> {
         let nodes = self.semantic.nodes();
         for node in nodes.iter() {
             let (span, own_name) = match node.kind() {
+                // An overload signature or `declare function` has no body:
+                // nothing runs there, the implementation is the function.
+                AstKind::Function(function) if function.body.is_none() => continue,
                 AstKind::Function(function) => (
                     function.span,
                     function
@@ -1056,7 +1059,23 @@ impl<'s, 'a> Builder<'s, 'a> {
                     kind = FlowNodeKind::Import;
                     import = Some(("*".to_string(), true));
                 }
-                AstKind::Function(function) => value_span = Some(function.span),
+                AstKind::Function(function) => {
+                    // `function f(a: string): void;` overloads declare the
+                    // symbol first; its value is the declaration with a body.
+                    value_span = if function.body.is_some() {
+                        Some(function.span)
+                    } else {
+                        scoping
+                            .symbol_redeclarations(symbol)
+                            .iter()
+                            .find_map(
+                                |redeclaration| match nodes.kind(redeclaration.declaration) {
+                                    AstKind::Function(f) if f.body.is_some() => Some(f.span),
+                                    _ => None,
+                                },
+                            )
+                    };
+                }
                 AstKind::Class(class) => value_span = Some(class.span),
                 _ => {}
             }
@@ -2179,6 +2198,24 @@ mod tests {
             .iter()
             .position(|n| n.binding && n.name.as_deref() == Some(name))
             .unwrap_or_else(|| panic!("no binding {name}")) as u32
+    }
+
+    #[test]
+    fn overloads_resolve_to_the_implementation() {
+        let source = "export function pick(a: string): string;\nexport function pick(a: number): number;\nexport function pick(a: any) { return a; }\ndeclare function ambient(): void;";
+        let flow = build_file_flow(Path::new("test.ts"), source).unwrap();
+        let names: Vec<_> = flow.functions.iter().map(|f| f.name.as_deref()).collect();
+        assert_eq!(
+            names,
+            [Some("pick")],
+            "only the implementation is a function"
+        );
+        let implementation = flow.functions[0].node;
+        let pick = binding(&flow, "pick");
+        assert_eq!(
+            flow.in_edges[pick as usize].to_vec(),
+            [(implementation, FlowEdgeKind::Assign)]
+        );
     }
 
     #[test]
