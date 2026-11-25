@@ -91,6 +91,49 @@ impl SgRoot {
         SgNode::new(&self.inner, self.inner.grep.root().into())
     }
 
+    /// The node a `node.key()` names in this root, or null (another file, or
+    /// no node of that range and kind).
+    #[napi]
+    pub fn node_by_key(&self, key: String) -> Result<Option<SgNode>> {
+        let malformed = || {
+            Error::from_reason(format!(
+                "nodeByKey(key): `{key}` is not a node.key() (file:start-end:kind)"
+            ))
+        };
+        let (rest, kind) = key.rsplit_once(':').ok_or_else(malformed)?;
+        let (file, range) = rest.rsplit_once(':').ok_or_else(malformed)?;
+        let (start, end) = range.split_once('-').ok_or_else(malformed)?;
+        let (Ok(start), Ok(end)) = (start.parse::<usize>(), end.parse::<usize>()) else {
+            return Err(malformed());
+        };
+        if file != canonical_file(&self.inner) {
+            return Ok(None);
+        }
+        let mut current = self.inner.grep.root();
+        loop {
+            let inner = current.children().find(|child| {
+                let r = child.range();
+                r.start <= start && r.end >= end
+            });
+            match inner {
+                Some(child) => current = child,
+                None => break,
+            }
+        }
+        let mut candidate = Some(current);
+        while let Some(node) = candidate {
+            let r = node.range();
+            if r.start != start || r.end != end {
+                break;
+            }
+            if node.kind() == kind {
+                return Ok(Some(SgNode::new(&self.inner, node.into())));
+            }
+            candidate = node.parent();
+        }
+        Ok(None)
+    }
+
     #[napi]
     pub fn filename(&self) -> String {
         self.inner.filename.clone().unwrap_or_default()
@@ -454,16 +497,7 @@ impl SgNode {
     #[napi]
     pub fn key(&self) -> String {
         let range = self.node.range();
-        let file = self
-            .root
-            .filename
-            .as_ref()
-            .map(|name| {
-                std::fs::canonicalize(name)
-                    .map(|path| path.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| name.clone())
-            })
-            .unwrap_or_default();
+        let file = canonical_file(&self.root);
         format!("{file}:{}-{}:{}", range.start, range.end, self.node.kind())
     }
 
@@ -471,6 +505,15 @@ impl SgNode {
     #[napi]
     pub fn equals(&self, other: &SgNode) -> bool {
         self.key() == other.key()
+    }
+
+    /// Whether `other` is this node or inside it (same file, range within).
+    #[napi]
+    pub fn contains(&self, other: &SgNode) -> bool {
+        let (outer, inner) = (self.node.range(), other.node.range());
+        canonical_file(&self.root) == canonical_file(&other.root)
+            && outer.start <= inner.start
+            && inner.end <= outer.end
     }
 
     /// Throws, as `flowsFrom()` does.
@@ -529,4 +572,16 @@ fn no_semantic_provider(method: &str) -> Error {
          semantic provider. Run the workflow with the codemod CLI (`npx codemod workflow run`), \
          or test it with `{{ host: \"quickjs\" }}`."
     ))
+}
+
+/// A root's file, canonicalized (so `/var/...` and `/private/var/...` agree), or "".
+fn canonical_file(root: &RootInner) -> String {
+    root.filename
+        .as_ref()
+        .map(|name| {
+            std::fs::canonicalize(name)
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|_| name.clone())
+        })
+        .unwrap_or_default()
 }

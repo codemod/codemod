@@ -330,6 +330,62 @@ impl<'js> SgRootRjs<'js> {
         }
     }
 
+    /// The node a `node.key()` names, in this root: null when the key names
+    /// another file, or this file has no node of that range and kind (its
+    /// text changed). Keys are plain strings, so they can be passed between
+    /// workflow steps and turned back into nodes here.
+    #[qjs(rename = "nodeByKey")]
+    pub fn node_by_key(&self, ctx: Ctx<'js>, key: String) -> Result<Value<'js>> {
+        let malformed = || {
+            Exception::throw_type(
+                &ctx,
+                &format!("nodeByKey(key): `{key}` is not a node.key() (file:start-end:kind)"),
+            )
+        };
+        let (rest, kind) = key.rsplit_once(':').ok_or_else(malformed)?;
+        let (file, range) = rest.rsplit_once(':').ok_or_else(malformed)?;
+        let (start, end) = range.split_once('-').ok_or_else(malformed)?;
+        let (Ok(start), Ok(end)) = (start.parse::<usize>(), end.parse::<usize>()) else {
+            return Err(malformed());
+        };
+        if file != self.inner.canonical_filename() {
+            return Ok(Value::new_null(ctx));
+        }
+        // The innermost node with the range, then outward through nodes with
+        // the same range (`f()` and its expression statement) to the kind.
+        let mut current = self.inner.grep.root();
+        loop {
+            let inner = current.children().find(|child| {
+                let r = child.range();
+                r.start <= start && r.end >= end
+            });
+            match inner {
+                Some(child) => current = child,
+                None => break,
+            }
+        }
+        let mut candidate = Some(current);
+        while let Some(node) = candidate {
+            let r = node.range();
+            if r.start != start || r.end != end {
+                break;
+            }
+            if node.kind() == kind {
+                let node_match: NodeMatch<_> = node.into();
+                let static_node_match: NodeMatch<'static, TSDoc> =
+                    unsafe { std::mem::transmute(node_match) };
+                return SgNodeRjs {
+                    root: Arc::clone(&self.inner),
+                    inner_node: static_node_match,
+                    _phantom: PhantomData,
+                }
+                .into_js(&ctx);
+            }
+            candidate = node.parent();
+        }
+        Ok(Value::new_null(ctx))
+    }
+
     /// The specifiers other packages can import this file with (its
     /// package's name and `exports` subpaths that resolve to it); empty when
     /// it is not part of its package's public API.
@@ -1551,6 +1607,20 @@ impl<'js> SgNodeRjs<'js> {
             range.end,
             self.inner_node.kind()
         )
+    }
+
+    /// Whether `other` is this node or inside it (same file, its range within
+    /// this one's), even when it comes from another query or root. False for
+    /// anything but an SgNode.
+    #[qjs(rename = "contains")]
+    pub fn contains(&self, other: Value<'js>) -> bool {
+        rquickjs::Class::<SgNodeRjs>::from_value(&other).is_ok_and(|other| {
+            let other = other.borrow();
+            let (outer, inner) = (self.inner_node.range(), other.inner_node.range());
+            self.root.canonical_filename() == other.root.canonical_filename()
+                && outer.start <= inner.start
+                && inner.end <= outer.end
+        })
     }
 
     /// Whether `other` is the same syntax node (same file, range and kind),

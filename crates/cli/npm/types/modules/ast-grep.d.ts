@@ -112,6 +112,18 @@ declare module "codemod:ast-grep" {
      */
     equals(other: SgNode<M>): boolean;
 
+    /**
+     * Whether `other` is this node or inside it: same file, and its range
+     * within this one's. Works across queries and roots, like `equals()`.
+     *
+     * @example
+     * ```ts
+     * // Uses of a name inside this function only
+     * const own = name.references().flatMap((f) => f.nodes).filter((n) => fn.contains(n));
+     * ```
+     */
+    contains(other: SgNode<M>): boolean;
+
     // Data flow and call graph (experimental; JavaScript and TypeScript only).
     // Every answer is a "may" answer: see the soundness notes on each method
     // and the result types, and https://docs.codemod.com/community/jssg/dataflow.
@@ -482,6 +494,22 @@ declare module "codemod:ast-grep" {
      * }
      * ```
      */
+    /**
+     * The node a `node.key()` names, in this root; null when the key names
+     * another file, or this file has no node of that range and kind any more.
+     * Keys are plain strings, so a step can return them (in `forEachFile`
+     * outputs, JSON) and a later step can turn them back into nodes.
+     *
+     * @throws a TypeError when `key` is not a `node.key()`.
+     * @example
+     * ```ts
+     * // Step 1 collects keys; step 2, in each file:
+     * const call = parse(file).nodeByKey(plan.key);
+     * if (call) file.write(parse(file).root().commitEdits([call.replace("fixed()")]));
+     * ```
+     */
+    nodeByKey(key: string): SgNode<M> | null;
+
     importers(target?: string | SgRoot<M>): Array<ImporterEntry<M>> & { unparsed: UnparsedFile[] };
 
     /**

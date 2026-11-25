@@ -29,6 +29,38 @@ export default function transform(root) {
   expectEqual(viaFlow.equals(limit), false, "a different node");
   expectEqual(viaFlow.equals("limit"), false, "not a node");
 
+  // Back from a key; containment across answers.
+  const json = root.root().find({ rule: { pattern: "res.json(user)" } });
+  const statement = json.parent();
+  expectEqual(root.nodeByKey(json.key()).equals(json), true, "nodeByKey: a call");
+  expectEqual(
+    root.nodeByKey(statement.key()).kind(),
+    "expression_statement",
+    "nodeByKey: same start, other kind",
+  );
+  expectEqual(
+    root.nodeByKey(json.key().replace("server.js", "other.js")),
+    null,
+    "nodeByKey: another file",
+  );
+  try {
+    root.nodeByKey("not a key");
+    throw new Error("expected a TypeError");
+  } catch (error) {
+    if (!String(error.message).includes("is not a node.key()")) throw error;
+  }
+  const handler = root.root().find({ rule: { kind: "function_declaration" } });
+  expectEqual(
+    [
+      handler.contains(call),
+      call.contains(handler),
+      handler.contains(viaFlow),
+      json.contains(json),
+    ],
+    [true, false, true, true],
+    "contains",
+  );
+
   // Booleans.
   expectEqual(
     limit.dependsOn((s) => s.kind === "parameter" && s.name === "req"),
