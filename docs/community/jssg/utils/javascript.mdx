@@ -488,6 +488,57 @@ Returns `[]` when semantic analysis is unavailable.
 
 ---
 
+## Moving imports
+
+```typescript
+import {
+  importedBindings,
+  retargetImport,
+  importFromDeclarations,
+} from "@jssg/utils/javascript/modules";
+```
+
+## `importedBindings`
+
+The default and named bindings of an ESM `import` statement: `{ local, imported, typeOnly, node }`, where `imported` is `"default"` or the export name. Empty for namespace (`import * as ns`) and side-effect imports.
+
+## `retargetImport`
+
+Split one `import` statement so some of its bindings come from other modules. The callback gets each binding and returns `{ from, name }` (the module and the export to import, `"default"` for a default export), or `null` to keep it. Returns one edit, or `null` when nothing moves.
+
+```typescript
+// import { Button, Modal } from "@/ui";
+const edit = retargetImport(statement, (binding) =>
+  binding.imported === "Modal" ? { from: "@/ui/modal", name: "default" } : null,
+);
+// import { Button } from "@/ui";
+// import Modal from "@/ui/modal";
+```
+
+Bindings that stay come first. Bindings moved to one module share a statement; a default export becomes a default import, and a second one for the same module `{ default as X }`. Local names, `import type`, inline `type` modifiers, quotes and the semicolon are kept.
+
+## `importFromDeclarations`
+
+Import every binding of a statement straight from the module that declares it instead of through a barrel. Needs `semanticAnalysis: "workspace"`. It uses `root.resolveExport()` to follow the re-exports and `root.specifierFor()` to write a specifier in the original's style (relative or alias, with or without `.js`). A binding stays when it does not resolve, is declared in the barrel itself, or no specifier reaches its file.
+
+```typescript
+export default function transform(root) {
+  const edits = [];
+  for (const statement of root.root().findAll({ rule: { kind: "import_statement" } })) {
+    const edit = importFromDeclarations(root, statement);
+    if (edit) edits.push(edit);
+  }
+  return edits.length ? root.root().commitEdits(edits) : null;
+}
+// import { Button, Modal, VERSION } from "./ui";
+// becomes
+// import { VERSION } from "./ui";
+// import { Button } from "./ui/button";
+// import Modal from "./ui/modal";
+```
+
+---
+
 ## Common Patterns
 
 ### Verify Import Before Transforming
