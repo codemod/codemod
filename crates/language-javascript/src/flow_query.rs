@@ -9,7 +9,7 @@ use language_core::{
     ByteRange, CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
     CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
     FlowResult, FlowStep, FunctionRef, Mutation, MutationKind, MutationOptions, MutationsResult,
-    UnparsedFile,
+    SemanticError, UnparsedFile,
 };
 use parking_lot::RwLock;
 use rayon::prelude::*;
@@ -51,6 +51,66 @@ pub(crate) trait FlowHost: Sync {
     /// Where the callers table is kept between queries. None rebuilds it on
     /// every callers query.
     fn caller_index(&self) -> Option<&CallerIndexSlot>;
+}
+
+/// Which query [`applicable`] checks the node for.
+#[derive(Clone, Copy)]
+pub(crate) enum QueryKind {
+    Flow,
+    Mutations,
+    Callers,
+}
+
+/// Whether a query applies to the node at `range`, or why not. The queries
+/// themselves answer leniently (a range around a value answers for the
+/// largest value inside it), so without this a statement would silently get
+/// an answer about some expression in it.
+pub(crate) fn applicable(
+    host: &dyn FlowHost,
+    path: &Path,
+    range: ByteRange,
+    kind: QueryKind,
+) -> Result<(), SemanticError> {
+    let path = host.canonical(path);
+    let Some(flow) = host.flow(&path) else {
+        return Ok(());
+    };
+    let not = |reason: &str| {
+        Err(SemanticError::NotApplicable {
+            reason: reason.to_string(),
+        })
+    };
+    // A value at the range, or around it (a part of a value answers for it).
+    let value = flow
+        .locate(range)
+        .filter(|&node| range.is_within(&flow.nodes[node as usize].range));
+    match kind {
+        QueryKind::Flow if value.is_none() => not(
+            "there is no value here. Ask about an expression, a variable or parameter name, \
+             or a call, not a statement or declaration",
+        ),
+        QueryKind::Mutations => {
+            let Some(node) = value else {
+                return not("there is no variable here. Ask about a variable's name or a use of it");
+            };
+            let is_variable = flow.nodes[node as usize].binding
+                || flow.in_edges[node as usize]
+                    .iter()
+                    .any(|(_, edge)| *edge == FlowEdgeKind::Read);
+            if is_variable {
+                Ok(())
+            } else {
+                not("this is not a variable. Ask about a variable's name or a use of it (for `a.b`, ask about `a`)")
+            }
+        }
+        QueryKind::Callers
+            if functions_at(host, &path, range, true).is_empty()
+                && flow.function_at(range).is_none() =>
+        {
+            not("there is no function here. Ask about a function, its name, a call to it, or code inside it")
+        }
+        _ => Ok(()),
+    }
 }
 
 pub(crate) fn data_flow(

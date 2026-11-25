@@ -137,7 +137,11 @@ declare module "codemod:ast-grep" {
      * @throws when the query cannot run, rather than answering `[]` (which
      *   would read as "nothing found"): semantic analysis is off for the step,
      *   the file is not JavaScript or TypeScript, the root was parsed from a
-     *   string, the host is Node.js or WebAssembly, or an option is unknown.
+     *   string, the host is Node.js or WebAssembly, or an option is unknown;
+     *   and (a TypeError naming the node's kind) when the query does not apply
+     *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
+     *   anything but a variable or a use of one for `mutations`, code outside
+     *   any function for `callers`. An empty answer always means "nothing found".
      *
      * @experimental
      * @example
@@ -167,7 +171,11 @@ declare module "codemod:ast-grep" {
      * @throws when the query cannot run, rather than answering `[]` (which
      *   would read as "nothing found"): semantic analysis is off for the step,
      *   the file is not JavaScript or TypeScript, the root was parsed from a
-     *   string, the host is Node.js or WebAssembly, or an option is unknown.
+     *   string, the host is Node.js or WebAssembly, or an option is unknown;
+     *   and (a TypeError naming the node's kind) when the query does not apply
+     *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
+     *   anything but a variable or a use of one for `mutations`, code outside
+     *   any function for `callers`. An empty answer always means "nothing found".
      *
      * @experimental
      * @example
@@ -237,7 +245,11 @@ declare module "codemod:ast-grep" {
      * @throws when the query cannot run, rather than answering `[]` (which
      *   would read as "nothing found"): semantic analysis is off for the step,
      *   the file is not JavaScript or TypeScript, the root was parsed from a
-     *   string, the host is Node.js or WebAssembly, or an option is unknown.
+     *   string, the host is Node.js or WebAssembly, or an option is unknown;
+     *   and (a TypeError naming the node's kind) when the query does not apply
+     *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
+     *   anything but a variable or a use of one for `mutations`, code outside
+     *   any function for `callers`. An empty answer always means "nothing found".
      *
      * @experimental
      * @example
@@ -277,7 +289,11 @@ declare module "codemod:ast-grep" {
      * @throws when the query cannot run, rather than answering `[]` (which
      *   would read as "nothing found"): semantic analysis is off for the step,
      *   the file is not JavaScript or TypeScript, the root was parsed from a
-     *   string, the host is Node.js or WebAssembly, or an option is unknown.
+     *   string, the host is Node.js or WebAssembly, or an option is unknown;
+     *   and (a TypeError naming the node's kind) when the query does not apply
+     *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
+     *   anything but a variable or a use of one for `mutations`, code outside
+     *   any function for `callers`. An empty answer always means "nothing found".
      *
      * @experimental
      * @example
@@ -307,7 +323,11 @@ declare module "codemod:ast-grep" {
      * @throws when the query cannot run, rather than answering `[]` (which
      *   would read as "nothing found"): semantic analysis is off for the step,
      *   the file is not JavaScript or TypeScript, the root was parsed from a
-     *   string, the host is Node.js or WebAssembly, or an option is unknown.
+     *   string, the host is Node.js or WebAssembly, or an option is unknown;
+     *   and (a TypeError naming the node's kind) when the query does not apply
+     *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
+     *   anything but a variable or a use of one for `mutations`, code outside
+     *   any function for `callers`. An empty answer always means "nothing found".
      *
      * @experimental
      * @example

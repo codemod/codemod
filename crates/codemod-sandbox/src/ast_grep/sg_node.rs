@@ -1663,9 +1663,7 @@ impl<'js> SgNodeRjs<'js> {
 
             let found = provider
                 .get_mutations(&file_path, range, language_core::MutationOptions { after })
-                .map_err(|e| {
-                    Exception::throw_message(&ctx, &format!("Failed to find mutations: {}", e))
-                })?;
+                .map_err(|e| self.query_error(&ctx, "mutations", "Failed to find mutations", e))?;
             let mut count = 0;
             for mutation in &found.mutations {
                 let Some(node) = Self::node_in(&self.root, mutation.range) else {
@@ -1785,9 +1783,7 @@ impl<'js> SgNodeRjs<'js> {
 
             let flow = provider
                 .get_data_flow(&file_path, range, flow_options)
-                .map_err(|e| {
-                    Exception::throw_message(&ctx, &format!("Failed to follow data flow: {}", e))
-                })?;
+                .map_err(|e| self.query_error(&ctx, method, "Failed to follow data flow", e))?;
 
             let mut roots = Vec::new();
             let mut steps = Vec::new();
@@ -1882,9 +1878,7 @@ impl<'js> SgNodeRjs<'js> {
 
             let graph = provider
                 .get_call_graph(&file_path, range, graph_options)
-                .map_err(|e| {
-                    Exception::throw_message(&ctx, &format!("Failed to walk the call graph: {}", e))
-                })?;
+                .map_err(|e| self.query_error(&ctx, method, "Failed to walk the call graph", e))?;
 
             // Call sites can sit in files that have no entry of their own.
             let contents: std::collections::HashMap<&std::path::Path, &str> = graph
@@ -2101,6 +2095,25 @@ impl<'js> SgNodeRjs<'js> {
         .ok()?;
         roots.push((file_path.to_path_buf(), Arc::clone(&root.inner)));
         Some(root.inner)
+    }
+
+    /// The exception for a failed query: a query that does not apply to this
+    /// node names the node's kind and what to ask instead (a TypeError);
+    /// anything else keeps the provider's message.
+    fn query_error(
+        &self,
+        ctx: &Ctx<'js>,
+        method: &str,
+        failed: &str,
+        error: language_core::SemanticError,
+    ) -> rquickjs::Error {
+        match error {
+            language_core::SemanticError::NotApplicable { reason } => Exception::throw_type(
+                ctx,
+                &format!("{method}() on `{}`: {reason}.", self.inner_node.kind()),
+            ),
+            other => Exception::throw_message(ctx, &format!("{failed}: {other}")),
+        }
     }
 
     /// The nearest ancestor of this kind.

@@ -1469,6 +1469,7 @@ impl AccurateAnalyzer {
         options: FlowOptions,
     ) -> SemanticResult<FlowResult> {
         self.process_file_with(file_path, content, true)?;
+        flow_query::applicable(self, file_path, range, flow_query::QueryKind::Flow)?;
         Ok(flow_query::data_flow(self, file_path, range, options))
     }
 
@@ -1481,6 +1482,9 @@ impl AccurateAnalyzer {
         options: CallGraphOptions,
     ) -> SemanticResult<CallGraphResult> {
         self.process_file_with(file_path, content, true)?;
+        if options.direction == language_core::CallGraphDirection::Callers {
+            flow_query::applicable(self, file_path, range, flow_query::QueryKind::Callers)?;
+        }
         Ok(flow_query::call_graph(self, file_path, range, options))
     }
 
@@ -1493,6 +1497,7 @@ impl AccurateAnalyzer {
         options: MutationOptions,
     ) -> SemanticResult<MutationsResult> {
         self.process_file_with(file_path, content, true)?;
+        flow_query::applicable(self, file_path, range, flow_query::QueryKind::Mutations)?;
         Ok(flow_query::mutations(self, file_path, range, options))
     }
 }

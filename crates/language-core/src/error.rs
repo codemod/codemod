@@ -38,6 +38,13 @@ pub enum SemanticError {
     #[error("Semantic provider is not configured")]
     ProviderNotConfigured,
 
+    /// The query does not apply to the node it was asked about: a data-flow
+    /// query on a statement, `mutations()` on something that is not a
+    /// variable, `callers()` outside any function. `reason` says what to
+    /// ask instead. Distinct from an empty answer, which means "nothing found".
+    #[error("{reason}")]
+    NotApplicable { reason: String },
+
     /// The provider cannot answer this kind of query; `reason` says why and
     /// what to change.
     #[error("{operation}: {reason}")]

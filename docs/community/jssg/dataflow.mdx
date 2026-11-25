@@ -49,6 +49,12 @@ selector's analysis too.
   answer would read as "no callers" or "no sources", and a codemod might act on it. Unknown options
   throw too, so a typo cannot silently change an answer. On the Node.js host, test with
   `{ host: "quickjs" }`.
+
+  A query on a node it does not apply to throws a `TypeError` that names the node's kind and what
+  to ask instead: `flowsFrom()` / `flowsTo()` on a statement or declaration, `mutations()` on
+  anything but a variable or a use of one (for `a.b`, ask about `a`), `callers()` on code outside
+  any function. A part of a value (the `limit` in `req.query.limit`) answers for that value. So an
+  empty answer always means "nothing found", never "wrong node".
 </Note>
 
 ## Where does a value come from: `flowsFrom()`

@@ -53,6 +53,23 @@ export default function transform(root) {
   if (!Array.isArray(items.mutations({ after: audit }))) throw new Error("after: a node works");
   if (!Array.isArray(items.flowsFrom(undefined))) throw new Error("undefined options work");
 
+  // A query on a node it does not apply to says so, instead of answering
+  // about some expression inside it.
+  const statement = root.root().find({ rule: { kind: "export_statement" } });
+  expectThrow(
+    () => statement.flowsFrom(),
+    "flowsFrom() on `export_statement`: there is no value here",
+    "statement",
+  );
+  const gift = root.root().find({ rule: { pattern: '"gift"' } });
+  expectThrow(() => gift.mutations(), "mutations() on `string`: this is not a variable", "literal");
+  const member = root.root().find({ rule: { pattern: "cart.items" } });
+  expectThrow(() => member.mutations(), "for `a.b`, ask about `a`", "member");
+  // A part of a value answers for that value.
+  const property = member.field("property");
+  if (property.flowsFrom().length === 0)
+    throw new Error("property of a member: expected an answer");
+
   // Module resolution needs workspace scope; this test runs in file scope.
   expectThrow(
     () => root.resolveModule("./db.js"),
