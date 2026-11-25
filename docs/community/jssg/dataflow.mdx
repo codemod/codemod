@@ -218,6 +218,8 @@ What types need:
 | The target's dependencies installed (`node_modules` present), from a full install that runs before this step | Without them, everything from a library is `any` and calls on it stay unresolved. Measured: 7.6% of all calls resolved through types in a repository with dependencies installed, 1.2% across repositories without |
 | A tsconfig (or jsconfig with `allowJs`) | The checker uses the nearest one; files outside any get default options. JSDoc types work in `.js` files |
 
+The checker reads files from disk. In a dry run, a file an earlier step changed (in memory only)
+does not match what the checker read, so `typeInfo()` on it returns `null`.
 Types are a snapshot: the checker reads the files once, so edits made during the run are not
 reflected (the same rule as `callers()`). They cost a side process (about 200–350 MB of memory)
 and a few seconds on a large workspace, the first time a query needs them.
