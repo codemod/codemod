@@ -16,6 +16,7 @@ use oxc_resolver::{
     TsconfigOptions, TsconfigReferences,
 };
 use parking_lot::RwLock;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -133,6 +134,8 @@ pub struct AccurateAnalyzer {
     /// than on every lookup. Only successes are kept: a path that does not
     /// exist yet is tried again.
     canonical_paths: RwLock<HashMap<PathBuf, PathBuf>>,
+    /// Files whose content could not be read; not tried again until `clear()`.
+    unreadable_files: RwLock<HashSet<PathBuf>>,
 }
 
 impl AccurateAnalyzer {
@@ -189,6 +192,7 @@ impl AccurateAnalyzer {
             parse_errors: RwLock::new(HashMap::new()),
             flow_everywhere: AtomicBool::new(false),
             canonical_paths: RwLock::new(HashMap::new()),
+            unreadable_files: RwLock::new(HashSet::new()),
         }
     }
 
@@ -328,30 +332,39 @@ impl AccurateAnalyzer {
     fn ensure_indexed_with(&self, file_path: &Path, with_flow: bool) -> SemanticResult<()> {
         let canonical = self.canonical_path(file_path);
 
-        // Check if already indexed
-        if self.indexed_files.read().contains(&canonical) {
-            return Ok(());
-        }
-
-        // Check if currently being indexed (cycle detection)
-        if self.indexing_in_progress.read().contains(&canonical) {
-            return Ok(());
-        }
-
-        // Known not to parse: say so again without re-reading it.
-        if let Some(message) = self.parse_errors.read().get(&canonical) {
-            return Err(JsSemanticError::ParseError {
-                path: canonical,
-                message: message.clone(),
+        // Claim the file. Another thread may be parsing it: that holds no
+        // locks and waits on nothing, so wait for it to finish.
+        loop {
+            if self.indexed_files.read().contains(&canonical) {
+                return Ok(());
             }
-            .into());
+            // A file that could not be read is never retried.
+            if self.unreadable_files.read().contains(&canonical) {
+                return Ok(());
+            }
+            // Known not to parse: say so again without re-reading it.
+            if let Some(message) = self.parse_errors.read().get(&canonical) {
+                return Err(JsSemanticError::ParseError {
+                    path: canonical,
+                    message: message.clone(),
+                }
+                .into());
+            }
+            if self.indexing_in_progress.write().insert(canonical.clone()) {
+                break;
+            }
+            std::thread::yield_now();
         }
-
-        // Mark as in progress
-        self.indexing_in_progress.write().insert(canonical.clone());
 
         // Read and parse the file using the virtual filesystem
-        let content = self.read_file(&canonical)?;
+        let content = match self.read_file(&canonical) {
+            Ok(content) => content,
+            Err(error) => {
+                self.unreadable_files.write().insert(canonical.clone());
+                self.indexing_in_progress.write().remove(&canonical);
+                return Err(error.into());
+            }
+        };
 
         let with_flow = with_flow || self.flow_everywhere.load(Ordering::Relaxed);
         let (file_symbols, flow) = match analyze(&canonical, &content, with_flow) {
@@ -366,25 +379,28 @@ impl AccurateAnalyzer {
                 return Err(error.into());
             }
         };
+        let imports: Vec<String> = file_symbols
+            .imports
+            .iter()
+            .map(|import| import.module_specifier.clone())
+            .collect();
 
-        // Index imported files
-        for import in &file_symbols.imports {
-            if let Ok(resolved) = self.resolve_module(&import.module_specifier, &canonical) {
-                // Recursively index the imported file
-                let _ = self.ensure_indexed(&resolved);
-            }
-        }
-
-        // Store in cache
+        // Store in cache and mark as indexed before following imports, so
+        // an import cycle (or another thread) finds this file done.
         if let Some(flow) = flow {
             self.flows
                 .insert(canonical.clone(), file_symbols.content_hash, flow);
         }
         self.cache.insert(canonical.clone(), file_symbols, content);
-
-        // Mark as indexed
+        self.indexed_files.write().insert(canonical.clone());
         self.indexing_in_progress.write().remove(&canonical);
-        self.indexed_files.write().insert(canonical);
+
+        // Index imported files
+        for specifier in &imports {
+            if let Ok(resolved) = self.resolve_module(specifier, &canonical) {
+                let _ = self.ensure_indexed(&resolved);
+            }
+        }
 
         Ok(())
     }
@@ -792,15 +808,15 @@ impl AccurateAnalyzer {
             .git_exclude(true)
             .build();
 
-        for entry in walker.flatten() {
-            let path = entry.path();
-            if path.is_file() {
+        let files: Vec<PathBuf> = walker
+            .flatten()
+            .map(|entry| entry.into_path())
+            .filter(|path| {
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if matches!(ext, "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs") {
-                    let _ = self.ensure_indexed(path);
-                }
-            }
-        }
+                path.is_file() && matches!(ext, "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs")
+            })
+            .collect();
+        self.index_files(&files);
 
         Ok(())
     }
@@ -820,10 +836,20 @@ impl AccurateAnalyzer {
             .fs_root
             .join(workspace_prefix.trim_start_matches('/'))
             .unwrap_or_else(|_| self.fs_root.clone());
+        let mut files = Vec::new();
         walk_vfs_tree(&start, &workspace_prefix, &mut |path: &Path| {
+            files.push(path.to_path_buf());
+        });
+        self.index_files(&files);
+        Ok(())
+    }
+
+    /// Index files in parallel. Each file is parsed once, whichever thread
+    /// gets to it first.
+    fn index_files(&self, files: &[PathBuf]) {
+        files.par_iter().for_each(|path| {
             let _ = self.ensure_indexed(path);
         });
-        Ok(())
     }
 
     /// Resolve an import to the declaration it ultimately binds to,
@@ -1000,6 +1026,7 @@ impl AccurateAnalyzer {
         self.parse_errors.write().clear();
         self.flow_everywhere.store(false, Ordering::Relaxed);
         self.canonical_paths.write().clear();
+        self.unreadable_files.write().clear();
     }
 
     /// Gets the type of a symbol at the given byte range.
