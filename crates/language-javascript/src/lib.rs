@@ -41,6 +41,8 @@ mod accurate;
 #[cfg(test)]
 mod bench;
 mod cache;
+#[cfg(test)]
+mod corpus_metric;
 mod dataflow;
 mod error;
 mod flow_query;

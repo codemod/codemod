@@ -431,7 +431,7 @@ fn member_functions(
 }
 
 /// The workspace functions a call may call.
-fn call_targets(
+pub(crate) fn call_targets(
     host: &dyn FlowHost,
     path: &Path,
     flow: &Arc<FileFlow>,
@@ -481,7 +481,7 @@ fn call_targets(
 
 /// Functions handed to a call the analysis cannot see into. They are
 /// assumed to be called: items.map(f), setTimeout(f), app.get("/", f).
-fn callback_targets(
+pub(crate) fn callback_targets(
     host: &dyn FlowHost,
     path: &Path,
     flow: &Arc<FileFlow>,

@@ -173,6 +173,10 @@ pub struct FileFlow {
     /// Class node -> (method name, function).
     pub class_methods: FxHashMap<u32, Vec<(String, u32)>>,
     pub loops: Vec<ByteRange>,
+    /// Syntax the builder saw but does not model, by what it is. Values that
+    /// pass through it are not connected to where they go. Used to measure
+    /// coverage; queries do not read it.
+    pub skipped: HashMap<String, u32>,
 }
 
 impl FileFlow {
@@ -377,6 +381,16 @@ impl<'s, 'a> Builder<'s, 'a> {
             node.function = function;
         }
         index
+    }
+
+    fn skip(&mut self, what: impl Into<String>) {
+        *self.flow.skipped.entry(what.into()).or_default() += 1;
+    }
+
+    /// True when `expr` is the free name `name` (no local binding).
+    fn is_global(&self, expr: &Expression<'a>, name: &str) -> bool {
+        matches!(expr.get_inner_expression(), Expression::Identifier(ident)
+            if ident.name == name && self.binding_of(ident).is_none())
     }
 
     fn edge(&mut self, from: u32, to: u32, kind: FlowEdgeKind) {
@@ -859,6 +873,12 @@ impl<'s, 'a> Builder<'s, 'a> {
         is_new: bool,
     ) -> String {
         let call_node = self.node(span);
+        if self.is_global(callee, "require") {
+            self.skip("commonjs-require");
+        }
+        if matches!(callee.get_inner_expression(), Expression::Super(_)) {
+            self.skip("super-call");
+        }
         let callee_fact = match callee.get_inner_expression() {
             Expression::StaticMemberExpression(member) if !is_new => {
                 let object = self.node(member.object.span());
@@ -971,8 +991,18 @@ impl<'s, 'a> Builder<'s, 'a> {
                 MutationKind::PropertyWrite,
                 Some(member.field.name.to_string()),
             ),
-            _ => (None, MutationKind::Reassign, None),
+            _ => {
+                self.skip("destructuring-assignment");
+                (None, MutationKind::Reassign, None)
+            }
         };
+        if let AssignmentTarget::StaticMemberExpression(member) = &assignment.left {
+            if self.is_global(&member.object, "exports")
+                || (self.is_global(&member.object, "module") && member.property.name == "exports")
+            {
+                self.skip("commonjs-export");
+            }
+        }
         self.mutation(
             binding,
             assignment.span,
@@ -1159,7 +1189,47 @@ impl<'s, 'a> Builder<'s, 'a> {
                     }
                 }
             }
-            _ => {}
+            // Positions where a value is used for control, or that are a
+            // name rather than a value: nothing flows on.
+            AstKind::IfStatement(_)
+            | AstKind::WhileStatement(_)
+            | AstKind::DoWhileStatement(_)
+            | AstKind::ForStatement(_)
+            | AstKind::ForInStatement(_)
+            | AstKind::ForOfStatement(_)
+            | AstKind::SwitchStatement(_)
+            | AstKind::SwitchCase(_)
+            | AstKind::ThrowStatement(_)
+            | AstKind::FormalParameters(_)
+            | AstKind::FormalParameter(_)
+            | AstKind::Decorator(_)
+            | AstKind::ImportExpression(_)
+            | AstKind::Program(_)
+            | AstKind::FunctionBody(_)
+            | AstKind::BlockStatement(_)
+            | AstKind::UpdateExpression(_)
+            | AstKind::MethodDefinition(_)
+            | AstKind::ImportDeclaration(_)
+            | AstKind::ImportAttribute(_)
+            | AstKind::ExportNamedDeclaration(_)
+            | AstKind::ExportAllDeclaration(_)
+            | AstKind::ExportSpecifier(_)
+            | AstKind::ExportDefaultDeclaration(_)
+            | AstKind::Directive(_)
+            | AstKind::JSXMemberExpression(_)
+            | AstKind::JSXClosingElement(_) => {}
+            AstKind::Class(class)
+                if class.super_class.as_ref().is_some_and(|s| s.span() == span) =>
+            {
+                self.skip("class-extends")
+            }
+            other => {
+                let what = format!("{:?}", other.ty());
+                // Type-level positions carry no values.
+                if !what.starts_with("TS") {
+                    self.skip(format!("value-in:{what}"));
+                }
+            }
         }
     }
 
