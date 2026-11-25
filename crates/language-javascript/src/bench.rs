@@ -21,8 +21,8 @@ use crate::dataflow::build_file_flow;
 use crate::flow_query::FlowHost;
 use crate::oxc_adapter::{analyze, parse_and_analyze};
 use language_core::{
-    ByteRange, CallGraphDirection, CallGraphOptions, CallGraphResult, FlowDirection, FlowOptions,
-    FlowResult,
+    ByteRange, CallGraphDirection, CallGraphOptions, CallGraphResult, DefinitionOptions,
+    FlowDirection, FlowOptions, FlowResult,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -276,6 +276,10 @@ struct Sites {
     forward: Vec<(PathBuf, ByteRange)>,
     backward: Vec<(PathBuf, ByteRange)>,
     functions: Vec<(PathBuf, ByteRange)>,
+    /// Identifier references, for `definition()`.
+    references: Vec<(PathBuf, ByteRange)>,
+    /// Exported declarations, for `references()`.
+    exports: Vec<(PathBuf, ByteRange)>,
 }
 
 /// A fixed sample: per sampled file, the first bindings that flow somewhere,
@@ -285,6 +289,8 @@ fn pick_sites(analyzer: &AccurateAnalyzer, files: &[PathBuf]) -> Sites {
         forward: Vec::new(),
         backward: Vec::new(),
         functions: Vec::new(),
+        references: Vec::new(),
+        exports: Vec::new(),
     };
     let stride = (files.len() / SAMPLE_FILES).max(1);
     for path in files.iter().step_by(stride) {
@@ -308,6 +314,19 @@ fn pick_sites(analyzer: &AccurateAnalyzer, files: &[PathBuf]) -> Sites {
         let named = flow.functions.iter().filter(|f| f.name.is_some());
         for function in named.take(2) {
             sites.functions.push((path.clone(), function.range));
+        }
+        if let Some((symbols, _)) = analyzer.cache().get(path) {
+            for reference in symbols.references.iter().take(3) {
+                sites.references.push((path.clone(), reference.range));
+            }
+            let exported = symbols
+                .exports
+                .iter()
+                .filter_map(|e| e.local_symbol_id)
+                .filter_map(|id| symbols.find_symbol_by_id(id));
+            for symbol in exported.take(2) {
+                sites.exports.push((path.clone(), symbol.range));
+            }
         }
     }
     sites
@@ -453,6 +472,47 @@ fn flow_bytes(flow: &crate::dataflow::FileFlow) -> Vec<(&'static str, usize)> {
     ]
 }
 
+/// Heap bytes held by the symbol cache, by part, from capacities.
+fn symbol_bytes(analyzer: &AccurateAnalyzer) -> Vec<(&'static str, usize)> {
+    use crate::cache::{ExportedSymbol, ImportedSymbol, Symbol, SymbolReference};
+    use std::mem::size_of;
+    let (mut symbols, mut names, mut references, mut imports, mut exports, mut content) =
+        (0, 0, 0, 0, 0, 0);
+    let string = |s: &String| s.capacity();
+    let option = |s: &Option<String>| s.as_ref().map_or(0, String::capacity);
+    for path in analyzer.cache().files() {
+        let Some((file, text)) = analyzer.cache().get(&path) else {
+            continue;
+        };
+        symbols += file.symbols.capacity() * size_of::<Symbol>();
+        names += file.symbols.iter().map(|s| string(&s.name)).sum::<usize>();
+        references += file.references.capacity() * size_of::<SymbolReference>();
+        imports += file.imports.capacity() * size_of::<ImportedSymbol>()
+            + file
+                .imports
+                .iter()
+                .map(|i| {
+                    string(&i.local_name) + option(&i.imported_name) + string(&i.module_specifier)
+                })
+                .sum::<usize>();
+        exports += file.exports.capacity() * size_of::<ExportedSymbol>()
+            + file
+                .exports
+                .iter()
+                .map(|e| string(&e.name) + option(&e.re_export_from) + option(&e.local_name))
+                .sum::<usize>();
+        content += text.len();
+    }
+    vec![
+        ("symbols", symbols),
+        ("symbol names", names),
+        ("references", references),
+        ("imports", imports),
+        ("exports", exports),
+        ("content", content),
+    ]
+}
+
 #[test]
 #[ignore]
 fn workspace() {
@@ -569,6 +629,46 @@ fn workspace() {
     let (callees, callee_entries, callee_truncated) = call_query(CallGraphDirection::Callees, true);
     let (callers, caller_entries, caller_truncated) =
         call_query(CallGraphDirection::Callers, false);
+
+    // definition() and references(), with their own digest.
+    let mut symbol_hasher = DefaultHasher::new();
+    let mut definitions = Vec::new();
+    for (path, range) in &sites.references {
+        let started = Instant::now();
+        let content = content_of(path);
+        let result = analyzer
+            .get_definition(path, &content, *range, DefinitionOptions::default())
+            .ok()
+            .flatten();
+        definitions.push(started.elapsed());
+        let shape = result.map(|mut definition| {
+            definition.content.clear();
+            format!("{definition:?}")
+        });
+        shape.hash(&mut symbol_hasher);
+    }
+    let mut references = Vec::new();
+    let mut reference_count = 0usize;
+    for (path, range) in &sites.exports {
+        let started = Instant::now();
+        let content = content_of(path);
+        let result = analyzer.find_references(path, &content, *range);
+        references.push(started.elapsed());
+        let mut files: Vec<(String, Vec<String>)> = result
+            .map(|result| result.files)
+            .unwrap_or_default()
+            .iter()
+            .map(|file| {
+                let mut locations: Vec<String> =
+                    file.locations.iter().map(|l| format!("{l:?}")).collect();
+                locations.sort();
+                reference_count += locations.len();
+                (file.file_path.display().to_string(), locations)
+            })
+            .collect();
+        files.sort();
+        files.hash(&mut symbol_hasher);
+    }
     let rss_end = rss_mb();
     let heap_end = heap_mb().0;
 
@@ -595,6 +695,8 @@ fn workspace() {
     row("flowsTo", flows_to);
     row("callees_transitive", callees);
     row("callers", callers);
+    row("definition", definitions);
+    row("references", references);
     println!(
         "BENCH entries callees={callee_entries} (truncated {callee_truncated}) callers={caller_entries} (truncated {caller_truncated})"
     );
@@ -605,6 +707,17 @@ fn workspace() {
     println!(
         "BENCH heap_mb after_index={heap_index:.0} after_facts={heap_facts:.0} after_table={heap_table:.0} end={heap_end:.0} peak={:.0}",
         heap_mb().1
+    );
+    let symbol_parts = symbol_bytes(&analyzer);
+    let symbol_total: usize = symbol_parts.iter().map(|(_, bytes)| bytes).sum();
+    let symbol_parts: Vec<String> = symbol_parts
+        .iter()
+        .map(|(name, bytes)| format!("{name}={:.1}", *bytes as f64 / 1e6))
+        .collect();
+    println!(
+        "BENCH symbols_mb total={:.1} {}",
+        symbol_total as f64 / 1e6,
+        symbol_parts.join(" ")
     );
     let total: usize = parts.iter().map(|(_, bytes)| bytes).sum();
     let parts: Vec<String> = parts
@@ -617,4 +730,8 @@ fn workspace() {
         parts.join(" ")
     );
     println!("BENCH digest {:016x}", hasher.finish());
+    println!(
+        "BENCH symbols_digest {:016x} (references found {reference_count})",
+        symbol_hasher.finish()
+    );
 }
