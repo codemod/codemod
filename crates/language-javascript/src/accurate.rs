@@ -6,6 +6,7 @@ use crate::error::JsSemanticError;
 use crate::flow_query::{self, CallerIndexSlot, FlowHost};
 use crate::oxc_adapter::{analyze, find_symbol_at_range};
 use crate::vfs_fs::VfsFileSystem;
+use crate::workspace_packages::{self, WorkspacePackages};
 use language_core::{
     filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionKind, DefinitionOptions,
     DefinitionResult, FileReferences, FlowOptions, FlowResult, MutationOptions, MutationsResult,
@@ -168,6 +169,9 @@ pub struct AccurateAnalyzer {
     canonical_paths: RwLock<HashMap<PathBuf, PathBuf>>,
     /// Files whose content could not be read; not tried again until `clear()`.
     unreadable_files: RwLock<HashSet<PathBuf>>,
+    /// Workspace packages by name, read on the first bare specifier the
+    /// resolver cannot find (no `node_modules`, or an unbuilt `dist/`).
+    workspace_packages: RwLock<Option<Arc<WorkspacePackages>>>,
 }
 
 impl AccurateAnalyzer {
@@ -225,6 +229,7 @@ impl AccurateAnalyzer {
             flow_everywhere: AtomicBool::new(false),
             canonical_paths: RwLock::new(HashMap::new()),
             unreadable_files: RwLock::new(HashSet::new()),
+            workspace_packages: RwLock::new(None),
         }
     }
 
@@ -334,6 +339,16 @@ impl AccurateAnalyzer {
     ///   `ensure_indexed` to miss, silently losing barrel re-export
     ///   chains (the insights/CLI parity bug we're fixing).
     fn read_file(&self, file_path: &Path) -> Result<String, JsSemanticError> {
+        let vfs_path = self.vfs_path(file_path).ok_or_else(|| {
+            JsSemanticError::Internal(format!("Failed to join path: {}", file_path.display()))
+        })?;
+
+        filesystem::read_to_string(&vfs_path)
+            .map_err(|e| JsSemanticError::Internal(format!("Failed to read file: {}", e)))
+    }
+
+    /// Where a path lives in the analyzer's filesystem (see [`Self::read_file`]).
+    fn vfs_path(&self, file_path: &Path) -> Option<VfsPath> {
         let path_str: std::borrow::Cow<str> = match self.walker {
             WorkspaceWalker::Ignore => {
                 let relative_path = file_path
@@ -343,14 +358,7 @@ impl AccurateAnalyzer {
             }
             WorkspaceWalker::Vfs => file_path.to_string_lossy(),
         };
-
-        let vfs_path = self
-            .fs_root
-            .join(&*path_str)
-            .map_err(|e| JsSemanticError::Internal(format!("Failed to join path: {}", e)))?;
-
-        filesystem::read_to_string(&vfs_path)
-            .map_err(|e| JsSemanticError::Internal(format!("Failed to read file: {}", e)))
+        self.fs_root.join(&*path_str).ok()
     }
 
     /// Index a file and its dependencies lazily.
@@ -469,12 +477,68 @@ impl AccurateAnalyzer {
             }
             Err(_) => match self.resolver.resolve_nearest_tsconfig(from_dir, specifier) {
                 Ok(resolution) => Ok(resolution.into_path_buf()),
-                Err(_) => Err(JsSemanticError::ModuleResolution {
-                    specifier: specifier.to_string(),
-                    from_path: from_path.to_path_buf(),
+                Err(_) => self.resolve_workspace_package(specifier).ok_or_else(|| {
+                    JsSemanticError::ModuleResolution {
+                        specifier: specifier.to_string(),
+                        from_path: from_path.to_path_buf(),
+                    }
                 }),
             },
         }
+    }
+
+    /// A bare specifier naming a package of this workspace (root
+    /// `package.json` `workspaces`, or `pnpm-workspace.yaml`), resolved to
+    /// its source when nothing is installed or built.
+    fn resolve_workspace_package(&self, specifier: &str) -> Option<PathBuf> {
+        let packages = self.workspace_packages();
+        let (dir, subpath) = packages.find(specifier)?;
+        let read = |path: &Path| self.read_file(path).ok();
+        workspace_packages::entry_candidates(dir, subpath, &read)
+            .into_iter()
+            .find_map(|candidate| {
+                self.resolver
+                    .resolve_fallback(dir, &format!("./{candidate}"))
+                    .ok()
+                    .map(|resolution| resolution.into_path_buf())
+            })
+    }
+
+    fn workspace_packages(&self) -> Arc<WorkspacePackages> {
+        if let Some(packages) = self.workspace_packages.read().as_ref() {
+            return Arc::clone(packages);
+        }
+        let read = |path: &Path| self.read_file(path).ok();
+        let list_dirs = |path: &Path| self.list_dirs(path);
+        let packages = Arc::new(WorkspacePackages::discover(
+            &self.workspace_root,
+            &read,
+            &list_dirs,
+        ));
+        *self.workspace_packages.write() = Some(Arc::clone(&packages));
+        packages
+    }
+
+    /// The directories directly inside `dir`, through the analyzer's
+    /// filesystem.
+    fn list_dirs(&self, dir: &Path) -> Vec<PathBuf> {
+        let Some(vfs_dir) = self.vfs_path(dir) else {
+            return Vec::new();
+        };
+        let Ok(children) = vfs_dir.read_dir() else {
+            return Vec::new();
+        };
+        children
+            .filter(|child| {
+                child
+                    .metadata()
+                    .is_ok_and(|meta| meta.file_type == VfsFileType::Directory)
+            })
+            .filter_map(|child| {
+                let name = child.filename();
+                (!name.is_empty()).then(|| dir.join(name))
+            })
+            .collect()
     }
 
     /// Process a file notification (updates the cache).
@@ -1195,6 +1259,7 @@ impl AccurateAnalyzer {
         self.flow_everywhere.store(false, Ordering::Relaxed);
         self.canonical_paths.write().clear();
         self.unreadable_files.write().clear();
+        *self.workspace_packages.write() = None;
     }
 
     /// Gets the type of a symbol at the given byte range.

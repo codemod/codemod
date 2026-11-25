@@ -157,6 +157,15 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_workspace_package_without_install,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_workspace_package_no_install.js",
+    fixture_dir: "typescript/workspace_package_no_install",
+    target: "packages/app/src/App.ts",
+    scope: workspace,
+}
+
+jssg_test! {
     name: test_callees_jsx_member_tag,
     language: CodemodLang::Static(SupportLang::Tsx),
     codemod: "tsx_callees_jsx_element.js",

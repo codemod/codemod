@@ -50,6 +50,7 @@ mod lightweight;
 mod oxc_adapter;
 mod provider;
 mod vfs_fs;
+mod workspace_packages;
 
 pub use accurate::WorkspaceWalker;
 pub use error::JsSemanticError;
