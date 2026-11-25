@@ -330,6 +330,27 @@ impl<'js> SgRootRjs<'js> {
         }
     }
 
+    /// The specifiers other packages can import this file with (its
+    /// package's name and `exports` subpaths that resolve to it); empty when
+    /// it is not part of its package's public API.
+    #[qjs(rename = "publicSpecifiers")]
+    pub fn public_specifiers(&self, ctx: Ctx<'js>) -> Result<Vec<String>> {
+        #[cfg(not(feature = "native"))]
+        {
+            return Err(Exception::throw_message(
+                &ctx,
+                &not_in_wasm("publicSpecifiers"),
+            ));
+        }
+        #[cfg(feature = "native")]
+        {
+            let (provider, file) = self.module_query(&ctx, "publicSpecifiers")?;
+            provider
+                .public_specifiers(&file)
+                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))
+        }
+    }
+
     /// Whether importing this module runs code: a call made at module top
     /// level (`program.callees()`), an `import "./x"` side-effect import, or
     /// a top-level write to an object's member (`registry.x = …`,

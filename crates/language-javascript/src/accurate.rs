@@ -157,6 +157,10 @@ pub struct AccurateAnalyzer {
     flows: FlowCache,
     /// Every call in the workspace, built on the first callers query.
     callers: CallerIndexSlot,
+    /// Every module reference in the workspace, by the file it resolves to:
+    /// built on the first `importers()` query and kept, like the callers
+    /// table, so files rewritten later in the run still count as importers.
+    importers_index: RwLock<Option<Arc<ImportersIndex>>>,
     /// Files that failed to parse, with the parser's message. A file here is
     /// not parsed again until new content for it arrives through `process_file`.
     parse_errors: RwLock<HashMap<PathBuf, String>>,
@@ -231,6 +235,7 @@ impl AccurateAnalyzer {
             walker,
             flows: FlowCache::default(),
             callers: CallerIndexSlot::default(),
+            importers_index: RwLock::new(None),
             parse_errors: RwLock::new(HashMap::new()),
             flow_everywhere: AtomicBool::new(false),
             canonical_paths: RwLock::new(HashMap::new()),
@@ -980,6 +985,28 @@ impl AccurateAnalyzer {
         Ok(())
     }
 
+    /// `.mdx` and `.md` files in the workspace (honoring `.gitignore`), for
+    /// the imports they hold. Only on the real filesystem; a VFS workspace
+    /// answers none.
+    fn markup_files(&self) -> Vec<PathBuf> {
+        if !matches!(self.walker, WorkspaceWalker::Ignore) {
+            return Vec::new();
+        }
+        ignore::WalkBuilder::new(&self.workspace_root)
+            .hidden(true)
+            .git_ignore(true)
+            .git_exclude(true)
+            .build()
+            .flatten()
+            .map(|entry| entry.into_path())
+            .filter(|path| {
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                path.is_file() && matches!(ext, "mdx" | "md")
+            })
+            .map(|path| self.canonical_path(&path))
+            .collect()
+    }
+
     /// Index files in parallel. Each file is parsed once, whichever thread
     /// gets to it first.
     fn index_files(&self, files: &[PathBuf]) {
@@ -1027,6 +1054,11 @@ impl AccurateAnalyzer {
                         .and_then(|n| n.as_str())
                         .map(str::to_string),
                     exports: json.get("exports").cloned(),
+                    entries: ["main", "module", "types", "typings", "source"]
+                        .iter()
+                        .filter_map(|field| json.get(*field).and_then(|v| v.as_str()))
+                        .map(str::to_string)
+                        .collect(),
                 });
             }
             if current == root.as_path() {
@@ -1038,16 +1070,62 @@ impl AccurateAnalyzer {
     }
 
     /// Every place in the workspace that refers to the module at `target`.
-    /// Walks every workspace file once (in parallel; facts are cached), and
-    /// resolves each candidate specifier from its file.
+    ///
+    /// Answers from a table of every module reference in the workspace,
+    /// built on the first query (in parallel, from the cached facts) and
+    /// kept until the cache is cleared: a snapshot of the workspace at that
+    /// moment, as for `callers()`. A file a codemod rewrites later still
+    /// counts as importing what it imported.
     pub fn importers(&self, target: &Path) -> language_core::ImportersResult {
-        use language_core::{ImportKind, Importer, ImportersFile};
+        let target = self.canonical_path(target);
+        let index = self.importers_index();
+        let files = index
+            .by_target
+            .get(&target)
+            .map(|refs| {
+                let mut by_file: Vec<language_core::ImportersFile> = Vec::new();
+                for (file, importer) in refs {
+                    match by_file.last_mut() {
+                        Some(last) if &last.file_path == file => {
+                            last.importers.push(importer.clone())
+                        }
+                        _ => by_file.push(language_core::ImportersFile {
+                            file_path: file.clone(),
+                            content: index
+                                .contents
+                                .get(file)
+                                .map(|c| c.to_string())
+                                .unwrap_or_default(),
+                            importers: vec![importer.clone()],
+                        }),
+                    }
+                }
+                by_file
+            })
+            .unwrap_or_default();
+        language_core::ImportersResult {
+            files,
+            unparsed: index.unparsed.clone(),
+        }
+    }
+
+    /// The importers table, built on first use.
+    fn importers_index(&self) -> Arc<ImportersIndex> {
+        if let Some(index) = self.importers_index.read().as_ref() {
+            return Arc::clone(index);
+        }
+        let index = Arc::new(self.build_importers_index());
+        *self.importers_index.write() = Some(Arc::clone(&index));
+        index
+    }
+
+    fn build_importers_index(&self) -> ImportersIndex {
+        use language_core::{ImportKind, Importer};
         use rayon::prelude::*;
 
-        let target = self.canonical_path(target);
         let mut files = FlowHost::workspace_files(self);
         files.sort();
-        let found: Vec<ImportersFile> = files
+        let per_file: Vec<FileRefs> = files
             .into_par_iter()
             .filter_map(|file| {
                 let flow = FlowHost::flow(self, &file)?;
@@ -1110,36 +1188,100 @@ impl AccurateAnalyzer {
                     candidates.push((range, ImportKind::Import, module));
                 }
 
-                let mut resolved: HashMap<String, bool> = HashMap::new();
-                let mut importers: Vec<Importer> = candidates
+                let mut resolved: HashMap<String, Option<PathBuf>> = HashMap::new();
+                let mut refs: Vec<(PathBuf, Importer)> = candidates
                     .into_iter()
-                    .filter(|(_, _, specifier)| {
-                        *resolved.entry(specifier.clone()).or_insert_with(|| {
-                            self.resolve_module_path(&file, specifier).as_ref() == Some(&target)
-                        })
-                    })
-                    .map(|(range, kind, specifier)| Importer {
-                        range,
-                        kind,
-                        specifier,
+                    .filter_map(|(range, kind, specifier)| {
+                        let target = resolved
+                            .entry(specifier.clone())
+                            .or_insert_with(|| self.resolve_module_path(&file, &specifier))
+                            .clone()?;
+                        Some((
+                            target,
+                            Importer {
+                                range,
+                                kind,
+                                specifier,
+                            },
+                        ))
                     })
                     .collect();
-                if importers.is_empty() {
-                    return None;
-                }
-                importers.sort_by_key(|i| (i.range.start, i.range.end));
-                importers.dedup_by_key(|i| (i.range.start, i.range.end));
-                Some(ImportersFile {
-                    file_path: file,
-                    content: content.to_string(),
-                    importers,
-                })
+                refs.sort_by_key(|(_, i)| (i.range.start, i.range.end));
+                refs.dedup_by_key(|(t, i)| (t.clone(), i.range.start, i.range.end));
+                Some((file, content, refs))
             })
             .collect();
-        language_core::ImportersResult {
-            files: found,
-            unparsed: FlowHost::parse_failures(self),
+        // MDX and Markdown import components with ESM lines.
+        let markup: Vec<FileRefs> = self
+            .markup_files()
+            .into_par_iter()
+            .filter_map(|file| {
+                let content: Arc<str> = self.read_file(&file).ok()?.into();
+                let refs = esm_import_lines(&content)
+                    .into_iter()
+                    .filter_map(|(range, specifier)| {
+                        let target = self.resolve_module_path(&file, &specifier)?;
+                        Some((
+                            target,
+                            Importer {
+                                range,
+                                kind: ImportKind::Import,
+                                specifier,
+                            },
+                        ))
+                    })
+                    .collect();
+                Some((file, content, refs))
+            })
+            .collect();
+        let mut index = ImportersIndex::default();
+        for (file, content, refs) in per_file.into_iter().chain(markup) {
+            if refs.is_empty() {
+                continue;
+            }
+            for (target, importer) in refs {
+                index
+                    .by_target
+                    .entry(target)
+                    .or_default()
+                    .push((file.clone(), importer));
+            }
+            index.contents.insert(file, content);
         }
+        index.unparsed = FlowHost::parse_failures(self);
+        index
+    }
+
+    /// The specifiers another package can import `file` with: its package's
+    /// name and `exports` subpaths that resolve to it (checked by resolving
+    /// them from the file). Empty outside a named package or when the file
+    /// is not public.
+    pub fn public_specifiers_of(&self, file: &Path) -> Vec<String> {
+        let file = self.canonical_path(file);
+        let Some(package) = self.package_of(&file) else {
+            return Vec::new();
+        };
+        let Some(name) = &package.name else {
+            return Vec::new();
+        };
+        let forms = specifier_forms(&file.to_string_lossy().replace('\\', "/"));
+        let mut out: Vec<String> = public_specifiers(name, &package, &forms)
+            .into_iter()
+            .filter(|specifier| self.resolve_module_path(&file, specifier).as_ref() == Some(&file))
+            .collect();
+        // Named as an entry in package.json: public by declaration, even
+        // when the name does not resolve here (no workspace config, no install).
+        let declared = package.entries.iter().any(|entry| {
+            let path = normalize_lexically(&package.dir.join(entry));
+            let path = path.to_string_lossy().replace('\\', "/");
+            forms.contains(&path)
+        });
+        if declared && package.exports.is_none() {
+            out.push(name.clone());
+        }
+        out.sort();
+        out.dedup();
+        out
     }
 
     /// A specifier an import in `from_file` can use to reach `target`.
@@ -1161,28 +1303,8 @@ impl AccurateAnalyzer {
         let target = self.canonical_path(target);
         let from_dir = from.parent()?.to_path_buf();
 
-        // Forms of the target a specifier can name: with its extension,
-        // without it, and its directory when it is an index file.
         let target_str = target.to_string_lossy().replace('\\', "/");
-        let mut forms = vec![target_str.clone()];
-        if let Some(stem) = strip_js_extension(&target_str) {
-            forms.push(stem.to_string());
-            // ESM TypeScript names the compiled output: `./x.js` for `x.ts`.
-            for (source, output) in [
-                (".tsx", ".js"),
-                (".ts", ".js"),
-                (".mts", ".mjs"),
-                (".cts", ".cjs"),
-            ] {
-                if target_str.ends_with(source) && !target_str.ends_with(".d.ts") {
-                    forms.push(format!("{stem}{output}"));
-                    break;
-                }
-            }
-            if let Some(dir) = stem.strip_suffix("/index") {
-                forms.push(dir.to_string());
-            }
-        }
+        let forms = specifier_forms(&target_str);
 
         let mut candidates: Vec<(String, bool)> = Vec::new();
         for form in &forms {
@@ -1447,6 +1569,7 @@ impl AccurateAnalyzer {
         self.indexing_in_progress.write().clear();
         self.flows.clear();
         self.callers.clear();
+        *self.importers_index.write() = None;
         self.parse_errors.write().clear();
         self.flow_everywhere.store(false, Ordering::Relaxed);
         self.canonical_paths.write().clear();
@@ -1846,6 +1969,18 @@ fn walk_vfs_tree(start: &VfsPath, prefix: &str, on_file: &mut dyn FnMut(&Path)) 
     recurse(start, prefix, on_file);
 }
 
+/// Every module reference in the workspace, by the file it resolves to (see
+/// `AccurateAnalyzer::importers`). References of one target are in file order.
+/// One file's module references: the file, its content, and (target, reference) pairs.
+type FileRefs = (PathBuf, Arc<str>, Vec<(PathBuf, language_core::Importer)>);
+
+#[derive(Default)]
+struct ImportersIndex {
+    by_target: HashMap<PathBuf, Vec<(PathBuf, language_core::Importer)>>,
+    contents: HashMap<PathBuf, Arc<str>>,
+    unparsed: Vec<UnparsedFile>,
+}
+
 /// Calls that name a module for a test framework's mocks.
 const MOCK_CALLS: [&str; 10] = [
     "jest.mock",
@@ -1859,6 +1994,37 @@ const MOCK_CALLS: [&str; 10] = [
     "vi.importActual",
     "vi.importMock",
 ];
+
+/// ESM `import … from "m"` and `import "m"` lines of an MDX or Markdown
+/// file: each line's range and specifier. Only single-line imports at the
+/// start of a line.
+fn esm_import_lines(content: &str) -> Vec<(ByteRange, String)> {
+    let mut out = Vec::new();
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        let trimmed = line.trim_end();
+        if trimmed.starts_with("import ") {
+            let quoted = trimmed
+                .rfind(" from ")
+                .map(|at| &trimmed[at + 6..])
+                .unwrap_or_else(|| trimmed["import ".len()..].trim_start())
+                .trim_end_matches(';')
+                .trim();
+            let quote = quoted.chars().next();
+            if matches!(quote, Some('"') | Some('\''))
+                && quoted.len() >= 2
+                && quoted.ends_with(quote.unwrap())
+            {
+                out.push((
+                    ByteRange::new(offset as u32, (offset + trimmed.len()) as u32),
+                    quoted[1..quoted.len() - 1].to_string(),
+                ));
+            }
+        }
+        offset += line.len();
+    }
+    out
+}
 
 /// `import "m";` statements (no bindings), by a scan of the source: their
 /// range (the statement) and specifier. Comments and strings are skipped by
@@ -1908,11 +2074,38 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     out
 }
 
+/// Forms of a file a specifier can name: with its extension, without it,
+/// its directory when it is an index file, and the `.js` output name of a
+/// TypeScript file.
+fn specifier_forms(target_str: &str) -> Vec<String> {
+    let mut forms = vec![target_str.to_string()];
+    if let Some(stem) = strip_js_extension(target_str) {
+        forms.push(stem.to_string());
+        for (source, output) in [
+            (".tsx", ".js"),
+            (".ts", ".js"),
+            (".mts", ".mjs"),
+            (".cts", ".cjs"),
+        ] {
+            if target_str.ends_with(source) && !target_str.ends_with(".d.ts") {
+                forms.push(format!("{stem}{output}"));
+                break;
+            }
+        }
+        if let Some(dir) = stem.strip_suffix("/index") {
+            forms.push(dir.to_string());
+        }
+    }
+    forms
+}
+
 /// A workspace package: its directory, `name` and `exports`.
 struct PackageInfo {
     dir: PathBuf,
     name: Option<String>,
     exports: Option<serde_json::Value>,
+    /// `main`, `module`, `types`, `typings` and `source`, as written.
+    entries: Vec<String>,
 }
 
 /// The specifiers a package makes public that could name one of `forms` (the

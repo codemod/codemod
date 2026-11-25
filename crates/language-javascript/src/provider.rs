@@ -268,6 +268,12 @@ impl SemanticProvider for OxcSemanticProvider {
             .specifier_for(from_file, target, options))
     }
 
+    fn public_specifiers(&self, file: &Path) -> SemanticResult<Vec<String>> {
+        Ok(self
+            .workspace("publicSpecifiers")?
+            .public_specifiers_of(file))
+    }
+
     fn importers(&self, target: &Path) -> SemanticResult<language_core::ImportersResult> {
         Ok(self.workspace("importers")?.importers(target))
     }

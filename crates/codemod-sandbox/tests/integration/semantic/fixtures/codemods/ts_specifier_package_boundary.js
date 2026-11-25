@@ -39,6 +39,23 @@ export default function transform(root) {
     "no exports: the entry",
   );
 
+  // Which files are public, seen from the files themselves.
+  expectEqual(leaf("@acme/ui", "Button").publicSpecifiers(), ["@acme/ui/button"], "public subpath");
+  expectEqual(leaf("@acme/ui", "Modal").publicSpecifiers(), [], "private file");
+  expectEqual(
+    root.importers(root.resolveModule("@acme/ui"))[0].root.publicSpecifiers(),
+    [],
+    "importer is private",
+  );
+  expectEqual(
+    leaf("@acme/lib", "format").publicSpecifiers(),
+    [],
+    "no exports: deep file is private",
+  );
+  expectEqual(root.publicSpecifiers(), [], "the app file");
+  const entry = root.importers(leaf("@acme/ui", "Button")).find((i) => i.kind === "export").root;
+  expectEqual(entry.publicSpecifiers(), ["@acme/ui"], "package entry");
+
   // Inside one package, relative paths as before.
   const index = root.resolveModule("@acme/ui");
   const button = leaf("@acme/ui", "Button");

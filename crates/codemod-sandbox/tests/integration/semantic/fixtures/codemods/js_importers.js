@@ -27,6 +27,7 @@ export default function transform(root) {
       'app.test.js mock ./lib | jest.mock("./lib")',
       'app.test.js mock ./lib | jest.requireActual("./lib")',
       'barrel.js export ./lib | export * from "./lib";',
+      'guide.mdx import ../src/lib | import { helper } from "../src/lib";',
       'lazy.js dynamic ./lib | import("./lib")',
       'legacy.js require ./lib | require("./lib")',
       'setup.js import ./lib/index.js | import "./lib/index.js";',
@@ -34,6 +35,11 @@ export default function transform(root) {
     "importers of lib/index.js",
   );
   expectEqual(found.unparsed, [], "complete");
+
+  // A snapshot: a file rewritten during the run still counts as importing
+  // what it imported when the table was built (as for callers()).
+  found.find((i) => i.kind === "export").root.write('export { other } from "./other";\n');
+  expectEqual(root.importers().length, found.length, "same answer after an importer was rewritten");
 
   // Another file, by path relative to this one.
   expectEqual(

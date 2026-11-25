@@ -266,6 +266,13 @@ impl SemanticProvider for LazySemanticProvider {
         }
     }
 
+    fn public_specifiers(&self, file: &Path) -> SemanticResult<Vec<String>> {
+        match self.get_or_init(Self::detect_language(file)) {
+            Some(provider) => provider.public_specifiers(file),
+            None => Err(unsupported_language("publicSpecifiers", file)),
+        }
+    }
+
     fn notify_file_processed(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
         let lang = Self::detect_language(file_path);
         match self.get_or_init(lang) {

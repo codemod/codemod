@@ -189,6 +189,15 @@ pub trait SemanticProvider: Send + Sync {
         Err(unsupported("importers"))
     }
 
+    /// The specifiers other packages can import `file` with: its package's
+    /// name and `exports` subpaths that resolve to it. Empty when the file
+    /// is not part of its package's public API (or not in a named package).
+    ///
+    /// The default is an `Unsupported` error.
+    fn public_specifiers(&self, _file: &Path) -> SemanticResult<Vec<String>> {
+        Err(unsupported("publicSpecifiers"))
+    }
+
     /// Notify the provider that a file has been processed.
     ///
     /// This is called after each file is processed during codemod execution.

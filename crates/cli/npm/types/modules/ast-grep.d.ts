@@ -458,8 +458,14 @@ declare module "codemod:ast-grep" {
      * `jest.requireActual`, `vi.mock`, `vi.importActual`, ...). Each
      * specifier is resolved from its file, so aliases and barrels count.
      *
-     * Walks every workspace file (once; facts are cached). `unparsed` lists
-     * files that did not parse: references in them are missing.
+     * `import` lines in `.mdx` / `.md` files count too (kind `"import"`).
+     *
+     * Answers from a table of every module reference in the workspace, built
+     * on the first `importers()` query of the run and kept: a snapshot, as
+     * for `callers()`. A file rewritten later in the run still counts as
+     * importing what it imported then, so a barrel's consumers are known
+     * even after they were pointed elsewhere. `unparsed` lists files that
+     * did not parse: references in them are missing.
      *
      * @throws as `resolveModule()` does.
      * @experimental
@@ -491,6 +497,25 @@ declare module "codemod:ast-grep" {
      * ```
      */
     hasTopLevelEffects(): boolean;
+
+    /**
+     * The specifiers another package can import this file with: its
+     * package's name (when it is the package's entry) and the `exports`
+     * subpaths that resolve to it. Empty when the file is not part of its
+     * package's public API, or not in a named package. Each is checked by
+     * resolving it; a file named by `main` / `module` / `types` / `source` in
+     * a package without `exports` is public by declaration, even when the
+     * name does not resolve (no install, no workspace config).
+     *
+     * @throws as `resolveModule()` does.
+     * @experimental
+     * @example
+     * ```ts
+     * // A barrel that is its package's entry point cannot be removed.
+     * if (barrel.publicSpecifiers().length > 0) return null;
+     * ```
+     */
+    publicSpecifiers(): string[];
     /**
      * Rename the current file to a new path.
      *
