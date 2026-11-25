@@ -231,6 +231,7 @@ enum Message {
     Event(Event),
     Approval(Approval, Sender<Decision>),
     Agent(Vec<AgentChoice>, Sender<Option<String>>),
+    Choice(String, Vec<String>, Sender<Option<String>>),
 }
 
 struct ChannelEvents(UnboundedSender<Message>);
@@ -285,6 +286,19 @@ impl Interaction for ScreenInteraction {
         let (reply, answer) = std::sync::mpsc::channel();
         self.messages
             .send(Message::Agent(choices.to_vec(), reply))
+            .ok()?;
+        answer.recv().ok().flatten()
+    }
+
+    fn choose(&self, _ask: &Ask, message: &str, options: &[String]) -> Option<String> {
+        let _guard = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        let (reply, answer) = std::sync::mpsc::channel();
+        self.messages
+            .send(Message::Choice(
+                message.to_string(),
+                options.to_vec(),
+                reply,
+            ))
             .ok()?;
         answer.recv().ok().flatten()
     }
@@ -536,6 +550,13 @@ fn receive(view: &mut RunView, summary: &Summary, message: Message) {
                 let _ = reply.send(None);
             } else {
                 view.ask_agent(choices, reply);
+            }
+        }
+        Message::Choice(question, options, reply) => {
+            if view.stopping {
+                let _ = reply.send(None);
+            } else {
+                view.ask_choice(question, options, reply);
             }
         }
     }

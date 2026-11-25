@@ -28,4 +28,5 @@ export const codemod = bodyOnly("codemod");
 export const agent = bodyOnly("agent");
 export const installSkill = bodyOnly("installSkill");
 export const approval = bodyOnly("approval");
+export const choose = bodyOnly("choose");
 export const fail = bodyOnly("fail");

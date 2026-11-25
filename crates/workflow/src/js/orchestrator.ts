@@ -618,6 +618,16 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     return hostTask("approval", { message });
   }
 
+  /** Ask a person to pick one option; unattended runs take `default` or the first. */
+  function choose(message: string, options: string[], opts: { default?: string } = {}): HostTask {
+    if (typeof message !== "string") throw new TypeError("choose: the message must be a string");
+    if (!Array.isArray(options) || !options.length || options.some((o) => typeof o !== "string")) {
+      throw new TypeError("choose: options must be a non-empty array of strings");
+    }
+    onlyKeys(opts, ["default"], "choose");
+    return hostTask("choose", { message, options, default: opts.default });
+  }
+
   /** Wait for a time: milliseconds, or a string such as "30s" or "10m". */
   function sleep(duration: Duration): HostTask {
     return hostTask("sleep", { duration: milliseconds(duration, "sleep") });
@@ -653,6 +663,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     agent,
     installSkill,
     approval,
+    choose,
     sleep,
     waitForEvent,
   };
@@ -1340,6 +1351,8 @@ function defaultLabel(position: number, content: TaskContent): string {
     }
     case "approval":
       return `approval: ${truncate(content.message)}`;
+    case "choose":
+      return `choose: ${truncate(content.message)}`;
     case "sleep":
       return `sleep ${describeDuration(Number(content.duration))}`;
     case "waitForEvent":

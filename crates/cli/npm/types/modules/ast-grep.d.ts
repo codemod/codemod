@@ -368,6 +368,16 @@ declare module "codemod:ast-grep" {
      * ```
      */
     mutations(options?: MutationOptions<M>): Array<Mutation<M>>;
+    /**
+     * The type of this expression as the TypeScript 7 checker prints it
+     * (`"Promise<User>"`), or `null` when there is no checker or no answer.
+     * Needs `semanticAnalysis: "workspace"` and a TypeScript 7 checker: the
+     * target's `node_modules/@typescript/native-preview-<os>-<arch>` (or
+     * `typescript-<os>-<arch>`), or `CODEMOD_TS_API=<path to tsc/tsgo>`.
+     *
+     * @experimental
+     */
+    typeInfo(): string | null;
   }
   /** Represents the parsed tree of code. */
   export class SgRoot<M extends TypesMap = TypesMap> {

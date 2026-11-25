@@ -1054,6 +1054,16 @@ impl Interaction for TerminalInteraction {
         }
     }
 
+    fn choose(&self, _ask: &Ask, message: &str, options: &[String]) -> Option<String> {
+        if !self.interactive {
+            return None;
+        }
+        let _guard = self.prompt_lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.renderer
+            .suspend(|| inquire::Select::new(message, options.to_vec()).prompt())
+            .ok()
+    }
+
     fn choose_agent(&self, choices: &[AgentChoice]) -> Option<String> {
         if !self.interactive {
             return None;

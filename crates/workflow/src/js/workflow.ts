@@ -73,6 +73,7 @@ export const {
   agent,
   installSkill,
   approval,
+  choose,
   step,
   sleep,
   waitForEvent,
