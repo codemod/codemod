@@ -2965,6 +2965,76 @@ console.log(x);
         assert!(result.truncated, "the caps should have cut this answer");
     }
 
+    /// The stale-flags demo deleted a live email template: its only uses
+    /// were through default imports, and references() did not see them.
+    #[test]
+    fn references_follow_default_imports() {
+        let dir = TempDir::new().unwrap();
+        let cases = [
+            (
+                "decl.tsx",
+                "export default function WelcomeEmail() { return null; }\n",
+                "WelcomeEmail",
+            ),
+            (
+                "named.ts",
+                "function resetEmail() { return 1; }\nexport default resetEmail;\n",
+                "resetEmail",
+            ),
+            (
+                "aliased.ts",
+                "const invoiceEmail = () => 2;\nexport { invoiceEmail as default };\n",
+                "invoiceEmail",
+            ),
+        ];
+        for (file, source, _) in &cases {
+            fs::write(dir.path().join(file), source).unwrap();
+        }
+        fs::write(
+            dir.path().join("barrel.ts"),
+            "export { default as Invoice } from './aliased';\nexport { default } from './named';\n",
+        )
+        .unwrap();
+        let send = dir.path().join("send.tsx");
+        fs::write(
+            &send,
+            "import Welcome from './decl';\nimport reset from './named';\nimport { Invoice } from './barrel';\nimport barrelDefault from './barrel';\nexport const a = <Welcome />;\nexport const b = reset();\nexport const c = Invoice();\nexport const d = barrelDefault();\n",
+        )
+        .unwrap();
+        let analyzer = AccurateAnalyzer::new(dir.path().to_path_buf());
+        let expected: [&[&str]; 3] = [
+            &["Welcome", "Welcome"],
+            &[
+                "reset",
+                "reset",
+                "barrelDefault",
+                "barrelDefault",
+                "default",
+            ],
+            &["Invoice", "Invoice", "default"],
+        ];
+        for ((file, source, name), expected) in cases.iter().zip(expected) {
+            let path = dir.path().join(file);
+            let result = analyzer
+                .find_references(&path, source, range_of(source, name))
+                .unwrap();
+            let mut found: Vec<String> = result
+                .files
+                .iter()
+                .filter(|f| !f.file_path.ends_with(file))
+                .flat_map(|f| {
+                    f.locations.iter().map(|l| {
+                        f.content[l.range.start as usize..l.range.end as usize].to_string()
+                    })
+                })
+                .collect();
+            found.sort();
+            let mut expected: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+            expected.sort();
+            assert_eq!(found, expected, "references of {name}");
+        }
+    }
+
     fn entry_names(result: &CallGraphResult) -> Vec<String> {
         result
             .files

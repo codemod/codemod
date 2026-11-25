@@ -122,6 +122,29 @@ pub fn analyze(
                                 .find(|s| s.name == id.name.as_str())
                                 .map(|s| s.symbol_id)
                         }
+                        // `export default function Name() {}` / `class Name {}`:
+                        // the default export is that binding, so uses through
+                        // default imports are its references.
+                        ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                            function.id.as_ref().and_then(|id| {
+                                let range = span_to_byte_range(id.span);
+                                file_symbols
+                                    .symbols
+                                    .iter()
+                                    .find(|s| s.range == range)
+                                    .map(|s| s.symbol_id)
+                            })
+                        }
+                        ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                            class.id.as_ref().and_then(|id| {
+                                let range = span_to_byte_range(id.span);
+                                file_symbols
+                                    .symbols
+                                    .iter()
+                                    .find(|s| s.range == range)
+                                    .map(|s| s.symbol_id)
+                            })
+                        }
                         _ => None,
                     };
                     file_symbols.exports.push(ExportedSymbol {

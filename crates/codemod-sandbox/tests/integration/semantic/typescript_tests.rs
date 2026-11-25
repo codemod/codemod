@@ -193,6 +193,15 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_references_through_default_import,
+    language: CodemodLang::Static(SupportLang::Tsx),
+    codemod: "tsx_references_default_import.js",
+    fixture_dir: "typescript/default_import_refs",
+    target: "emails/WelcomeEmail.tsx",
+    scope: workspace,
+}
+
+jssg_test! {
     name: test_callees_jsx_member_tag,
     language: CodemodLang::Static(SupportLang::Tsx),
     codemod: "tsx_callees_jsx_element.js",
