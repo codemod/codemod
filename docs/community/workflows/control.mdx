@@ -1,0 +1,99 @@
+---
+title: "Drive codemod from a program"
+sidebarTitle: "Control protocol"
+description: "Run a workflow from a TUI, an agent or a script: read its events as JSON lines, answer its approvals on stdin, attach to runs started elsewhere."
+---
+
+<Warning>
+Experimental in the 2.0 alphas. The messages can still change; `hello.protocol` goes up when a change would break a client.
+</Warning>
+
+A program that runs codemod for someone (a terminal UI, a coding agent, a CI wrapper) starts it as a child process with `--format jsonl --control stdio`. The run prints one JSON object per line on stdout, and reads commands, one JSON object per line, on stdin. When the workflow asks something (an `approval(...)` step, a shell command, a coding agent to pick), the run waits for the answer instead of exiting.
+
+```bash
+npx codemod@alpha workflow run -w workflow.ts --target . --format jsonl --control stdio
+npx codemod@alpha workflow resume --id <ID> --format jsonl --control stdio
+npx codemod@alpha @org/my-package --format jsonl --control stdio
+```
+
+The TypeScript types for everything below are in the `codemod` npm package:
+
+```ts
+import type { Command, Event, Hello, Line } from "codemod/protocol";
+```
+
+## What the run prints
+
+The first line is `hello`. It names the run before anything happens, so a client can attach, cancel or resume it later:
+
+```json
+{"event":"hello","protocol":1,"cli":"2.0.0-alpha.9","run_id":"8c7000b1-…","mode":"run","dry_run":false,
+ "workflow":"/work/codemod/workflow.ts","target":"/work/app",
+ "settings":{"capabilities":["fs"],"managed_git":false,"agent":null,"decision_model":"systemone/jev-latest","approve_all":false,"approved":[]},
+ "commands":["answer","approve","reject","stop"]}
+```
+
+Then come the run's events, the same as `--format jsonl` prints without a control channel (see [`--format`](/community/cli#codemod-workflow)). Each has `seq`, which counts up through the whole run, also across resumes, and `ts`. Step events name their step with `step`, a key that stays the same across resumes (`"3"`; `"3/0"` for step 0 of the codemod that step 3 runs, whose `parent` is `"3"`).
+
+A question looks like this:
+
+```json
+{"event":"question","id":"approval:1","kind":"approval","step":"1","message":"Go on to b?",
+ "approval":{"kind":"manual","message":"Go on to b?"},"seq":7,"ts":"…"}
+```
+
+| `id` | Asked when |
+| --- | --- |
+| `approval:<step>` | an `approval(...)` step runs |
+| `shell:<step>` | a `shell` step is about to run a command |
+| `pull-request:<step>` | a `pullRequest` step is about to push and open a pull request |
+| `capabilities:<step>` | a step's code asks for capabilities the run was not given |
+| `uncommitted-changes` | the run is about to change a target with uncommitted changes (unless `--allow-dirty`) |
+| `agent:<step>` | an `agent(...)` step needs a coding agent; `kind` is `"agent"` and `choices` lists them |
+
+Questions come one at a time. When one is answered, or closed because the run stops, `question_closed` says how: `answer` is `"approved"`, `"rejected"` or `"later"` (an agent's id, or `null`, for agent questions), and `by` is `"answer"`, `"stop"` or `"eof"`. `--approve` still gives approvals up front, without asking.
+
+## Commands
+
+```json
+{"command":"approve","question_id":"approval:1"}
+{"command":"reject","question_id":"approval:1"}
+{"command":"answer","question_id":"approval:1","value":"later"}
+{"command":"answer","question_id":"agent:3","value":"codex"}
+{"command":"stop","mode":"pause"}
+```
+
+- `approve` and `reject` answer an approval. `answer` takes `"approve"`, `"reject"` or `"later"` (approval steps only) for approvals, and an available agent's id, or `null` for the built-in agent, for agent questions. `questionId` is accepted for `question_id`.
+- `stop` stops the run: `"pause"` (the default) leaves it `paused`, to resume; `"cancel"` ends it as `canceled`.
+- A command that cannot be followed (not JSON, no such open question, a wrong answer) gets a `control_error` event with the `message` and the `line`; the run goes on.
+- Closing stdin pauses the run, as `stop` does, and closes the open question. Keep stdin open for as long as the run should go on.
+
+## How a run ends
+
+| Status | How | Resume |
+| --- | --- | --- |
+| `succeeded` | | nothing left to run |
+| `failed` | a step failed, or the workflow called `fail()` | `workflow resume` |
+| `awaiting-approval` | answered `later` (or no control channel and nobody to ask) | `workflow resume --approve <id>` |
+| `paused` | `stop` with `"pause"`, stdin closed, Ctrl-C | `workflow resume` |
+| `canceled` | `stop` with `"cancel"`, `workflow cancel` | over: `--force` only |
+| `rejected` | an approval was rejected | over: `--force` only |
+
+**A rejected approval ends the run.** Nothing after it runs, steps running alongside stop, and what earlier steps changed stays changed. The process exits with `1`, as it does for `paused` and `canceled`; `run_finished` has the status.
+
+A dry run with a control channel waits at its questions like a real run, and `approve` lets it go on and report its diff. Without one, a dry run that reaches an approval exits with `1`: it is not saved, so it cannot wait to be resumed.
+
+## Attach to a run
+
+Every saved run keeps its events in the run store. `workflow attach` prints them, after a `hello` (with `"mode":"attach"` and no commands), and follows the run while another process executes it:
+
+```bash
+npx codemod@alpha workflow attach --id <ID> --format jsonl [--from-seq <SEQ>]
+```
+
+It ends when the run stops executing. It only watches: the questions are answered by the process that has the control channel.
+
+## Read runs and workflows
+
+- `workflow list --format json` and `workflow status --id <ID> --format json` print runs; `status` has `question`, the approval a waiting run needs.
+- `workflow inspect -w <file|dir> --format json` describes a workflow for a setup form: declared params with their types, doc comments and `@default`s, imports, the capabilities its package asks for, and its `step(...)` calls. See [`workflow inspect`](/community/cli#codemod-workflow).

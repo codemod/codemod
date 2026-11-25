@@ -19,6 +19,42 @@ To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha wor
 
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
 
+<Update label="Unreleased (alpha.9)" description="Not published yet">
+**Highlights**
+
+- `--control stdio`: drive a run from another program. Approvals wait for an answer on stdin instead of exiting. See [Drive codemod from a program](/community/workflows/control).
+- `workflow attach` replays a run's events and follows it live; `workflow inspect` describes a workflow's params and steps.
+- `codemod/protocol`: TypeScript types for the JSONL events and the control commands.
+
+**Breaking changes**
+
+- **Rejecting an approval ends the run as `rejected`.** Before, answering no to an `approval(...)` step in the launcher failed the step, and a resume asked again. Now the run is `rejected`: it is over, what earlier steps changed stays, and `workflow resume` refuses it unless you pass `--force`.
+- **Ctrl-C pauses; `workflow cancel` ends.** Before, both left a `canceled` run that `workflow resume` continued. Now Ctrl-C (and closing a control channel) leaves the run `paused`, which resumes as before, and a canceled run takes `--force` to resume.
+
+  ```
+  # before
+  The run was canceled.
+    Resume with: codemod workflow resume --id <ID>
+  # after (Ctrl-C)
+  The run was paused.
+    Resume with: codemod workflow resume --id <ID>
+  ```
+
+- **`--format jsonl` shows a nested codemod's steps as steps.** Before, a `codemod(...)` step's own steps came as `step_log` lines of that step. Now they are `step_started`/`step_finished` events with `step: "3/0"` and `parent: "3"`; a client that tracks steps by `position` alone should use `step`. Text output and the launcher show them as before.
+- **A dry run that reaches an approval exits 1.** It is not saved, so it cannot wait to be resumed; it says to pass `--approve` instead of printing a resume command that could not work.
+
+**New**
+
+- `workflow resume --approve <QUESTION_ID>` gives one approval (`approval:3`); `--approve` alone still gives all. `workflow status` shows the `question` a run waits for.
+- Events: `seq` keeps counting across resumes; step events carry `step`, `parent` and `kind`; `run_log` carries `step`; `run_started` echoes `target`, `params`, `dry_run` and `settings`; real runs report `step_diff` per changed file.
+- Every saved run keeps its events in the run store, for `workflow attach`.
+
+**Fixes**
+
+- `workflow send <EVENT>` to a run waiting for an approval said it sent the event and did nothing; it now fails and names the `workflow resume --approve` command.
+- A canceled run could be resumed to success.
+</Update>
+
 <Update label="2.0.0-alpha.7" description="November 25, 2026">
 ```bash
 npx codemod@2.0.0-alpha.7 --version   # codemod 2.0.0-alpha.7

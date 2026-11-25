@@ -414,7 +414,7 @@ A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>
   The decision model `assess()` uses, e.g. `openai/gpt-6-luna`; a bare model name is System One's (`systemone/jev-latest`). It comes before the model saved in the launcher (`"decisionModel"` in the CLI's `config.json`) and the `DECISION_PROVIDER` / `DECISION_MODEL` variables; a `decision_model` in the package's `codemod.yaml`, or a model named in the `assess()` call, still comes first.
 </ResponseField>
 
-**The launcher.** In an interactive terminal, `workflow run`, `codemod <package>` and `workflow resume` open a terminal UI. A new run starts on a setup screen (target, dry run, params, capabilities, coding agent, decision model; your agent and model are saved for next time); then the screen shows the run's steps, logs and diffs, with approvals answered in place (`y`, `n`, or `l` to pause and resume later). After a dry run, `a` runs it for real. It does not open with `--no-interactive`, `--format jsonl`, in CI, when input or output is piped, or with `CODEMOD_LAUNCHER=0`; those runs print the plain output.
+**The launcher.** In an interactive terminal, `workflow run`, `codemod <package>` and `workflow resume` open a terminal UI. A new run starts on a setup screen (target, dry run, params, capabilities, coding agent, decision model; your agent and model are saved for next time); then the screen shows the run's steps, logs and diffs, with approvals answered in place (`y` approves, `n` rejects, which ends the run, and `l` stops it there to resume later). After a dry run, `a` runs it for real. It does not open with `--no-interactive`, `--format jsonl`, in CI, when input or output is piped, or with `CODEMOD_LAUNCHER=0`; those runs print the plain output.
 
 A run is unattended when you pass `--no-interactive`, and also when there is no terminal to ask on (in CI, or with input piped in). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something.
 
@@ -433,7 +433,17 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
    "steps":[{"position":0,"label":"Find var","status":"succeeded","result":{"outputs":["src/a.ts"]}}],"seq":5,"ts":"…"}
   ```
 
+  Every event has `seq`, which counts up through the whole run, also across `workflow resume`, and `ts`. Step events carry `step`, the step's key (its position, or `"3/0"` for step 0 of the codemod that step 3 runs), and `parent` (`"3"` there, else `null`); `step_started` and `step_finished` also carry the step's `kind` (`forEachFile`, `approval`, `shell`, ...). `run_started` echoes the run's `target`, `params`, `dry_run` and `settings`. `run_log` (the workflow body's `console` output) has the `step` of the nested codemod it came from, or `null`. A real run reports each file a step changes as a `step_diff` event (`path`, `diff`, `additions`, `deletions`; a diff over 256 KiB is left out, with `diff_omitted`); a dry run reports `run_diff` at the end instead. The TypeScript types are in `codemod/protocol`; see [Drive codemod from a program](/community/workflows/control).
+
   In text format, a run that returned something ends with `Output: <JSON>`, cut at 200 characters.
+</ResponseField>
+
+<ResponseField name="--control stdio" type="string">
+  Let another program drive the run: it reads the events on stdout and writes commands on stdin (`approve`, `reject`, `answer`, `stop`), one JSON object per line. The first line is a `hello` with the run's id. At an approval or an agent question the run waits for an answer instead of exiting, and a dry run waits too. Closing stdin pauses the run. Needs `--format jsonl`. Experimental: see [Drive codemod from a program](/community/workflows/control).
+
+  ```bash
+  npx codemod workflow run -w workflow.ts --format jsonl --control stdio
+  ```
 </ResponseField>
 
 <ResponseField name="-t, --target <PATH>" type="string">
@@ -503,26 +513,36 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 | Code | Meaning |
 | ---- | ------- |
 | `0` | The run finished, or is waiting for an approval. |
-| `1` | The run failed or was canceled. |
+| `1` | The run failed, was paused (Ctrl-C), canceled, or rejected at an approval. Also: a dry run reached an approval nobody could answer (a dry run is not saved, so it cannot wait; pass `--approve`, or drive it with `--control stdio`). |
 | `2` | The run finished, but some files failed. The other files' changes were written (in a dry run, nothing was), and the output ends with how many failed. A resumed run counts the files that failed in steps it reused. Also: the workflow called [`fail()`](/community/workflows/reference#failing-a-run-with-a-report) (the run is `failed`, and keeps its output). |
 | other | The workflow called `fail(message, { exitCode })` with that code (1 to 125). |
 
 **`workflow resume`**
 
-Continue a run that failed, was canceled or interrupted, or is waiting for approval. Steps that already finished are not run again: their recorded results are reused, in the order the steps finished the first time. If you changed the workflow, steps you left alone keep their results wherever they now are in the file; a step you added or changed runs, also when it had finished before.
+Continue a run that failed, was paused (Ctrl-C) or interrupted, or is waiting for approval. A run that was canceled or rejected is over: resuming it takes `--force`. Steps that already finished are not run again: their recorded results are reused, in the order the steps finished the first time. If you changed the workflow, steps you left alone keep their results wherever they now are in the file; a step you added or changed runs, also when it had finished before.
 
 The run continues with what it was started with: its capabilities, `--managed-git` and `--agent` carry over (a new `--agent` or `--model` wins), and flags you pass add to them. A run that another process is still executing cannot be resumed; wait for it or cancel it. A run started with `runWorkflow` in Node.js is resumed there, not here.
 
 ```bash
-npx codemod workflow resume --id <ID> [--approve]
+npx codemod workflow resume --id <ID> [--approve [<QUESTION_ID>]] [--force]
 ```
 
 <ResponseField name="-i, --id <ID>" type="string" required>
   Run ID, from `workflow list` or the end of a failed run's output.
 </ResponseField>
 
-<ResponseField name="--approve" type="boolean">
-  Give the approval the run is waiting for, and any later ones. `--trigger-all` is accepted as an alias.
+<ResponseField name="--approve [QUESTION_ID]" type="string">
+  Without an id: give the approval the run is waiting for, and any later ones. `--trigger-all` is accepted as an alias.
+
+  With an id, give only that approval; the run stops again at the next one. Each approval has an id that stays the same across resumes, `approval:<step>` for an `approval(...)` step (`shell:<step>`, `pull-request:<step>` for the others). A run that waits shows it: in its last lines, as `question` in `workflow status`, and in `run_finished` with `--format jsonl`. Repeat `--approve` to give several.
+
+  ```bash
+  npx codemod workflow resume --id <ID> --approve approval:3 --no-interactive
+  ```
+</ResponseField>
+
+<ResponseField name="--force" type="boolean">
+  Continue a run that was canceled or rejected. Steps that finished keep their results; the step that was rejected asks again.
 </ResponseField>
 
 <ResponseField name="--install-skill" type="boolean">
@@ -620,7 +640,11 @@ Transform files and their tests are not changed: `codemod jssg test` keeps worki
 
 **`workflow status`**
 
-Show a run and each of its recorded steps. A step is `succeeded`, `failed`, `canceled`, or `awaiting-approval`; the last two run again when the run is resumed. A run shown as `interrupted` was still running when its process was killed: resume or cancel it.
+Show a run and each of its recorded steps.
+
+A run is `running`, `awaiting-approval`, `paused` (stopped with Ctrl-C or `stop`), `succeeded`, `failed`, `canceled` or `rejected`. `workflow resume` continues the first ones and a failed run; `canceled` and `rejected` are over (`--force` continues them anyway). A run shown as `interrupted` was still running when its process was killed: resume or cancel it.
+
+A step is `succeeded`, `partial`, `failed`, `canceled`, `awaiting-approval` or `rejected`; `canceled` and `awaiting-approval` steps run again when the run is resumed.
 
 ```bash
 npx codemod workflow status -i <ID>
@@ -632,7 +656,7 @@ npx codemod workflow status -i <ID> --format json
 </ResponseField>
 
 <ResponseField name="--format <text|json>" type="string">
-  `json` prints the run as one JSON object: `id`, `name`, `workflow`, `target`, `params`, `status`, `startedAt`, `endedAt`, `durationMs`, `awaiting`, `error`, `output` (what the workflow returned or gave `fail()`), `exitCode` (from `fail()`, else `null`), `failedFiles`, and `steps`, each with `position`, `label`, `status`, `error`, `result`, `finishedAt`, `durationMs`, `attempts` and `files`.
+  `json` prints the run as one JSON object: `id`, `name`, `workflow`, `target`, `params`, `status`, `startedAt`, `endedAt`, `durationMs`, `awaiting` and `question` (what the approval it waits for asks, and its id), `error`, `output` (what the workflow returned or gave `fail()`), `exitCode` (from `fail()`, else `null`), `failedFiles`, and `steps`, each with `position`, `label`, `kind`, `status`, `error`, `result`, `finishedAt`, `durationMs`, `attempts` and `files`.
 </ResponseField>
 
 **`workflow list`**
@@ -653,7 +677,7 @@ npx codemod workflow list [-l <LIMIT>] [--format json]
 
 **`workflow cancel`**
 
-Cancel a workflow run. A run in progress, in this or another terminal, stops the step it is on (a shell command and what it started are terminated) and writes nothing more. Any other unfinished run (failed, waiting for approval, or interrupted) is marked canceled. A canceled run can still be resumed.
+Cancel a workflow run. A run in progress, in this or another terminal, stops the step it is on (a shell command and what it started are terminated) and writes nothing more. Any other unfinished run (failed, paused, waiting for approval, or interrupted) is marked canceled. A canceled run is over: `workflow resume` refuses it unless you pass `--force`. To stop a run you mean to continue, press Ctrl-C instead: the run is `paused`.
 
 ```bash
 npx codemod workflow cancel -i <ID>
@@ -663,9 +687,37 @@ npx codemod workflow cancel -i <ID>
   Workflow run ID.
 </ResponseField>
 
+**`workflow attach`**
+
+Print a run's events as `--format jsonl` does: a `hello` line, every event the run has had so far, then, while the run is executing (in another terminal or process), its events as they come. It ends when the run stops executing. Every run keeps its events in the run store (dry runs excepted), so this works for runs started in any format, finished ones included. It only watches: answering a run's questions takes its control channel, or `workflow resume`.
+
+```bash
+npx codemod workflow attach -i <ID> [--from-seq <SEQ>]
+```
+
+<ResponseField name="-i, --id <ID>" type="string" required>
+  Workflow run ID.
+</ResponseField>
+
+<ResponseField name="--from-seq <SEQ>" type="number">
+  Leave out the events numbered below `SEQ`: the ones you already have.
+</ResponseField>
+
+**`workflow inspect`**
+
+Describe a workflow without running it: what a setup form needs.
+
+```bash
+npx codemod workflow inspect -w <workflow.ts|workflow.yaml|directory> [--format json]
+```
+
+`json` prints `workflow`, `language`, `params` (each declared param's `name`, `type` as written, `optional`, `description` from its doc comment, and `default` from an `@default` tag), `modules` (what it imports), `capabilities` (what its `codemod.yaml` asks for), `uses` (whether it has `approval`, `agent`, `shell`, `git`, `codemod`, `install_skill`, `wait` and `assess` calls) and `steps`: each `step(...)` call in the source, with its `label` when it is a string and its `kind`. A step in a loop is listed once.
+
 **`workflow send`**
 
-Send an event to a workflow run. A [`waitForEvent`](/community/workflows/reference#waiting) step waiting for it continues with the event's data. If no step waits for it yet, or the run is not running, the event is kept until a step takes it. A run that has succeeded takes no more events.
+Send an event to a workflow run. A [`waitForEvent`](/community/workflows/reference#waiting) step waiting for it continues with the event's data. If no step waits for it yet, or the run is not running, the event is kept until a step takes it, and `send` says so. A run that has succeeded, or was canceled or rejected, takes no more events.
+
+Events do not give approvals: `send` to a run that waits for an approval (and has no step waiting for that event) fails, and names the `workflow resume --approve <QUESTION_ID>` that gives it.
 
 ```bash
 npx codemod workflow send <EVENT> -i <ID> [--data <JSON>]
