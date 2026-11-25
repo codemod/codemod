@@ -228,11 +228,27 @@ pub struct CallGraphFile {
     pub entries: Vec<CallGraphEntry>,
 }
 
+/// A file the analysis could not parse. Calls into it or from it are missing
+/// from the answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnparsedFile {
+    pub file_path: PathBuf,
+    pub message: String,
+}
+
 /// Result of a call-graph query.
+///
+/// Callers come from a table of every call in the workspace, built on the
+/// first callers query and kept for the provider's lifetime: a snapshot of
+/// the workspace at that moment. Files edited later keep their old calls in
+/// it until the provider's cache is cleared.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CallGraphResult {
     pub files: Vec<CallGraphFile>,
     pub truncated: bool,
+    /// Files the walk needed but could not parse: imports of the functions
+    /// it visited (callees), or workspace files (callers).
+    pub unparsed: Vec<UnparsedFile>,
 }
 
 str_enum! {

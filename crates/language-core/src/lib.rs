@@ -14,7 +14,7 @@ pub use dataflow::{
     CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
     CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
     FlowResult, FlowStep, Mutation, MutationConfidence, MutationKind, MutationOptions,
-    MutationsResult,
+    MutationsResult, UnparsedFile,
 };
 pub use error::{SemanticError, SemanticResult};
 pub use noop::NoopSemanticProvider;

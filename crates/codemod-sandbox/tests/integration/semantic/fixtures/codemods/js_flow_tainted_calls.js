@@ -20,6 +20,7 @@ function expectEqual(actual, expected, label) {
 export default function transform(root) {
   const body = root.root().find({ rule: { pattern: "req.body" } });
   if (!body) throw new Error("req.body not found");
+  expectEqual(body.flowsTo().truncated, false, "truncated");
 
   // Calls whose result depends on a tainted argument pass the taint on:
   // `user` comes from createUser(label, email), so log(user) and

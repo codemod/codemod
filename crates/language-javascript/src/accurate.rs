@@ -3,13 +3,13 @@
 use crate::cache::{ExportedSymbol, FileSymbols, ImportedSymbol, Symbol, SymbolCache};
 use crate::dataflow::{FileFlow, FlowCache};
 use crate::error::JsSemanticError;
-use crate::flow_query::{self, FlowHost};
+use crate::flow_query::{self, CallerIndexSlot, FlowHost};
 use crate::oxc_adapter::{find_symbol_at_range, parse_and_analyze};
 use crate::vfs_fs::VfsFileSystem;
 use language_core::{
     filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionKind, DefinitionOptions,
     DefinitionResult, FileReferences, FlowOptions, FlowResult, MutationOptions, MutationsResult,
-    ReferencesResult, SemanticResult, SymbolLocation,
+    ReferencesResult, SemanticResult, SymbolLocation, UnparsedFile,
 };
 use oxc_resolver::{
     Resolution, ResolveError, ResolveOptions, Resolver, ResolverGeneric, TsconfigDiscovery,
@@ -120,6 +120,11 @@ pub struct AccurateAnalyzer {
     walker: WorkspaceWalker,
     /// Value-flow facts per file, built on the first data-flow or call-graph query.
     flows: FlowCache,
+    /// Every call in the workspace, built on the first callers query.
+    callers: CallerIndexSlot,
+    /// Files that failed to parse, with the parser's message. A file here is
+    /// not parsed again until new content for it arrives through `process_file`.
+    parse_errors: RwLock<HashMap<PathBuf, String>>,
 }
 
 impl AccurateAnalyzer {
@@ -172,6 +177,8 @@ impl AccurateAnalyzer {
             fs_root,
             walker,
             flows: FlowCache::default(),
+            callers: CallerIndexSlot::default(),
+            parse_errors: RwLock::new(HashMap::new()),
         }
     }
 
@@ -299,13 +306,33 @@ impl AccurateAnalyzer {
             return Ok(());
         }
 
+        // Known not to parse: say so again without re-reading it.
+        if let Some(message) = self.parse_errors.read().get(&canonical) {
+            return Err(JsSemanticError::ParseError {
+                path: canonical,
+                message: message.clone(),
+            }
+            .into());
+        }
+
         // Mark as in progress
         self.indexing_in_progress.write().insert(canonical.clone());
 
         // Read and parse the file using the virtual filesystem
         let content = self.read_file(&canonical)?;
 
-        let file_symbols = parse_and_analyze(&canonical, &content)?;
+        let file_symbols = match parse_and_analyze(&canonical, &content) {
+            Ok(symbols) => symbols,
+            Err(error) => {
+                if let JsSemanticError::ParseError { message, .. } = &error {
+                    self.parse_errors
+                        .write()
+                        .insert(canonical.clone(), message.clone());
+                }
+                self.indexing_in_progress.write().remove(&canonical);
+                return Err(error.into());
+            }
+        };
 
         // Index imported files
         for import in &file_symbols.imports {
@@ -393,6 +420,7 @@ impl AccurateAnalyzer {
         }
 
         let file_symbols = parse_and_analyze(file_path, content)?;
+        self.parse_errors.write().remove(&canonical);
         self.cache
             .insert(canonical.clone(), file_symbols, content.to_string());
         self.indexed_files.write().insert(canonical);
@@ -921,6 +949,8 @@ impl AccurateAnalyzer {
         self.indexed_files.write().clear();
         self.indexing_in_progress.write().clear();
         self.flows.clear();
+        self.callers.clear();
+        self.parse_errors.write().clear();
     }
 
     /// Gets the type of a symbol at the given byte range.
@@ -1009,6 +1039,36 @@ impl FlowHost for AccurateAnalyzer {
     fn workspace_files(&self) -> Vec<PathBuf> {
         let _ = self.index_workspace_files();
         self.cache.files()
+    }
+
+    fn import_parse_error(&self, from: &Path, specifier: &str) -> Option<UnparsedFile> {
+        let module = self.resolve_module(specifier, from).ok()?;
+        let path = self.canonical(&module);
+        let _ = self.ensure_indexed(&path);
+        let message = self.parse_errors.read().get(&path)?.clone();
+        Some(UnparsedFile {
+            file_path: path,
+            message,
+        })
+    }
+
+    fn parse_failures(&self) -> Vec<UnparsedFile> {
+        let mut failures: Vec<UnparsedFile> = self
+            .parse_errors
+            .read()
+            .iter()
+            .map(|(path, message)| UnparsedFile {
+                file_path: path.clone(),
+                message: message.clone(),
+            })
+            .collect();
+        failures.sort_by(|a, b| a.file_path.cmp(&b.file_path));
+        failures
+    }
+
+    /// Callers answers are a snapshot: the table of every call is built once.
+    fn caller_index(&self) -> Option<&CallerIndexSlot> {
+        Some(&self.callers)
     }
 }
 
@@ -1840,5 +1900,119 @@ console.log(x);
             "{:?}",
             def.location.file_path
         );
+    }
+
+    fn entry_names(result: &CallGraphResult) -> Vec<String> {
+        result
+            .files
+            .iter()
+            .flat_map(|file| file.entries.iter().filter_map(|e| e.name.clone()))
+            .collect()
+    }
+
+    fn range_of(source: &str, needle: &str) -> ByteRange {
+        let start = source.find(needle).unwrap() as u32;
+        ByteRange::new(start, start + needle.len() as u32)
+    }
+
+    #[test]
+    fn callers_stay_a_snapshot_after_an_edit() {
+        let dir = TempDir::new().unwrap();
+        let lib = dir.path().join("lib.js");
+        let lib_src = "export function target() {}\n";
+        fs::write(&lib, lib_src).unwrap();
+        let a = dir.path().join("a.js");
+        fs::write(
+            &a,
+            "import { target } from './lib.js';\nexport function first() { target(); }\n",
+        )
+        .unwrap();
+        let analyzer = AccurateAnalyzer::new(dir.path().to_path_buf());
+        let options = CallGraphOptions {
+            direction: language_core::CallGraphDirection::Callers,
+            ..Default::default()
+        };
+        let target = range_of(lib_src, "target");
+
+        let before = analyzer.call_graph(&lib, lib_src, target, options).unwrap();
+        assert_eq!(entry_names(&before), ["first"]);
+
+        // a.js is rewritten during the run: the call moves to a new function.
+        let edited = "import { target } from './lib.js';\nexport function second() { target(); }\n";
+        fs::write(&a, edited).unwrap();
+        analyzer.process_file(&a, edited).unwrap();
+
+        // Cross-file: still the workspace as it was at the first callers query.
+        let after = analyzer.call_graph(&lib, lib_src, target, options).unwrap();
+        assert_eq!(entry_names(&after), ["first"]);
+
+        // File-local: the edited file's own answers use its new content.
+        let callees = analyzer
+            .call_graph(
+                &a,
+                edited,
+                range_of(edited, "second"),
+                CallGraphOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(entry_names(&callees), ["target"]);
+
+        // Clearing the cache drops the snapshot.
+        analyzer.clear();
+        let rebuilt = analyzer.call_graph(&lib, lib_src, target, options).unwrap();
+        assert_eq!(entry_names(&rebuilt), ["second"]);
+    }
+
+    #[test]
+    fn files_that_do_not_parse_are_reported() {
+        let dir = TempDir::new().unwrap();
+        let lib = dir.path().join("lib.js");
+        let broken = "export function target( {\n";
+        fs::write(&lib, broken).unwrap();
+        let a = dir.path().join("a.js");
+        let a_src = "import { target } from './lib.js';\nexport function run() { target(); }\n";
+        fs::write(&a, a_src).unwrap();
+        let analyzer = AccurateAnalyzer::new(dir.path().to_path_buf());
+
+        // Asking about the file itself is an error, not an empty answer.
+        let flow = analyzer.data_flow(
+            &lib,
+            broken,
+            range_of(broken, "target"),
+            FlowOptions::default(),
+        );
+        assert!(flow.is_err());
+
+        // Its callees: the call into it is unresolved, and the file is listed.
+        let callees = analyzer
+            .call_graph(
+                &a,
+                a_src,
+                range_of(a_src, "run"),
+                CallGraphOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(entry_names(&callees), ["target"]);
+        assert!(callees.files[0].entries.iter().all(|e| !e.resolved));
+        assert_eq!(callees.unparsed.len(), 1);
+        assert!(callees.unparsed[0].file_path.ends_with("lib.js"));
+        assert!(!callees.unparsed[0].message.is_empty());
+
+        // Callers walk the workspace, so they list it too.
+        let callers = analyzer
+            .call_graph(
+                &a,
+                a_src,
+                range_of(a_src, "run"),
+                CallGraphOptions {
+                    direction: language_core::CallGraphDirection::Callers,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(callers
+            .unparsed
+            .iter()
+            .any(|u| u.file_path.ends_with("lib.js")));
     }
 }

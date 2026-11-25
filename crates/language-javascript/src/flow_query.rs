@@ -8,8 +8,9 @@ use crate::dataflow::{CallFact, CalleeFact, FileFlow};
 use language_core::{
     ByteRange, CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
     CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
-    FlowResult, FlowStep, Mutation, MutationKind, MutationOptions, MutationsResult,
+    FlowResult, FlowStep, Mutation, MutationKind, MutationOptions, MutationsResult, UnparsedFile,
 };
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -35,6 +36,14 @@ pub(crate) trait FlowHost {
     ) -> Option<(PathBuf, ByteRange)>;
     /// Every file a "who calls this" query has to look at.
     fn workspace_files(&self) -> Vec<PathBuf>;
+    /// Why the module specifier (imported from the file from) could not be
+    /// parsed, when it resolves to a file that does not parse.
+    fn import_parse_error(&self, from: &Path, specifier: &str) -> Option<UnparsedFile>;
+    /// Workspace files that could not be parsed.
+    fn parse_failures(&self) -> Vec<UnparsedFile>;
+    /// Where the callers table is kept between queries. None rebuilds it on
+    /// every callers query.
+    fn caller_index(&self) -> Option<&CallerIndexSlot>;
 }
 
 pub(crate) fn data_flow(
@@ -592,20 +601,28 @@ impl Entries {
         true
     }
 
-    fn finish(self, host: &dyn FlowHost, truncated: bool) -> CallGraphResult {
+    /// The result, with each file's content from content (the content the
+    /// entries' ranges point into).
+    fn finish(
+        self,
+        content: impl Fn(&Path) -> Option<String>,
+        truncated: bool,
+        unparsed: Vec<UnparsedFile>,
+    ) -> CallGraphResult {
         CallGraphResult {
             files: self
                 .files
                 .into_iter()
                 .filter_map(|(file_path, entries)| {
                     Some(CallGraphFile {
-                        content: host.content(&file_path)?,
+                        content: content(&file_path)?,
                         file_path,
                         entries,
                     })
                 })
                 .collect(),
             truncated,
+            unparsed,
         }
     }
 }
@@ -636,6 +653,8 @@ fn callees(
     let mut truncated = false;
     let mut visited: HashSet<FunctionKey> = start.iter().cloned().collect();
     let mut reported: HashSet<FunctionKey> = HashSet::new();
+    let mut files_seen: HashSet<PathBuf> = HashSet::new();
+    let mut unparsed: Vec<UnparsedFile> = Vec::new();
     let mut queue: VecDeque<(FunctionKey, u32)> = start.into_iter().map(|key| (key, 0)).collect();
 
     'walk: while let Some(((path, function), depth)) = queue.pop_front() {
@@ -645,6 +664,19 @@ fn callees(
         let Some(flow) = host.flow(&path) else {
             continue;
         };
+        // An import that does not parse hides the callees in it.
+        if files_seen.insert(path.clone()) {
+            let mut modules: Vec<&String> = flow.imports.values().map(|i| &i.module).collect();
+            modules.sort();
+            modules.dedup();
+            for module in modules {
+                if let Some(failure) = host.import_parse_error(&path, module) {
+                    if !unparsed.iter().any(|u| u.file_path == failure.file_path) {
+                        unparsed.push(failure);
+                    }
+                }
+            }
+        }
         for call in flow.calls.iter().filter(|call| call.function == function) {
             let mut targets = call_targets(host, &path, &flow, call);
             if targets.is_empty() {
@@ -689,7 +721,102 @@ fn callees(
             }
         }
     }
-    entries.finish(host, truncated)
+    entries.finish(|file| host.content(file), truncated, unparsed)
+}
+
+/// Every call in the workspace, by the function it may call, with the facts
+/// and content it was built from. Kept between queries (see
+/// [CallerIndexSlot]), so callers answers are a snapshot of the workspace as
+/// it was when the first callers query ran.
+pub(crate) struct CallerIndex {
+    flows: HashMap<PathBuf, Arc<FileFlow>>,
+    contents: HashMap<PathBuf, String>,
+    calls_of: HashMap<FunctionKey, Vec<(PathBuf, u32, CallEdgeKind)>>,
+    unparsed: Vec<UnparsedFile>,
+}
+
+impl CallerIndex {
+    fn build(host: &dyn FlowHost) -> Self {
+        let mut index = CallerIndex {
+            flows: HashMap::new(),
+            contents: HashMap::new(),
+            calls_of: HashMap::new(),
+            unparsed: Vec::new(),
+        };
+        for file in host.workspace_files() {
+            let (Some(flow), Some(content)) = (host.flow(&file), host.content(&file)) else {
+                continue;
+            };
+            for (call_index, call) in flow.calls.iter().enumerate() {
+                let mut targets = call_targets(host, &file, &flow, call);
+                if targets.is_empty() {
+                    targets = callback_targets(host, &file, &flow, call);
+                }
+                for (target_path, target, via) in targets {
+                    index
+                        .calls_of
+                        .entry((target_path, Some(target)))
+                        .or_default()
+                        .push((file.clone(), call_index as u32, via));
+                }
+            }
+            index.flows.insert(file.clone(), flow);
+            index.contents.insert(file, content);
+        }
+        index.unparsed = host.parse_failures();
+        index
+    }
+
+    /// The snapshot's key for a function found in its file's current facts:
+    /// the same function when the file is unchanged, otherwise the one with
+    /// the same range and name, if the snapshot has one.
+    fn key_for(&self, host: &dyn FlowHost, key: &FunctionKey) -> Option<FunctionKey> {
+        let (path, Some(function)) = key else {
+            return Some(key.clone());
+        };
+        // A file the walk did not cover (outside the workspace root): its
+        // calls are keyed by the facts it had then, which are all there is.
+        let Some(snapshot) = self.flows.get(path) else {
+            return Some(key.clone());
+        };
+        let current = host.flow(path)?;
+        if Arc::ptr_eq(snapshot, &current) {
+            return Some(key.clone());
+        }
+        let fact = current.functions.get(*function as usize)?;
+        snapshot
+            .functions
+            .iter()
+            .position(|f| f.range == fact.range && f.name == fact.name)
+            .map(|index| (path.clone(), Some(index as u32)))
+    }
+}
+
+/// Holds the [CallerIndex] between queries.
+#[derive(Default)]
+pub(crate) struct CallerIndexSlot(RwLock<Option<Arc<CallerIndex>>>);
+
+impl CallerIndexSlot {
+    fn get_or_build(&self, host: &dyn FlowHost) -> Arc<CallerIndex> {
+        if let Some(index) = self.0.read().as_ref() {
+            return Arc::clone(index);
+        }
+        let index = Arc::new(CallerIndex::build(host));
+        *self.0.write() = Some(Arc::clone(&index));
+        index
+    }
+
+    pub(crate) fn clear(&self) {
+        *self.0.write() = None;
+    }
+}
+
+impl std::fmt::Debug for CallerIndexSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallerIndexSlot")
+            .field("built", &self.0.read().is_some())
+            .finish()
+    }
 }
 
 fn callers(
@@ -697,25 +824,14 @@ fn callers(
     start: Vec<FunctionKey>,
     options: CallGraphOptions,
 ) -> CallGraphResult {
-    // Every call in the workspace, by the function it may call.
-    let mut calls_of: HashMap<FunctionKey, Vec<(PathBuf, u32, CallEdgeKind)>> = HashMap::new();
-    for file in host.workspace_files() {
-        let Some(flow) = host.flow(&file) else {
-            continue;
-        };
-        for (index, call) in flow.calls.iter().enumerate() {
-            let mut targets = call_targets(host, &file, &flow, call);
-            if targets.is_empty() {
-                targets = callback_targets(host, &file, &flow, call);
-            }
-            for (target_path, target, via) in targets {
-                calls_of
-                    .entry((target_path, Some(target)))
-                    .or_default()
-                    .push((file.clone(), index as u32, via));
-            }
-        }
-    }
+    let index = match host.caller_index() {
+        Some(slot) => slot.get_or_build(host),
+        None => Arc::new(CallerIndex::build(host)),
+    };
+    let start: Vec<FunctionKey> = start
+        .iter()
+        .filter_map(|key| index.key_for(host, key))
+        .collect();
 
     let mut entries = Entries::default();
     let mut truncated = false;
@@ -727,11 +843,11 @@ fn callers(
         if options.max_depth.is_some_and(|max| depth >= max) {
             continue;
         }
-        for (file, call_index, via) in calls_of.get(&key).into_iter().flatten() {
+        for (file, call_index, via) in index.calls_of.get(&key).into_iter().flatten() {
             if !reported.insert((file.clone(), *call_index)) {
                 continue;
             }
-            let Some(flow) = host.flow(file) else {
+            let Some(flow) = index.flows.get(file) else {
                 continue;
             };
             let call = &flow.calls[*call_index as usize];
@@ -758,5 +874,9 @@ fn callers(
             }
         }
     }
-    entries.finish(host, truncated)
+    entries.finish(
+        |file| index.contents.get(file).cloned(),
+        truncated,
+        index.unparsed.clone(),
+    )
 }

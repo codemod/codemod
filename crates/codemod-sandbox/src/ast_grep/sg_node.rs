@@ -1442,6 +1442,7 @@ impl<'js> SgNodeRjs<'js> {
                 object.set("boundary", step.boundary)?;
                 result.set(index, object)?;
             }
+            result.as_object().set("truncated", flow.truncated)?;
             result.into_js(&ctx)
         }
     }
@@ -1545,6 +1546,15 @@ impl<'js> SgNodeRjs<'js> {
                 }
                 result.set(index, object)?;
             }
+            result.as_object().set("truncated", graph.truncated)?;
+            let unparsed = rquickjs::Array::new(ctx.clone())?;
+            for (index, file) in graph.unparsed.iter().enumerate() {
+                let object = rquickjs::Object::new(ctx.clone())?;
+                object.set("path", file.file_path.to_string_lossy().to_string())?;
+                object.set("message", file.message.clone())?;
+                unparsed.set(index, object)?;
+            }
+            result.as_object().set("unparsed", unparsed)?;
             result.into_js(&ctx)
         }
     }

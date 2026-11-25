@@ -3,12 +3,12 @@
 use crate::cache::SymbolCache;
 use crate::dataflow::{FileFlow, FlowCache};
 use crate::error::JsSemanticError;
-use crate::flow_query::{self, FlowHost};
+use crate::flow_query::{self, CallerIndexSlot, FlowHost};
 use crate::oxc_adapter::{find_symbol_at_range, parse_and_analyze};
 use language_core::{
     ByteRange, CallGraphOptions, CallGraphResult, DefinitionKind, DefinitionOptions,
     DefinitionResult, FileReferences, FlowOptions, FlowResult, MutationOptions, MutationsResult,
-    ReferencesResult, SemanticResult, SymbolLocation,
+    ReferencesResult, SemanticResult, SymbolLocation, UnparsedFile,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -390,6 +390,20 @@ impl FlowHost for LightweightAnalyzer {
 
     fn workspace_files(&self) -> Vec<PathBuf> {
         self.cache.files()
+    }
+
+    fn import_parse_error(&self, _: &Path, _: &str) -> Option<UnparsedFile> {
+        None
+    }
+
+    fn parse_failures(&self) -> Vec<UnparsedFile> {
+        Vec::new()
+    }
+
+    /// File scope sees only the files it was given so far, so the callers
+    /// table is rebuilt on each query rather than frozen at the first one.
+    fn caller_index(&self) -> Option<&CallerIndexSlot> {
+        None
     }
 }
 

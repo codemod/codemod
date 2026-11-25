@@ -110,7 +110,7 @@ declare module "codemod:ast-grep" {
      * const fromRequest = arg.flowsFrom().some((s) => s.kind === "parameter" && s.name === "req");
      * ```
      */
-    flowsFrom(options?: FlowOptions): Array<FlowStep<M>>;
+    flowsFrom(options?: FlowOptions): FlowSteps<M>;
 
     /**
      * Follow this node's value forward: the variables, calls, returns,
@@ -129,7 +129,7 @@ declare module "codemod:ast-grep" {
      *   .map((step) => step.node);
      * ```
      */
-    flowsTo(options?: FlowOptions): Array<FlowStep<M>>;
+    flowsTo(options?: FlowOptions): FlowSteps<M>;
 
     /**
      * Functions called from the function at this node (a function, its name,
@@ -142,16 +142,22 @@ declare module "codemod:ast-grep" {
      *
      * @experimental
      */
-    callees(options?: CallGraphOptions): Array<CallGraphEntry<M>>;
+    callees(options?: CallGraphOptions): CallGraphEntries<M>;
 
     /**
      * Functions that call the function at this node. `node` is the calling
      * function, or the call itself when it is made from top-level code.
      * Needs workspace scope to see callers in other files.
      *
+     * In workspace scope the answer comes from a table of every call in the
+     * workspace, built on the first `callers()` query of the run. It is a
+     * snapshot: files edited after that keep their old calls in it. Answers
+     * about the node's own file (`flowsFrom`, `flowsTo`, `mutations`) always
+     * use its current content.
+     *
      * @experimental
      */
-    callers(options?: CallGraphOptions): Array<CallGraphEntry<M>>;
+    callers(options?: CallGraphOptions): CallGraphEntries<M>;
 
     /**
      * Places that change the variable at this node, or the object it holds:
@@ -593,6 +599,15 @@ declare module "codemod:ast-grep" {
     boundary: boolean;
   }
 
+  /**
+   * Steps of a data-flow query. `truncated` is true when a result limit was
+   * hit and steps are missing (not set on the Node.js host, which has no
+   * semantic provider yet).
+   */
+  export type FlowSteps<M extends TypesMap = TypesMap> = Array<FlowStep<M>> & {
+    truncated?: boolean;
+  };
+
   export interface CallGraphOptions {
     /** Follow calls of calls. @default false */
     transitive?: boolean;
@@ -621,6 +636,27 @@ declare module "codemod:ast-grep" {
     /** The call that made this edge. */
     callSite: { node: SgNode<M>; root: SgRoot<M> } | null;
   }
+
+  /** A file the analysis could not parse. */
+  export interface UnparsedFile {
+    path: string;
+    /** The parser's message. */
+    message: string;
+  }
+
+  /**
+   * Entries of a call-graph query.
+   * - `truncated`: a result limit was hit and entries are missing
+   * - `unparsed`: files the walk needed but could not parse, so calls into
+   *   or out of them are missing: imports of the visited functions'
+   *   files (`callees`), or workspace files (`callers`)
+   *
+   * Neither is set on the Node.js host, which has no semantic provider yet.
+   */
+  export type CallGraphEntries<M extends TypesMap = TypesMap> = Array<CallGraphEntry<M>> & {
+    truncated?: boolean;
+    unparsed?: UnparsedFile[];
+  };
 
   export interface MutationOptions<M extends TypesMap = TypesMap> {
     /** Only mutations that can run after this node (same file). */

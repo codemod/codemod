@@ -50,6 +50,8 @@ export default function transform(root) {
     ],
     "transitive callees",
   );
+  // Nothing was cut off, and every file the walk needed parsed.
+  expectEqual([all.truncated, all.unparsed], [false, []], "transitive callees complete");
 
   // createUser is imported through the services/index.js barrel; the entry
   // points at the arrow function in users.js, and at the call that reaches it.
@@ -70,6 +72,7 @@ export default function transform(root) {
     ["createUser:2", "handler:3", "handler:2", "query:1", "save:1"].sort(),
     "transitive callers of connect",
   );
+  expectEqual([callers.truncated, callers.unparsed], [false, []], "callers complete");
 
   return null;
 }
