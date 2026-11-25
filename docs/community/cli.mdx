@@ -660,7 +660,7 @@ npx codemod workflow status -i <ID> --format json
 </ResponseField>
 
 <ResponseField name="--format <text|json>" type="string">
-  `json` prints the run as one JSON object: `id`, `name`, `workflow`, `target`, `params`, `status`, `startedAt`, `endedAt`, `durationMs`, `awaiting` and `question` (what the approval it waits for asks, and its id), `error`, `output` (what the workflow returned or gave `fail()`), `exitCode` (from `fail()`, else `null`), `failedFiles`, and `steps`, each with `position`, `label`, `kind`, `status`, `error`, `result`, `finishedAt`, `durationMs`, `attempts` and `files`.
+  `json` prints the run as one JSON object: `id`, `name`, `workflow`, `target`, `params`, `status`, `startedAt`, `endedAt`, `durationMs`, `awaiting` and `question` (what the approval it waits for asks, and its id), `error`, `output` (what the workflow returned or gave `fail()`), `exitCode` (from `fail()`, else `null`), `failedFiles`, and `steps`, each with `position`, `label`, `kind`, `status`, `error`, `result`, `finishedAt`, `durationMs`, `attempts` (how many times it ran, `1` unless it was retried) and `files` (`{ failed, total }` for a step that works on files: `forEachFile`, `astGrep`, a nested `codemod`; `null` for other steps).
 </ResponseField>
 
 **`workflow list`**
@@ -676,7 +676,7 @@ npx codemod workflow list [-l <LIMIT>] [--format json]
 </ResponseField>
 
 <ResponseField name="--format <text|json>" type="string">
-  `json` prints an array of runs, most recent first, each as `workflow status --format json` shows it without `steps` and `failedFiles`.
+  `json` prints an array of runs, most recent first, each as `workflow status --format json` shows it without `steps`.
 </ResponseField>
 
 **`workflow cancel`**

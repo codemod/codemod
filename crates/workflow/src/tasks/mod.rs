@@ -135,7 +135,7 @@ pub(crate) struct TaskOutcome {
     /// step is then recorded as partial.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partial: Option<String>,
-    /// With `partial`: how many files failed, of how many.
+    /// For a task that works on files: how many failed, of how many.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<FileCount>,
 }
@@ -149,11 +149,12 @@ impl TaskOutcome {
         }
     }
 
-    /// Mark the outcome partial when some of the `total` files failed.
+    /// Count the task's files, and mark the outcome partial when some of the
+    /// `total` files failed.
     pub fn with_failures(mut self, failed: usize, total: usize) -> Self {
+        self.files = Some(FileCount { failed, total });
         if failed > 0 {
             self.partial = Some(failed_files(failed, total));
-            self.files = Some(FileCount { failed, total });
         }
         self
     }

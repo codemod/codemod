@@ -48,7 +48,7 @@ export interface StepRecord {
   since?: number | null;
   /** How many times the step ran, when retries made that more than once. */
   attempts?: number | null;
-  /** For a partial step: how many of its files failed, of how many. */
+  /** For a step that works on files: how many of its files failed, of how many. */
   files?: FileCount | null;
 }
 
@@ -1158,7 +1158,12 @@ export function createRuntime(host: Host) {
         ...(outcome.files && { files: outcome.files }),
       });
     } else {
-      record({ status: "succeeded", result, finishedAt });
+      record({
+        status: "succeeded",
+        result,
+        finishedAt,
+        ...(outcome.files && { files: outcome.files }),
+      });
     }
     settleClock({ finishedAt });
     return result;

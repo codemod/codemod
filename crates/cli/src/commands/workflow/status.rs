@@ -26,11 +26,14 @@ pub struct Command {
     format: ListFormat,
 }
 
-/// A run as `--format json` prints it. `steps` is left out when `None`.
+/// A run as `--format json` prints it, counting the files that failed in
+/// `steps`; the steps themselves only `with_steps` (`workflow list` leaves
+/// them out).
 pub(crate) fn run_json(
     store: &dyn butterflow_state::run_store::RunStore,
     run: &RunRecord,
-    steps: Option<&[StepRecord]>,
+    steps: &[StepRecord],
+    with_steps: bool,
 ) -> Value {
     let mut value = json!({
         "id": run.id,
@@ -48,12 +51,12 @@ pub(crate) fn run_json(
         "output": run.output,
         "exitCode": run.exit_code,
     });
-    if let Some(steps) = steps {
-        value["failedFiles"] = steps
-            .iter()
-            .map(StepRecord::failed_files)
-            .sum::<usize>()
-            .into();
+    value["failedFiles"] = steps
+        .iter()
+        .map(StepRecord::failed_files)
+        .sum::<usize>()
+        .into();
+    if with_steps {
         value["steps"] = steps
             .iter()
             .map(|step| {
@@ -66,7 +69,10 @@ pub(crate) fn run_json(
                     "result": step.result,
                     "finishedAt": step.finished_at.and_then(chrono::DateTime::from_timestamp_millis).map(|at| at.to_rfc3339()),
                     "durationMs": step.duration_ms,
-                    "attempts": step.attempts,
+                    // Recorded only past 1, when the step was retried.
+                    "attempts": step.attempts.unwrap_or(1),
+                    // Steps that work on files; for steps recorded before
+                    // alpha.9, only partial ones.
                     "files": step.files,
                 })
             })
@@ -95,7 +101,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         .ok_or_else(|| anyhow!("run '{}' not found", args.id))?;
     let steps = store.load_steps(&args.id)?;
     if args.format == ListFormat::Json {
-        println!("{}", run_json(store.as_ref(), &run, Some(&steps)));
+        println!("{}", run_json(store.as_ref(), &run, &steps, true));
         return Ok(());
     }
 
@@ -166,5 +172,76 @@ fn humantime(duration: chrono::TimeDelta) -> String {
         format!("{seconds:.1}s")
     } else {
         format!("{}m {}s", (seconds / 60.0) as u64, (seconds % 60.0) as u64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use butterflow_state::run_store::{
+        FileCount, MemoryStore, RunSettings, RunStatus, RunStore, StepStatus,
+    };
+
+    fn step(position: u64, attempts: Option<u32>, files: Option<FileCount>) -> StepRecord {
+        StepRecord {
+            position,
+            label: format!("step {position}"),
+            key: r#"[null,{"kind":"forEachFile"}]"#.into(),
+            status: StepStatus::Succeeded,
+            result: None,
+            error: None,
+            finished_at: None,
+            seq: None,
+            given: false,
+            since: None,
+            attempts,
+            files,
+            duration_ms: None,
+        }
+    }
+
+    #[test]
+    fn steps_show_their_attempts_and_files() {
+        let store = MemoryStore::default();
+        let run = RunRecord {
+            id: "a".into(),
+            name: None,
+            workflow_path: "workflow.ts".into(),
+            target: ".".into(),
+            params: Value::Null,
+            status: RunStatus::Succeeded,
+            started_at: chrono::Utc::now(),
+            ended_at: None,
+            awaiting: None,
+            question: None,
+            error: None,
+            output: None,
+            exit_code: None,
+            settings: RunSettings::default(),
+        };
+        store.put_run(&run).unwrap();
+        let steps = [
+            step(
+                0,
+                None,
+                Some(FileCount {
+                    failed: 0,
+                    total: 3,
+                }),
+            ),
+            step(1, Some(3), None),
+        ];
+        let shown = run_json(&store, &run, &steps, true);
+        assert_eq!(shown["steps"][0]["attempts"], 1);
+        assert_eq!(
+            shown["steps"][0]["files"],
+            json!({ "failed": 0, "total": 3 })
+        );
+        assert_eq!(shown["steps"][0]["kind"], "forEachFile");
+        assert_eq!(shown["steps"][1]["attempts"], 3);
+        assert_eq!(shown["steps"][1]["files"], Value::Null);
+        let listed = run_json(&store, &run, &steps, false);
+        assert_eq!(listed["failedFiles"], 0);
+        assert!(listed.get("steps").is_none());
     }
 }

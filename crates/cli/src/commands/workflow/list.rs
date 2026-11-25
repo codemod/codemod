@@ -35,7 +35,10 @@ pub async fn handler(args: &Command) -> Result<()> {
     if args.format == ListFormat::Json {
         let runs: Vec<serde_json::Value> = runs
             .iter()
-            .map(|run| run_json(store.as_ref(), run, None))
+            .map(|run| {
+                let steps = store.load_steps(&run.id).unwrap_or_default();
+                run_json(store.as_ref(), run, &steps, false)
+            })
             .collect();
         println!("{}", serde_json::Value::from(runs));
         return Ok(());

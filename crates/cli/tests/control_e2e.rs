@@ -680,6 +680,51 @@ export default async function main({ params }: WorkflowContext<Params>) {
 }
 
 #[test]
+fn list_json_counts_failed_files_and_status_json_counts_files_and_attempts() {
+    let fixture = Fixture::new(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import replace from "./scripts/replace.ts";
+export default async function main() {
+  await step("Replace", forEachFile("src/**/*.ts", replace));
+  await step("Picky", forEachFile("src/**/*.ts", (file) => {
+    if (file.path.endsWith("b.ts")) throw new Error("no");
+  }));
+  await step("Count", () => 1);
+}
+"#,
+    );
+    write(fixture.target.path(), "src/c.ts", "const c = 3;\n");
+    let output = fixture.run(&["--format", "jsonl"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let id = run_id(&events(&output));
+
+    let list = fixture.codemod(&["workflow", "list", "--format", "json"]);
+    assert!(list.status.success(), "{}", text(&list));
+    let list: Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(list[0]["id"], id.as_str());
+    assert_eq!(list[0]["failedFiles"], 1, "{list}");
+    assert!(list[0].get("steps").is_none(), "{list}");
+
+    let status = fixture.status(&id);
+    let steps = status["steps"].as_array().unwrap();
+    assert_eq!(
+        steps[0]["files"],
+        json!({ "failed": 0, "total": 3 }),
+        "{status}"
+    );
+    assert_eq!(steps[0]["attempts"], 1, "{status}");
+    assert_eq!(
+        steps[1]["files"],
+        json!({ "failed": 1, "total": 3 }),
+        "{status}"
+    );
+    // A step that is not about files has none.
+    assert_eq!(steps[2]["files"], Value::Null, "{status}");
+    assert_eq!(steps[2]["attempts"], 1, "{status}");
+}
+
+#[test]
 fn control_needs_jsonl() {
     let fixture = Fixture::new(TWO_APPROVALS);
     let output = fixture.run(&["--control", "stdio"]);

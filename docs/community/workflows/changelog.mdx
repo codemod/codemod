@@ -53,6 +53,7 @@ Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://
 
 - `workflow send <EVENT>` to a run waiting for an approval said it sent the event and did nothing; it now fails and names the `workflow resume --approve` command.
 - A canceled run could be resumed to success.
+- `workflow list --format json` left out `failedFiles`; `workflow status --format json` showed `attempts` and `files` as `null` for most steps. `attempts` is now always the count, and `files` is set for every step that works on files.
 - A `--dry-run` that reaches `approval()` without `--approve` exited `0` with no hint. It now exits `1` and says to pass `--approve`; with `--control stdio` it waits like a real run.
 </Update>
 

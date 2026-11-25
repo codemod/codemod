@@ -312,7 +312,8 @@ pub struct StepRecord {
     /// How many times the step ran, when its `retries` made that more than once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempts: Option<u32>,
-    /// For a partial step: how many of its files failed, of how many.
+    /// For a step that works on files (`forEachFile`, `astGrep`, a nested
+    /// `codemod`): how many of its files failed, of how many.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<FileCount>,
     /// How long the step's last run took, in milliseconds.

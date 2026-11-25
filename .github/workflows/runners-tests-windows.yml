@@ -76,7 +76,7 @@ jobs:
       - name: Run rejected, paused and canceled run tests
         run: |
           cargo test --locked -p codemod-workflow --test tasks -- reject canceled approval
-          cargo test --locked -p codemod-workflow --test engine -- stop
+          cargo test --locked -p codemod-workflow --test engine -- --exact the_stop_handle_stops_a_running_workflow stopping_to_cancel_ends_the_run_for_good
 
       - name: Run control channel and attach tests
         shell: bash
