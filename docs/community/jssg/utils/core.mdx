@@ -1,0 +1,65 @@
+---
+title: "Any language"
+description: "Find the function, class, statement or loop around a node, and plan edits in one workflow step to apply in another, with @jssg/utils."
+---
+
+These helpers work on JavaScript, TypeScript, TSX and Python trees.
+
+```typescript
+import { enclosingFunction, enclosingClass, enclosingStatement, enclosingLoop } from "@jssg/utils/core/nodes";
+import { planEdit, planInsert, groupByFile, applyEdits } from "@jssg/utils/core/edits";
+```
+
+## `enclosingFunction`
+
+The function a node is in: a declaration, function expression, arrow function or method (JS/TS), or a `def` / `lambda` (Python). `null` at module level.
+
+```typescript
+const fn = enclosingFunction(call);
+const ownUses = name.references().flatMap((f) => f.nodes).filter((n) => fn?.contains(n));
+```
+
+## `enclosingClass`
+
+The class a node is in (a `class` declaration or expression, or a Python `class`), or `null`.
+
+## `enclosingStatement`
+
+The statement a node is part of: the node or its nearest ancestor that sits directly in a block, a module or a class body. For a name in `export const a = f()`, the `export` statement.
+
+## `enclosingLoop`
+
+The innermost loop a node runs in, with its parts: `{ node, kind, item, iterable, body }`. `kind` is `"for-of"`, `"for-in"`, `"for"`, `"while"`, `"do"`, `"callback"` (`items.map(…)`, `forEach`, `filter`, `reduce`, …; `item` is the element parameter) or `"comprehension"` (Python). A Python `for` is `"for-of"`. It stops at a function that is not an iterating callback (a function declared in a loop does not run once per element), and a node in a loop's condition or iterable is not in the loop.
+
+```typescript
+// N+1: a query made once per element
+const loop = enclosingLoop(call);
+if (loop?.item && arg.dependsOn(loop.item)) report(call, loop.iterable);
+```
+
+## `planEdit`
+
+An edit replacing a node, as plain JSON: `{ path, start, end, text }`. `path` is the node's file relative to the target, as `file.path` names it in a `forEachFile` callback; `start`/`end` are the byte offsets `node.range()` uses. Return it from one step and apply it in another.
+
+## `planInsert`
+
+An edit inserting text `"before"` (default) or `"after"` a node.
+
+## `groupByFile`
+
+Edits grouped by `path`, in order of first appearance: a `Map<path, edits>`.
+
+## `applyEdits`
+
+Apply edits to a file's text (`file.text`). Byte offsets are converted to string indexes, so non-ASCII text before an edit does not shift it. With `{ path }`, edits for other files are ignored. Overlapping edits: the one that starts first (and is longer) wins, or `{ overlap: "error" }` throws. An insertion and a replacement at the same start both apply.
+
+```typescript
+const plan = await step("Plan", forEachFile({ include: "src/**/*.ts" }, (file) => {
+  const root = parse(file);
+  return root.root().findAll({ rule: { pattern: "fetchAll($A)" } }).map((call) => planEdit(call, `await ${call.text()}`));
+}));
+const edits = plan.outputs.flat();
+await step("Apply", forEachFile({ include: [...groupByFile(edits).keys()] }, (file) => {
+  file.write(applyEdits(file.text, edits, { path: file.path }));
+}));
+```

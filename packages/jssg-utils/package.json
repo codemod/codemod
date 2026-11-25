@@ -7,6 +7,10 @@
   "author": "Mohebifar <mo@codemod.com>",
   "license": "Apache-2.0",
   "exports": {
+    "./core/*": {
+      "types": "./src/core/exports/*.ts",
+      "default": "./src/core/exports/*.ts"
+    },
     "./java/*": {
       "types": "./src/java/exports/*.ts",
       "default": "./src/java/exports/*.ts"
@@ -21,7 +25,7 @@
     }
   },
   "scripts": {
-    "test": "pnpx codemod jssg exec ./tests/imports.test.ts && pnpx codemod jssg exec ./tests/style.test.ts && pnpx codemod jssg exec ./tests/bindings-safe.test.ts && pnpx codemod jssg exec ./tests/java.test.ts && pnpx codemod jssg exec ./tests/xml.test.ts && pnpx codemod jssg test -l tsx ./tests/bindings/transform.ts ./tests/bindings/file && pnpx codemod jssg test -l tsx ./tests/bindings/transform.ts ./tests/bindings/workspace --semantic-workspace && pnpx codemod jssg exec ./tests/imports-ts.test.ts && pnpx codemod jssg exec ./tests/modules.test.ts && pnpx codemod jssg exec ./tests/typecheck.test.ts && pnpx codemod jssg test -l tsx ./tests/modules/transform.ts ./tests/modules/workspace --semantic-workspace",
+    "test": "pnpx codemod jssg exec ./tests/imports.test.ts && pnpx codemod jssg exec ./tests/style.test.ts && pnpx codemod jssg exec ./tests/bindings-safe.test.ts && pnpx codemod jssg exec ./tests/java.test.ts && pnpx codemod jssg exec ./tests/xml.test.ts && pnpx codemod jssg test -l tsx ./tests/bindings/transform.ts ./tests/bindings/file && pnpx codemod jssg test -l tsx ./tests/bindings/transform.ts ./tests/bindings/workspace --semantic-workspace && pnpx codemod jssg exec ./tests/imports-ts.test.ts && pnpx codemod jssg exec ./tests/modules.test.ts && pnpx codemod jssg exec ./tests/typecheck.test.ts && pnpx codemod jssg exec ./tests/core.test.ts && pnpx codemod jssg test -l tsx ./tests/modules/transform.ts ./tests/modules/workspace --semantic-workspace",
     "check-types": "npx tsc --noEmit",
     "typecheck": "tsc --noEmit"
   },

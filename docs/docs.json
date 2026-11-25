@@ -65,6 +65,7 @@
                     "group": "Utilities",
                     "root": "community/jssg/utils",
                     "pages": [
+                      "community/jssg/utils/core",
                       "community/jssg/utils/javascript",
                       "community/jssg/utils/java",
                       "community/jssg/utils/xml"
