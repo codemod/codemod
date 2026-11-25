@@ -32,9 +32,16 @@ declare module "codemod:deps" {
     readonly detectedFrom: "packageManager" | "lockfile" | "pnpm-workspace.yaml" | "default";
   }
 
-  /** One of the repository's own packages, read from its package.json. */
+  /**
+   * One of the repository's own packages, read from its package.json, or a
+   * Python manifest (`ecosystem: "pypi"`): a pyproject.toml (PEP 621,
+   * dependency groups, uv, Poetry) or a requirements*.txt. Python names match
+   * normalized ("Django" is "django"); bump/add take PEP 440 specifiers, and
+   * "^x.y" / "~x.y" / a bare version are turned into one in PEP 508 strings
+   * (Poetry tables keep them as given).
+   */
   export interface Package {
-    readonly ecosystem: "npm";
+    readonly ecosystem: "npm" | "pypi";
     /** `name` from package.json; null when it has none. */
     readonly name: string | null;
     readonly version: string | null;
@@ -64,7 +71,7 @@ declare module "codemod:deps" {
     toJSON(): string;
   }
 
-  export type Protocol = "registry" | "catalog" | "workspace" | "alias" | "other";
+  export type Protocol = "registry" | "catalog" | "workspace" | "alias" | "other" | "pypi";
 
   /** One dependency as a package.json declares it. */
   export interface Declaration {
@@ -87,6 +94,8 @@ declare module "codemod:deps" {
     readonly local: Package | null;
     /** Whether `resolved` is a range `semver` can read (not git, file, a url, or a tag such as "latest"). */
     readonly readable: boolean;
+    /** Python: the optional-dependency, dependency or Poetry group; null otherwise. */
+    readonly group: string | null;
     /** Whether `resolved` accepts `version`: true, false, or null when it cannot tell. */
     accepts(version: string): boolean | null;
     /** The lowest version `resolved` accepts ("^18.2.0" gives "18.2.0"); null when unreadable. */
