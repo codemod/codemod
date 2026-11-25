@@ -28,7 +28,14 @@ export async function examples(): Promise<void> {
     capabilities: ["fs"],
     approve: false,
   });
-  const status: "succeeded" | "failed" | "canceled" | "awaiting-approval" | "stopped" = run.status;
+  const status:
+    | "succeeded"
+    | "failed"
+    | "canceled"
+    | "paused"
+    | "rejected"
+    | "awaiting-approval"
+    | "stopped" = run.status;
   const deleted: string | null | undefined = run.changes["src/a.ts"];
   const given: boolean = run.step("Find moment imports").given;
   assertTree(run.files, { "src/a.ts": "" });

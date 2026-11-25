@@ -50,7 +50,14 @@ export type EngineEvent = { readonly event: string } & Record<string, unknown>;
 /** What `Run.finish` returns: `RunReport::to_json`, with stats. */
 export interface NativeReport {
   runId: string;
-  status: "succeeded" | "failed" | "canceled" | "awaiting-approval" | "stopped";
+  status:
+    | "succeeded"
+    | "failed"
+    | "canceled"
+    | "paused"
+    | "rejected"
+    | "awaiting-approval"
+    | "stopped";
   output: Json;
   error: string | null;
   awaiting: string | null;

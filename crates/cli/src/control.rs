@@ -562,3 +562,336 @@ mod tests {
         );
     }
 }
+
+/// Writes `npm/type-tests/protocol-samples.ts`: one of every event, a
+/// `hello` and every command, as the CLI prints and reads them. The npm
+/// package's type tests check them against `codemod/protocol`, so the
+/// TypeScript declarations cannot drift from these types unnoticed.
+#[cfg(test)]
+mod protocol_samples {
+    use std::sync::{Arc, Mutex};
+
+    use butterflow_state::run_store::{MemoryStore, RunStore};
+    use codemod_workflow::events::{
+        ClosedBy, Event, EventSink, Omitted, PartialStep, QuestionKind, Settings, StepAt,
+        StepResult,
+    };
+    use codemod_workflow::interaction::{AgentChoice, Approval};
+    use codemod_workflow::{RunStatus, StepStatus};
+    use serde_json::{json, Value};
+
+    use super::{Command, Hello, HelloSettings, COMMANDS, PROTOCOL};
+    use crate::journal::{Recorder, Stamped};
+
+    const FILE: &str = "npm/type-tests/protocol-samples.ts";
+
+    #[derive(Default)]
+    struct Kept(Mutex<Vec<Value>>);
+
+    impl Stamped for Kept {
+        fn emit(&self, _event: Event, record: &Value) {
+            let mut record = record.clone();
+            record["ts"] = json!("2026-01-01T00:00:00+00:00");
+            self.0.lock().unwrap().push(record);
+        }
+    }
+
+    fn nested(position: u64) -> StepAt {
+        StepAt {
+            position,
+            step: format!("2/{position}"),
+            parent: Some("2".into()),
+        }
+    }
+
+    /// One of every event. The match below names every variant: a new one
+    /// does not compile until it has a sample here, and a declaration in
+    /// `protocol.d.ts`.
+    fn every_event() -> Vec<Event> {
+        let events = vec![
+            Event::RunStarted {
+                run_id: "8c7000b1".into(),
+                workflow: "/work/codemod/workflow.ts".into(),
+                resumed: false,
+                target: "/work/app".into(),
+                params: json!({ "level": 2 }),
+                dry_run: false,
+                settings: Settings {
+                    capabilities: vec!["fs".into()],
+                    managed_git: false,
+                    agent: Some("claude-code".into()),
+                    host: Some("quickjs".into()),
+                },
+            },
+            Event::StepStarted {
+                at: StepAt::top(0),
+                label: "Replace".into(),
+                kind: Some("forEachFile".into()),
+            },
+            Event::StepReplayed {
+                at: StepAt::top(1),
+                label: "Find".into(),
+                kind: None,
+            },
+            Event::StepProgress {
+                at: StepAt::top(0),
+                processed: 1,
+                total: 2,
+            },
+            Event::StepLog {
+                at: nested(0),
+                line: "src/a.ts".into(),
+            },
+            Event::RunLog {
+                line: "from the body".into(),
+                step: None,
+            },
+            Event::StepAgent {
+                at: StepAt::top(3),
+                agent: "codex".into(),
+                activity: codemod_agents::AgentEvent::Text {
+                    text: "Done.".into(),
+                    delta: false,
+                },
+            },
+            Event::StepRetrying {
+                at: StepAt::top(0),
+                label: "Replace".into(),
+                attempt: 1,
+                attempts: 3,
+                error: "boom".into(),
+            },
+            Event::StepDiff {
+                at: StepAt::top(0),
+                path: "src/a.ts".into(),
+                diff: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-var a = 1;\n+let a = 1;\n"
+                    .into(),
+                additions: 1,
+                deletions: 1,
+                diff_omitted: None,
+            },
+            Event::StepDiff {
+                at: StepAt::top(0),
+                path: "big.json".into(),
+                diff: String::new(),
+                additions: 9000,
+                deletions: 0,
+                diff_omitted: Some(Omitted {
+                    bytes: 300_000,
+                    limit: codemod_workflow::events::STEP_DIFF_LIMIT,
+                }),
+            },
+            Event::StepFinished {
+                at: StepAt::top(0),
+                label: "Replace".into(),
+                kind: Some("forEachFile".into()),
+                status: StepStatus::Partial,
+                error: Some("1 of 2 files failed".into()),
+                duration_ms: 12,
+            },
+            Event::Question {
+                id: "approval:1".into(),
+                kind: QuestionKind::Approval,
+                step: Some("1".into()),
+                message: "Ship it?".into(),
+                approval: Some(Approval::Manual {
+                    message: "Ship it?".into(),
+                }),
+                choices: None,
+            },
+            Event::Question {
+                id: "uncommitted-changes".into(),
+                kind: QuestionKind::Approval,
+                step: None,
+                message:
+                    "You have uncommitted changes in /work/app. Do you want to proceed anyway?"
+                        .into(),
+                approval: Some(Approval::UncommittedChanges {
+                    path: "/work/app".into(),
+                    not_a_repository: false,
+                }),
+                choices: None,
+            },
+            Event::Question {
+                id: "agent:3".into(),
+                kind: QuestionKind::Agent,
+                step: Some("3".into()),
+                message: "Which coding agent should run this step?".into(),
+                approval: None,
+                choices: Some(vec![AgentChoice {
+                    name: "codex".into(),
+                    label: "Codex".into(),
+                    available: true,
+                }]),
+            },
+            Event::QuestionClosed {
+                id: "approval:1".into(),
+                answer: json!("approved"),
+                by: ClosedBy::Answer,
+            },
+            Event::QuestionClosed {
+                id: "agent:3".into(),
+                answer: Value::Null,
+                by: ClosedBy::Eof,
+            },
+            Event::ControlError {
+                message: "no question 'approval:9' is open".into(),
+                line: r#"{"command":"approve","question_id":"approval:9"}"#.into(),
+            },
+            Event::RunDiff {
+                path: "src/a.ts".into(),
+                diff: "@@ -1 +1 @@\n-var a = 1;\n+let a = 1;\n".into(),
+                additions: 1,
+                deletions: 1,
+            },
+            Event::RunFinished {
+                run_id: "8c7000b1".into(),
+                status: RunStatus::Rejected,
+                error: Some("rejected: Ship it?".into()),
+                awaiting: None,
+                question: None,
+                failed_files: 1,
+                partial_steps: vec![PartialStep {
+                    position: 0,
+                    label: "Replace".into(),
+                    failed_files: 1,
+                    files: 2,
+                }],
+                output: Value::Null,
+                output_omitted: None,
+                steps: vec![StepResult {
+                    position: 0,
+                    label: "Replace".into(),
+                    status: StepStatus::Partial,
+                    result: json!({ "written": ["src/a.ts"] }),
+                    result_omitted: None,
+                }],
+            },
+        ];
+        for event in &events {
+            match event {
+                Event::RunStarted { .. }
+                | Event::StepStarted { .. }
+                | Event::StepReplayed { .. }
+                | Event::StepProgress { .. }
+                | Event::StepLog { .. }
+                | Event::RunLog { .. }
+                | Event::StepAgent { .. }
+                | Event::StepRetrying { .. }
+                | Event::StepFinished { .. }
+                | Event::StepDiff { .. }
+                | Event::Question { .. }
+                | Event::QuestionClosed { .. }
+                | Event::ControlError { .. }
+                | Event::RunDiff { .. }
+                | Event::RunFinished { .. } => {}
+            }
+        }
+        events
+    }
+
+    fn every_command() -> Vec<Value> {
+        let commands = vec![
+            json!({ "command": "approve", "question_id": "approval:1" }),
+            json!({ "command": "reject", "question_id": "approval:1" }),
+            json!({ "command": "answer", "question_id": "approval:1", "value": "later" }),
+            json!({ "command": "answer", "question_id": "agent:3", "value": "codex" }),
+            json!({ "command": "answer", "question_id": "agent:3", "value": null }),
+            json!({ "command": "stop", "mode": "cancel" }),
+            json!({ "command": "stop" }),
+        ];
+        let mut names = Vec::new();
+        for command in &commands {
+            let parsed: Command = serde_json::from_value(command.clone()).unwrap();
+            names.push(match parsed {
+                Command::Answer { .. } => "answer",
+                Command::Approve { .. } => "approve",
+                Command::Reject { .. } => "reject",
+                Command::Stop { .. } => "stop",
+            });
+        }
+        names.sort();
+        names.dedup();
+        assert_eq!(names, COMMANDS, "a sample for every command");
+        commands
+    }
+
+    fn generated() -> String {
+        let store: Arc<dyn RunStore> = Arc::new(MemoryStore::default());
+        let kept = Arc::new(Kept::default());
+        let recorder = Recorder::new(store, None, kept.clone());
+        for event in every_event() {
+            recorder.emit(event);
+        }
+        let hello = Hello {
+            event: "hello",
+            protocol: PROTOCOL,
+            cli: "2.0.0",
+            run_id: "8c7000b1".into(),
+            mode: "run",
+            dry_run: false,
+            workflow: "/work/codemod/workflow.ts".into(),
+            target: "/work/app".into(),
+            settings: HelloSettings {
+                capabilities: vec!["fs".into()],
+                managed_git: false,
+                agent: None,
+                decision_model: Some("systemone/jev-latest".into()),
+                approve_all: false,
+                approved: vec!["approval:1".into()],
+            },
+            commands: COMMANDS.to_vec(),
+        };
+        let pretty = |value: &Value| serde_json::to_string_pretty(value).unwrap();
+        format!(
+            "// Generated from the Rust types by `cargo test -p codemod protocol_samples`\n\
+             // (UPDATE_PROTOCOL_SAMPLES=1 rewrites it); do not edit. `tsc -p type-tests`\n\
+             // checks it against `codemod/protocol`.\n\n\
+             import type {{ Command, Event, Hello }} from \"codemod/protocol\";\n\n\
+             export const hello: Hello = {};\n\n\
+             export const events: Event[] = {};\n\n\
+             export const commands: Command[] = {};\n",
+            pretty(&serde_json::to_value(&hello).unwrap()),
+            pretty(&Value::from(kept.0.lock().unwrap().clone())),
+            pretty(&Value::from(every_command())),
+        )
+    }
+
+    #[test]
+    fn protocol_samples_match_the_rust_types() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(FILE);
+        let expected = generated();
+        if std::env::var_os("UPDATE_PROTOCOL_SAMPLES").is_some() {
+            std::fs::write(&path, &expected).unwrap();
+            return;
+        }
+        let found = std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
+        assert!(
+            found == expected,
+            "{FILE} is out of date: run UPDATE_PROTOCOL_SAMPLES=1 cargo test -p codemod protocol_samples, then update crates/cli/npm/types/modules/protocol.d.ts until `pnpm --filter codemod typecheck` passes"
+        );
+    }
+
+    #[test]
+    fn statuses_in_the_samples_are_the_ones_the_store_knows() {
+        // Keeps `RunStatus` in protocol.d.ts honest too.
+        for status in [
+            RunStatus::Running,
+            RunStatus::AwaitingApproval,
+            RunStatus::Paused,
+            RunStatus::Succeeded,
+            RunStatus::Failed,
+            RunStatus::Canceled,
+            RunStatus::Rejected,
+        ] {
+            let declared = include_str!("../npm/types/modules/protocol.d.ts");
+            assert!(
+                declared.contains(&format!("\"{}\"", status.as_str())),
+                "{} is not in protocol.d.ts",
+                status.as_str()
+            );
+        }
+    }
+}

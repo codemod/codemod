@@ -51,6 +51,9 @@
       "default": "./runtime/ast-grep.mjs"
     },
     "./package.json": "./package.json",
+    "./protocol": {
+      "types": "./types/protocol.d.ts"
+    },
     "./register": {
       "types": "./register.d.mts",
       "default": "./register.mjs"
