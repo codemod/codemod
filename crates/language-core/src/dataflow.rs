@@ -354,9 +354,9 @@ pub struct UnparsedFile {
 /// Result of a call-graph query.
 ///
 /// Callers come from a table of every call in the workspace, built on the
-/// first callers query and kept for the provider's lifetime: a snapshot of
-/// the workspace at that moment. Files edited later keep their old calls in
-/// it until the provider's cache is cleared.
+/// first callers query. Like every semantic answer it describes the
+/// workspace as it was when the step started: a step's own edits are not
+/// in it, the next step's provider sees them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CallGraphResult {
     pub files: Vec<CallGraphFile>,

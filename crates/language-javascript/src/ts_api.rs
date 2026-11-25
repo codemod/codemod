@@ -18,8 +18,11 @@
 //! spawned until the first question, and a checker that fails to start or
 //! answer is not tried again: questions then get no answer.
 //!
-//! Answers are a snapshot: the checker reads the files once, and edits made
-//! during a run are not sent to it (the same rule as the callers table).
+//! Answers describe the step's start, like every semantic answer: the
+//! checker reads each file once per step. It reads them through us
+//! (`--callbacks readFile,fileExists`): a file the run told the provider
+//! about (an earlier step's edit, which a dry run keeps in memory) comes from
+//! [`FileTexts`], anything else from the disk.
 
 use language_core::ByteRange;
 use parking_lot::Mutex;
@@ -41,6 +44,7 @@ pub(crate) const PINNED_VERSION: &str = "7.0";
 pub(crate) const MAX_IMPLEMENTATIONS: usize = 16;
 
 const MSG_REQUEST: u8 = 1;
+const MSG_CALL_RESPONSE: u8 = 2;
 const MSG_CALL_ERROR: u8 = 3;
 const MSG_RESPONSE: u8 = 4;
 const MSG_ERROR: u8 = 5;
@@ -88,9 +92,36 @@ pub(crate) struct Related {
     pub decls: Vec<TsDecl>,
 }
 
+/// File texts the checker reads instead of the disk.
+#[derive(Debug, Default)]
+pub(crate) struct FileTexts(parking_lot::RwLock<HashMap<PathBuf, Arc<str>>>);
+
+impl FileTexts {
+    pub(crate) fn set(&self, path: &Path, text: &str) {
+        self.0.write().insert(path.to_path_buf(), text.into());
+    }
+
+    /// The text for a path the checker asked about, matching case only on a
+    /// case-sensitive file system.
+    fn get(&self, path: &str, case_sensitive: bool) -> Option<Arc<str>> {
+        let texts = self.0.read();
+        if let Some(text) = texts.get(Path::new(path)) {
+            return Some(Arc::clone(text));
+        }
+        if case_sensitive {
+            return None;
+        }
+        texts
+            .iter()
+            .find(|(known, _)| known.to_string_lossy().eq_ignore_ascii_case(path))
+            .map(|(_, text)| Arc::clone(text))
+    }
+}
+
 pub(crate) struct TsTypes {
     exe: PathBuf,
     cwd: PathBuf,
+    texts: Arc<FileTexts>,
     session: Mutex<Option<Session>>,
     dead: AtomicBool,
 }
@@ -116,7 +147,11 @@ impl TsTypes {
     /// The checker for a workspace with types turned on (`enabled`):
     /// `CODEMOD_TS_API`, else the workspace's own TypeScript 7 install. Its
     /// version must be [`PINNED_VERSION`].
-    pub(crate) fn discover(workspace_root: &Path, enabled: bool) -> Result<Self, NoChecker> {
+    pub(crate) fn discover(
+        workspace_root: &Path,
+        enabled: bool,
+        texts: Arc<FileTexts>,
+    ) -> Result<Self, NoChecker> {
         if !enabled {
             return Err(NoChecker::Off);
         }
@@ -132,6 +167,7 @@ impl TsTypes {
         Ok(Self {
             exe,
             cwd: workspace_root.to_path_buf(),
+            texts,
             session: Mutex::new(None),
             dead: AtomicBool::new(false),
         })
@@ -143,7 +179,7 @@ impl TsTypes {
         }
         let mut guard = self.session.lock();
         if guard.is_none() {
-            match Session::start(&self.exe, &self.cwd) {
+            match Session::start(&self.exe, &self.cwd, Arc::clone(&self.texts)) {
                 Ok(session) => *guard = Some(session),
                 Err(error) => {
                     log::warn!("TypeScript checker did not start: {error}");
@@ -330,6 +366,7 @@ impl TsTypes {
 
 struct Session {
     child: Child,
+    texts: Arc<FileTexts>,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     case_sensitive: bool,
@@ -360,11 +397,13 @@ impl Drop for Session {
 }
 
 impl Session {
-    fn start(exe: &Path, cwd: &Path) -> Result<Self, String> {
+    fn start(exe: &Path, cwd: &Path, texts: Arc<FileTexts>) -> Result<Self, String> {
         let mut child = Command::new(exe)
             .arg("--api")
             .arg("--cwd")
             .arg(cwd)
+            .arg("--callbacks")
+            .arg("readFile,fileExists")
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -376,6 +415,7 @@ impl Session {
         let stdout = BufReader::with_capacity(1 << 16, child.stdout.take().ok_or("no stdout")?);
         let mut session = Self {
             child,
+            texts,
             stdin,
             stdout,
             case_sensitive: true,
@@ -631,16 +671,38 @@ impl Session {
                     return Err(format!("{method}: {}", String::from_utf8_lossy(&body)));
                 }
                 MSG_CALL => {
-                    // No file-system callbacks were asked for.
-                    let mut reply = vec![0x93, MSG_CALL_ERROR];
-                    write_bin(&mut reply, &name);
-                    write_bin(&mut reply, b"no callbacks");
+                    let reply = self.answer_call(&name, &body);
                     self.stdin.write_all(&reply).map_err(io)?;
                     self.stdin.flush().map_err(io)?;
                 }
                 _ => return Err(format!("io: unexpected message {kind} for {method}")),
             }
         }
+    }
+}
+
+impl Session {
+    /// The checker asks for a file: its text from [`FileTexts`], or `null`,
+    /// which tells the checker to read the disk itself.
+    fn answer_call(&self, name: &[u8], body: &[u8]) -> Vec<u8> {
+        let text = serde_json::from_slice::<String>(body)
+            .ok()
+            .and_then(|path| self.texts.get(&path, self.case_sensitive));
+        let answer = match (name, text) {
+            (b"readFile", Some(text)) => json!({ "content": &*text }),
+            (b"fileExists", Some(_)) => json!(true),
+            (b"readFile" | b"fileExists", None) => Value::Null,
+            _ => {
+                let mut reply = vec![0x93, MSG_CALL_ERROR];
+                write_bin(&mut reply, name);
+                write_bin(&mut reply, b"unknown callback");
+                return reply;
+            }
+        };
+        let mut reply = vec![0x93, MSG_CALL_RESPONSE];
+        write_bin(&mut reply, name);
+        write_bin(&mut reply, answer.to_string().as_bytes());
+        reply
     }
 }
 
@@ -953,7 +1015,7 @@ mod tests {
         let file = root.join("a.ts");
         let content = "// é\nclass C { m() {} }\nconst c: C = new C();\nc.m();\n";
         std::fs::write(&file, content).unwrap();
-        let types = TsTypes::discover(&root, true).expect("the pinned checker");
+        let types = TsTypes::discover(&root, true, Default::default()).expect("the pinned checker");
         let c = content.rfind("c.m").unwrap() as u32;
         assert_eq!(
             types

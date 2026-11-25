@@ -250,13 +250,34 @@ fn run_callback(
         _ => Vec::new(),
     };
     isolates.semantic_provider = butterflow_core::jssg_runner::semantic_provider(&mode, &paths);
-    // A dry run: the workspace index sees what earlier steps left, not the
-    // disk (a removed file has no references left in it).
-    if let (SemanticMode::Workspace(..), Some(provider), Some(overlay)) =
-        (&mode, &isolates.semantic_provider, &run.overlay)
-    {
+    // A dry run: answers describe what earlier steps left, not the disk (a
+    // removed file has no references left in it). The workspace index takes
+    // every changed file; a file-scope provider only reads the files this
+    // call visits.
+    if let (Some(provider), Some(overlay)) = (&isolates.semantic_provider, &run.overlay) {
+        let visited: std::collections::HashSet<_> = match mode {
+            SemanticMode::File => files
+                .iter()
+                .map(|selected| {
+                    selected
+                        .file
+                        .canonicalize()
+                        .unwrap_or_else(|_| selected.file.clone())
+                })
+                .collect(),
+            _ => Default::default(),
+        };
         for (path, text) in overlay.snapshot() {
-            let _ = provider.notify_file_processed(&path, text.as_deref().unwrap_or(""));
+            let seed = match mode {
+                SemanticMode::Workspace(..) => true,
+                SemanticMode::File => {
+                    visited.contains(&path.canonicalize().unwrap_or_else(|_| path.clone()))
+                }
+                SemanticMode::None => false,
+            };
+            if seed {
+                let _ = provider.notify_file_processed(&path, text.as_deref().unwrap_or(""));
+            }
         }
     }
     let name = module_name(task, callback);

@@ -4,8 +4,8 @@ use crate::analyzer::{FileScopeAnalyzer, WorkspaceScopeAnalyzer};
 use crate::flow_host::PyFlow;
 use language_core::{
     filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult,
-    FlowOptions, FlowResult, MutationOptions, MutationsResult, ProviderMode, ReferencesResult,
-    SemanticProvider, SemanticResult,
+    FileSnapshot, FlowOptions, FlowResult, MutationOptions, MutationsResult, ProviderMode,
+    ReferencesResult, SemanticProvider, SemanticResult,
 };
 use std::path::{Path, PathBuf};
 use vfs::VfsPath;
@@ -40,6 +40,8 @@ pub struct RuffSemanticProvider {
     physical_root: Option<PathBuf>,
     /// Value flow, mutations, the call graph and annotation types.
     flow: PyFlow,
+    /// File texts as they were when the step started.
+    snapshot: FileSnapshot,
 }
 
 impl RuffSemanticProvider {
@@ -58,6 +60,7 @@ impl RuffSemanticProvider {
             analyzer: AnalyzerKind::FileScope(FileScopeAnalyzer::new()),
             fs_root: filesystem::physical_path(&cwd),
             physical_root: Some(cwd),
+            snapshot: FileSnapshot::new(),
             flow: PyFlow::new(None),
         }
     }
@@ -76,6 +79,7 @@ impl RuffSemanticProvider {
             analyzer: AnalyzerKind::FileScope(FileScopeAnalyzer::new()),
             fs_root,
             physical_root: None, // MemoryFS or other VFS - paths are virtual
+            snapshot: FileSnapshot::new(),
             flow: PyFlow::new(None),
         }
     }
@@ -100,6 +104,7 @@ impl RuffSemanticProvider {
             )),
             fs_root,
             physical_root: Some(canonical_root.clone()),
+            snapshot: FileSnapshot::new(),
             flow: PyFlow::new(Some(canonical_root)),
         }
     }
@@ -117,6 +122,7 @@ impl RuffSemanticProvider {
             )),
             fs_root,
             physical_root: None, // Custom VFS - paths handled by VFS implementation
+            snapshot: FileSnapshot::new(),
             flow: PyFlow::new(Some(workspace_root)),
         }
     }
@@ -139,8 +145,15 @@ impl RuffSemanticProvider {
         }
     }
 
+    /// The text queries about `file_path` read: pinned on first read, so
+    /// a step's answers never see what the step writes.
+    fn read_file(&self, file_path: &Path) -> SemanticResult<std::sync::Arc<str>> {
+        self.snapshot
+            .get_or_read(file_path, || self.read_disk(file_path))
+    }
+
     /// Read file content using the virtual filesystem.
-    fn read_file(&self, file_path: &Path) -> SemanticResult<String> {
+    fn read_disk(&self, file_path: &Path) -> SemanticResult<String> {
         // Canonicalize the file path to handle symlinks (e.g., /var -> /private/var on macOS)
         let canonical_file = file_path
             .canonicalize()
@@ -284,7 +297,12 @@ impl SemanticProvider for RuffSemanticProvider {
         self.flow.mutations(file_path, &content, range, options)
     }
 
+    fn snapshot_content(&self, file_path: &Path) -> Option<std::sync::Arc<str>> {
+        self.read_file(file_path).ok()
+    }
+
     fn notify_file_processed(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
+        self.snapshot.pin(file_path, content);
         self.flow.update(file_path, content);
         match &self.analyzer {
             AnalyzerKind::FileScope(analyzer) => analyzer
@@ -519,7 +537,7 @@ mod tests {
         let file_path = PathBuf::from("test.py");
         let read_result = provider.read_file(&file_path);
         assert!(read_result.is_ok());
-        assert_eq!(read_result.unwrap(), content);
+        assert_eq!(&*read_result.unwrap(), content);
     }
 
     #[test]
@@ -548,6 +566,6 @@ mod tests {
         let file_path = PathBuf::from("src/models/user.py");
         let read_result = provider.read_file(&file_path);
         assert!(read_result.is_ok());
-        assert_eq!(read_result.unwrap(), content);
+        assert_eq!(&*read_result.unwrap(), content);
     }
 }

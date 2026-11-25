@@ -9,6 +9,7 @@ pub mod filesystem;
 mod modules;
 mod noop;
 mod provider;
+mod snapshot;
 mod types;
 
 pub use dataflow::{
@@ -23,6 +24,7 @@ pub use modules::{
 };
 pub use noop::NoopSemanticProvider;
 pub use provider::{ProviderMode, SemanticProvider};
+pub use snapshot::FileSnapshot;
 pub use types::{
     ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences, Position,
     ReferencesResult, SymbolKind, SymbolLocation,

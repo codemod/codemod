@@ -232,10 +232,12 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             return;
         }
         for (path, error) in pending.write_released(|path, text| {
-            std::fs::write(path, text)?;
+            // The run is one step: answers keep describing the file as it
+            // was when the run started.
             if let Some(ref provider) = semantic_provider {
-                let _ = provider.notify_file_processed(path, text);
+                let _ = provider.snapshot_content(path);
             }
+            std::fs::write(path, text)?;
             Ok(())
         }) {
             execution_errors.lock().unwrap().push(format!(

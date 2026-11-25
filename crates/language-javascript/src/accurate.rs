@@ -186,6 +186,8 @@ pub struct AccurateAnalyzer {
     types: std::sync::OnceLock<Option<TsTypes>>,
     /// Types were turned on (`types: "ts7"`).
     types_enabled: AtomicBool,
+    /// Texts the run told this analyzer about, for the TypeScript checker.
+    type_texts: Arc<ts_api::FileTexts>,
 }
 
 /// Importing file's directory, module specifier, export name.
@@ -252,6 +254,7 @@ impl AccurateAnalyzer {
             module_paths: RwLock::new(HashMap::new()),
             types: std::sync::OnceLock::new(),
             types_enabled: AtomicBool::new(false),
+            type_texts: Default::default(),
         }
     }
 
@@ -622,6 +625,8 @@ impl AccurateAnalyzer {
     /// notification is authoritative" contract for callers that
     /// legitimately hand new content in (e.g. editor-driven LSP use).
     pub fn process_file(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
+        self.type_texts
+            .set(&self.canonical_path(file_path), content);
         self.process_file_with(file_path, content, false)
     }
 
@@ -1661,7 +1666,7 @@ impl AccurateAnalyzer {
         self.types
             .get_or_init(|| {
                 let enabled = self.types_enabled.load(Ordering::Relaxed);
-                match TsTypes::discover(&self.workspace_root, enabled) {
+                match TsTypes::discover(&self.workspace_root, enabled, Arc::clone(&self.type_texts)) {
                     Ok(types) => Some(types),
                     Err(ts_api::NoChecker::Off) => None,
                     Err(ts_api::NoChecker::NotFound) => {
@@ -3395,54 +3400,6 @@ console.log(x);
             callees(&analyzer),
             (vec!["target".to_string()], vec![false])
         );
-    }
-
-    #[test]
-    fn callers_stay_a_snapshot_after_an_edit() {
-        let dir = TempDir::new().unwrap();
-        let lib = dir.path().join("lib.js");
-        let lib_src = "export function target() {}\n";
-        fs::write(&lib, lib_src).unwrap();
-        let a = dir.path().join("a.js");
-        fs::write(
-            &a,
-            "import { target } from './lib.js';\nexport function first() { target(); }\n",
-        )
-        .unwrap();
-        let analyzer = AccurateAnalyzer::new(dir.path().to_path_buf());
-        let options = CallGraphOptions {
-            direction: language_core::CallGraphDirection::Callers,
-            ..Default::default()
-        };
-        let target = range_of(lib_src, "target");
-
-        let before = analyzer.call_graph(&lib, lib_src, target, options).unwrap();
-        assert_eq!(entry_names(&before), ["first"]);
-
-        // a.js is rewritten during the run: the call moves to a new function.
-        let edited = "import { target } from './lib.js';\nexport function second() { target(); }\n";
-        fs::write(&a, edited).unwrap();
-        analyzer.process_file(&a, edited).unwrap();
-
-        // Cross-file: still the workspace as it was at the first callers query.
-        let after = analyzer.call_graph(&lib, lib_src, target, options).unwrap();
-        assert_eq!(entry_names(&after), ["first"]);
-
-        // File-local: the edited file's own answers use its new content.
-        let callees = analyzer
-            .call_graph(
-                &a,
-                edited,
-                range_of(edited, "second"),
-                CallGraphOptions::default(),
-            )
-            .unwrap();
-        assert_eq!(entry_names(&callees), ["target"]);
-
-        // Clearing the cache drops the snapshot.
-        analyzer.clear();
-        let rebuilt = analyzer.call_graph(&lib, lib_src, target, options).unwrap();
-        assert_eq!(entry_names(&rebuilt), ["second"]);
     }
 
     #[test]

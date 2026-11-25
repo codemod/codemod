@@ -5,8 +5,9 @@ use crate::cache::SymbolCache;
 use crate::lightweight::LightweightAnalyzer;
 use language_core::{
     filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult,
-    FlowOptions, FlowResult, MutationOptions, MutationsResult, ProviderMode, ReferencesResult,
-    SemanticError, SemanticProvider, SemanticResult, SpecifierOptions, SymbolKind,
+    FileSnapshot, FlowOptions, FlowResult, MutationOptions, MutationsResult, ProviderMode,
+    ReferencesResult, SemanticError, SemanticProvider, SemanticResult, SpecifierOptions,
+    SymbolKind,
 };
 use std::path::{Path, PathBuf};
 use vfs::VfsPath;
@@ -39,6 +40,8 @@ pub struct OxcSemanticProvider {
     /// Physical root path for converting absolute paths to relative paths.
     /// Only used when fs_root is PhysicalFS.
     physical_root: Option<PathBuf>,
+    /// File texts as they were when the step started.
+    snapshot: FileSnapshot,
 }
 
 impl OxcSemanticProvider {
@@ -57,6 +60,7 @@ impl OxcSemanticProvider {
             analyzer: AnalyzerKind::FileScope(LightweightAnalyzer::new()),
             fs_root: filesystem::physical_path(&cwd),
             physical_root: Some(cwd),
+            snapshot: FileSnapshot::new(),
         }
     }
 
@@ -74,6 +78,7 @@ impl OxcSemanticProvider {
             analyzer: AnalyzerKind::FileScope(LightweightAnalyzer::new()),
             fs_root,
             physical_root: None, // MemoryFS or other VFS - paths are virtual
+            snapshot: FileSnapshot::new(),
         }
     }
 
@@ -98,6 +103,7 @@ impl OxcSemanticProvider {
             )),
             fs_root,
             physical_root: Some(canonical_root),
+            snapshot: FileSnapshot::new(),
         }
     }
 
@@ -115,6 +121,7 @@ impl OxcSemanticProvider {
             )),
             fs_root,
             physical_root: None, // Custom VFS - paths handled by VFS implementation
+            snapshot: FileSnapshot::new(),
         }
     }
 
@@ -134,6 +141,7 @@ impl OxcSemanticProvider {
             )),
             fs_root,
             physical_root: Some(canonical_root),
+            snapshot: FileSnapshot::new(),
         }
     }
 
@@ -154,6 +162,7 @@ impl OxcSemanticProvider {
             )),
             fs_root,
             physical_root: None,
+            snapshot: FileSnapshot::new(),
         }
     }
 
@@ -183,8 +192,15 @@ impl OxcSemanticProvider {
         }
     }
 
+    /// The text queries about `file_path` read: pinned on first read, so
+    /// a step's answers never see what the step writes.
+    fn read_file(&self, file_path: &Path) -> SemanticResult<std::sync::Arc<str>> {
+        self.snapshot
+            .get_or_read(file_path, || self.read_disk(file_path))
+    }
+
     /// Read file content using the virtual filesystem.
-    fn read_file(&self, file_path: &Path) -> SemanticResult<String> {
+    fn read_disk(&self, file_path: &Path) -> SemanticResult<String> {
         // Canonicalize the file path to handle symlinks (e.g., /var -> /private/var on macOS)
         let canonical_file = file_path
             .canonicalize()
@@ -380,7 +396,12 @@ impl SemanticProvider for OxcSemanticProvider {
         }
     }
 
+    fn snapshot_content(&self, file_path: &Path) -> Option<std::sync::Arc<str>> {
+        self.read_file(file_path).ok()
+    }
+
     fn notify_file_processed(&self, file_path: &Path, content: &str) -> SemanticResult<()> {
+        self.snapshot.pin(file_path, content);
         match &self.analyzer {
             AnalyzerKind::FileScope(analyzer) => analyzer.process_file(file_path, content),
             AnalyzerKind::WorkspaceScope(analyzer) => analyzer.process_file(file_path, content),
@@ -733,7 +754,7 @@ console.log(x);"#;
         let file_path = PathBuf::from("test.js");
         let read_result = provider.read_file(&file_path);
         assert!(read_result.is_ok());
-        assert_eq!(read_result.unwrap(), content);
+        assert_eq!(&*read_result.unwrap(), content);
     }
 
     #[test]
@@ -766,6 +787,6 @@ console.log(x);"#;
         let file_path = PathBuf::from("src/components/Button.tsx");
         let read_result = provider.read_file(&file_path);
         assert!(read_result.is_ok());
-        assert_eq!(read_result.unwrap(), content);
+        assert_eq!(&*read_result.unwrap(), content);
     }
 }

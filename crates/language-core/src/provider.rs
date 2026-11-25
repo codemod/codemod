@@ -210,6 +210,18 @@ pub trait SemanticProvider: Send + Sync {
     /// * `content` - The source content of the file
     fn notify_file_processed(&self, file_path: &Path, content: &str) -> SemanticResult<()>;
 
+    /// The text of `file_path` this provider answers about: the file as it
+    /// was when the step started, pinned on first read or by
+    /// [`Self::notify_file_processed`]. A root whose text differs was edited
+    /// in this step, and queries on it throw instead of mapping offsets into
+    /// the wrong text.
+    ///
+    /// The default is `None`: the provider keeps no snapshot, and nothing is
+    /// checked.
+    fn snapshot_content(&self, _file_path: &Path) -> Option<std::sync::Arc<str>> {
+        None
+    }
+
     /// Check if this provider supports the given language.
     ///
     /// # Arguments

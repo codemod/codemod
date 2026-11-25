@@ -256,16 +256,17 @@ impl<'js> SgRootRjs<'js> {
             }
 
             let path = std::path::Path::new(file_path);
+            // Answers describe the step's start: pin the old text before it
+            // goes, so the rest of the step doesn't see this write.
+            if let Some(ref provider) = self.inner.semantic_provider {
+                let _ = provider.snapshot_content(path);
+            }
             std::fs::write(path, &content).map_err(|e| {
                 Exception::throw_message(
                     &ctx,
                     &format!("Failed to write file '{}': {}", file_path, e),
                 )
             })?;
-
-            if let Some(ref provider) = self.inner.semantic_provider {
-                let _ = provider.notify_file_processed(path, &content);
-            }
 
             Ok(())
         }
@@ -686,6 +687,32 @@ fn in_callback_isolate(ctx: &Ctx<'_>) -> bool {
 }
 
 impl SgRootInner {
+    /// Why a semantic query on this root can't run: its text is not the text
+    /// the provider answers about, because the step produced it. Answers
+    /// describe the file as it was when the step started; mapping their
+    /// offsets into this text would silently point at the wrong code.
+    #[cfg(feature = "native")]
+    fn edited_in_this_step(
+        &self,
+        provider: &dyn SemanticProvider,
+        file_path: &std::path::Path,
+        method: &str,
+    ) -> Option<String> {
+        let snapshot = provider.snapshot_content(file_path)?;
+        if *snapshot == *document_source(&self.grep) {
+            return None;
+        }
+        let name = self
+            .relative_filename
+            .as_deref()
+            .or(self.filename.as_deref())
+            .unwrap_or_default();
+        Some(format!(
+            "{method}(): {name} changed in this step; semantic answers describe the file as it \
+             was when the step started. Query it in the next step."
+        ))
+    }
+
     /// The file this root was parsed from, canonicalized (so two roots for
     /// one file agree), or "" for a root parsed from a string.
     fn canonical_filename(&self) -> &str {
@@ -1411,6 +1438,12 @@ impl<'js> SgNodeRjs<'js> {
                 Some(f) => std::path::PathBuf::from(f),
                 None => return Ok(Value::new_null(ctx)),
             };
+            if let Some(message) =
+                self.root
+                    .edited_in_this_step(&**provider, &file_path, "definition")
+            {
+                return Err(Exception::throw_message(&ctx, &message));
+            }
 
             // Parse options
             let (resolve_external, follow) = match options.0 {
@@ -1488,6 +1521,12 @@ impl<'js> SgNodeRjs<'js> {
                 Some(f) => std::path::PathBuf::from(f),
                 None => return rquickjs::Array::new(ctx.clone())?.into_js(&ctx),
             };
+            if let Some(message) =
+                self.root
+                    .edited_in_this_step(&**provider, &file_path, "references")
+            {
+                return Err(Exception::throw_message(&ctx, &message));
+            }
 
             let byte_range = self.inner_node.range();
             let range =
@@ -1805,6 +1844,12 @@ impl<'js> SgNodeRjs<'js> {
                 Some(f) => std::path::PathBuf::from(f),
                 None => return Ok(Value::new_null(ctx)),
             };
+            if let Some(message) =
+                self.root
+                    .edited_in_this_step(&**provider, &file_path, "typeInfo")
+            {
+                return Err(Exception::throw_message(&ctx, &message));
+            }
 
             let byte_range = self.inner_node.range();
             let range =
@@ -2202,10 +2247,17 @@ impl<'js> SgNodeRjs<'js> {
                  for workspace scope."
             ));
         };
+        let file_path = std::path::PathBuf::from(filename);
+        if let Some(message) = self
+            .root
+            .edited_in_this_step(&*provider, &file_path, method)
+        {
+            return Err(message);
+        }
         let range = self.inner_node.range();
         Ok((
             provider,
-            std::path::PathBuf::from(filename),
+            file_path,
             language_core::ByteRange::new(range.start as u32, range.end as u32),
         ))
     }

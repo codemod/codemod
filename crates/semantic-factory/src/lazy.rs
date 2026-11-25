@@ -290,6 +290,11 @@ impl SemanticProvider for LazySemanticProvider {
         }
     }
 
+    fn snapshot_content(&self, file_path: &Path) -> Option<std::sync::Arc<str>> {
+        self.get_or_init(Self::detect_language(file_path))?
+            .snapshot_content(file_path)
+    }
+
     fn supports_language(&self, lang: &str) -> bool {
         SemanticFactory::supports_language(lang)
     }
