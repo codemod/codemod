@@ -13,7 +13,7 @@ mod types;
 pub use dataflow::{
     CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
     CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
-    FlowResult, FlowStep, Mutation, MutationConfidence, MutationKind, MutationOptions,
+    FlowResult, FlowStep, KindSet, Mutation, MutationConfidence, MutationKind, MutationOptions,
     MutationsResult, UnparsedFile,
 };
 pub use error::{SemanticError, SemanticResult};

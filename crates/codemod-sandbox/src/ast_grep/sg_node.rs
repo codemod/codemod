@@ -1362,12 +1362,23 @@ impl<'js> SgNodeRjs<'js> {
                 ..Default::default()
             };
             let method = if backward { "flowsFrom" } else { "flowsTo" };
-            if let Some(opts) = query_options(&ctx, options, method, &["throughCalls", "maxDepth"])?
-            {
+            if let Some(opts) = query_options(
+                &ctx,
+                options,
+                method,
+                &["throughCalls", "maxDepth", "stopAt"],
+            )? {
                 if let Some(through_calls) = opts.get::<_, Option<bool>>("throughCalls")? {
                     flow_options.through_calls = through_calls;
                 }
                 flow_options.max_depth = max_depth(&ctx, &opts, method)?;
+                flow_options.stop_at = stop_at(
+                    &ctx,
+                    &opts,
+                    method,
+                    language_core::FlowEdgeKind::ALL,
+                    language_core::FlowEdgeKind::as_str,
+                )?;
             }
 
             let flow = provider
@@ -1441,10 +1452,19 @@ impl<'js> SgNodeRjs<'js> {
                 ..Default::default()
             };
             let method = if callees { "callees" } else { "callers" };
-            if let Some(opts) = query_options(&ctx, options, method, &["transitive", "maxDepth"])? {
+            if let Some(opts) =
+                query_options(&ctx, options, method, &["transitive", "maxDepth", "stopAt"])?
+            {
                 graph_options.transitive =
                     opts.get::<_, Option<bool>>("transitive")?.unwrap_or(false);
                 graph_options.max_depth = max_depth(&ctx, &opts, method)?;
+                graph_options.stop_at = stop_at(
+                    &ctx,
+                    &opts,
+                    method,
+                    language_core::CallEdgeKind::ALL,
+                    language_core::CallEdgeKind::as_str,
+                )?;
             }
 
             let graph = provider
@@ -1803,6 +1823,54 @@ fn max_depth<'js>(
             &format!("{method}(options): maxDepth must be a whole number of at least 1"),
         )),
     }
+}
+
+/// `stopAt`: an array of edge kinds (by their JavaScript names), or absent.
+#[cfg(feature = "native")]
+fn stop_at<'js, T: Copy + Into<u32>>(
+    ctx: &Ctx<'js>,
+    options: &rquickjs::Object<'js>,
+    method: &str,
+    all: &[T],
+    name: fn(&T) -> &'static str,
+) -> Result<language_core::KindSet<T>> {
+    let value: Value = options.get("stopAt")?;
+    if value.is_undefined() || value.is_null() {
+        return Ok(language_core::KindSet::default());
+    }
+    let expected = || {
+        all.iter()
+            .map(|kind| format!("\"{}\"", name(kind)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let Some(array) = value.into_array() else {
+        return Err(Exception::throw_type(
+            ctx,
+            &format!(
+                "{method}(options): stopAt must be an array of edge kinds: {}",
+                expected()
+            ),
+        ));
+    };
+    let mut set = language_core::KindSet::default();
+    for item in array.iter::<Value>() {
+        let item = item?;
+        let text = item.as_string().map(|s| s.to_string()).transpose()?;
+        match text.and_then(|text| all.iter().copied().find(|kind| name(kind) == text)) {
+            Some(kind) => set.insert(kind),
+            None => {
+                return Err(Exception::throw_type(
+                    ctx,
+                    &format!(
+                        "{method}(options): unknown edge kind in stopAt; expected {}",
+                        expected()
+                    ),
+                ))
+            }
+        }
+    }
+    Ok(set)
 }
 
 /// Why a data-flow or call-graph query cannot run in the WebAssembly build.

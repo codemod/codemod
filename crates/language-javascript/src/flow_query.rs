@@ -143,9 +143,10 @@ pub(crate) fn data_flow(
             }
             // A returned or stored value leaves the function or goes into the
             // heap: reported, not followed.
-            let stop = !backward
-                && (matches!(edge, FlowEdgeKind::Return | FlowEdgeKind::Store)
-                    || (call_edge && !options.through_calls));
+            let stop = options.stop_at.contains(edge)
+                || (!backward
+                    && (matches!(edge, FlowEdgeKind::Return | FlowEdgeKind::Store)
+                        || (call_edge && !options.through_calls)));
             if !stop && seen_nodes.insert(other) {
                 queue.push_back((other, depth + 1));
             }
@@ -1003,7 +1004,10 @@ fn callees(
                     truncated = true;
                     break 'walk;
                 }
-                if options.transitive && visited.insert(key.clone()) {
+                if options.transitive
+                    && !options.stop_at.contains(via)
+                    && visited.insert(key.clone())
+                {
                     queue.push_back((key, depth + 1));
                 }
             }
@@ -1183,7 +1187,11 @@ fn callers(
                 break 'walk;
             }
             let caller_key = (file.clone(), call.function);
-            if options.transitive && call.function.is_some() && visited.insert(caller_key.clone()) {
+            if options.transitive
+                && call.function.is_some()
+                && !options.stop_at.contains(*via)
+                && visited.insert(caller_key.clone())
+            {
                 queue.push_back((caller_key, depth + 1));
             }
         }

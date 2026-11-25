@@ -134,6 +134,15 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_call_graph_stop_at,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "js_call_graph_stop_at.js",
+    fixture_dir: "javascript/dataflow",
+    target: "server.js",
+    scope: workspace,
+}
+
+jssg_test! {
     name: test_call_graph_commonjs,
     language: CodemodLang::Static(SupportLang::JavaScript),
     codemod: "js_callees_commonjs.js",

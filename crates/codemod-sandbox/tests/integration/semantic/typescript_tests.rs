@@ -149,6 +149,14 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_flow_stop_at_first_sink,
+    language: CodemodLang::Static(SupportLang::Tsx),
+    codemod: "tsx_flow_stop_at.js",
+    fixture_dir: "typescript/jsx_callees",
+    target: "src/Toolbar.tsx",
+}
+
+jssg_test! {
     name: test_callees_jsx_member_tag,
     language: CodemodLang::Static(SupportLang::Tsx),
     codemod: "tsx_callees_jsx_element.js",

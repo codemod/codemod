@@ -19,14 +19,77 @@ macro_rules! str_enum {
         }
 
         impl $name {
+            /// Every value, in declaration order.
+            pub const ALL: &'static [$name] = &[$($name::$variant,)+];
+
             /// The name JavaScript callers see.
             pub fn as_str(&self) -> &'static str {
                 match self {
                     $($name::$variant => $text,)+
                 }
             }
+
+            /// The value with this JavaScript name.
+            pub fn from_name(text: &str) -> Option<Self> {
+                match text {
+                    $($text => Some($name::$variant),)+
+                    _ => None,
+                }
+            }
         }
     };
+}
+
+/// A set of enum values (edge kinds), small enough to stay `Copy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KindSet<T> {
+    bits: u64,
+    _kind: std::marker::PhantomData<T>,
+}
+
+impl<T> Default for KindSet<T> {
+    fn default() -> Self {
+        Self {
+            bits: 0,
+            _kind: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T: Copy + Into<u32>> KindSet<T> {
+    pub fn insert(&mut self, kind: T) {
+        self.bits |= 1 << kind.into();
+    }
+
+    pub fn contains(&self, kind: T) -> bool {
+        self.bits & (1 << kind.into()) != 0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bits == 0
+    }
+}
+
+impl<T: Copy + Into<u32>> FromIterator<T> for KindSet<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut set = Self::default();
+        for kind in iter {
+            set.insert(kind);
+        }
+        set
+    }
+}
+
+impl From<FlowEdgeKind> for u32 {
+    fn from(kind: FlowEdgeKind) -> u32 {
+        kind as u32
+    }
+}
+
+impl From<CallEdgeKind> for u32 {
+    fn from(kind: CallEdgeKind) -> u32 {
+        kind as u32
+    }
 }
 
 str_enum! {
@@ -118,6 +181,10 @@ pub struct FlowOptions {
     pub through_calls: bool,
     /// Stop after this many edges.
     pub max_depth: Option<u32>,
+    /// Report a step reached by one of these edges, but do not walk past it
+    /// (`flowsTo({ stopAt: ["jsx-child"] })`: the first sink, not every
+    /// element around it).
+    pub stop_at: KindSet<FlowEdgeKind>,
 }
 
 impl Default for FlowOptions {
@@ -126,6 +193,7 @@ impl Default for FlowOptions {
             direction: FlowDirection::Backward,
             through_calls: true,
             max_depth: None,
+            stop_at: KindSet::default(),
         }
     }
 }
@@ -182,6 +250,9 @@ pub struct CallGraphOptions {
     /// Follow calls of calls.
     pub transitive: bool,
     pub max_depth: Option<u32>,
+    /// With `transitive`: report an entry reached by one of these edges,
+    /// but do not walk past it (`stopAt: ["callback"]`).
+    pub stop_at: KindSet<CallEdgeKind>,
 }
 
 str_enum! {
