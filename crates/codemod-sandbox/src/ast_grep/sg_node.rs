@@ -1542,7 +1542,24 @@ impl<'js> SgNodeRjs<'js> {
                         )?;
                         object.set("callSite", site)?;
                     }
-                    None => object.set("callSite", Value::new_null(ctx.clone()))?,
+                    None => {
+                        // The call graph always records the call; only an
+                        // unreadable file can lose it.
+                        let path = entry
+                            .call_site
+                            .as_ref()
+                            .map(|(path, _)| path.display().to_string())
+                            .unwrap_or_default();
+                        return Err(Exception::throw_message(
+                            &ctx,
+                            &format!(
+                                "{}(): could not read {} to find the call for `{}`",
+                                if callees { "callees" } else { "callers" },
+                                path,
+                                entry.name.as_deref().unwrap_or("?"),
+                            ),
+                        ));
+                    }
                 }
                 result.set(index, object)?;
             }
