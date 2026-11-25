@@ -20,6 +20,7 @@ use oxc::parser::Parser;
 use oxc::semantic::{AstNode, NodeId, Semantic, SemanticBuilder, SymbolFlags, SymbolId};
 use oxc::span::{GetSpan, SourceType, Span};
 use parking_lot::RwLock;
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -160,17 +161,17 @@ pub struct FileFlow {
     pub out_edges: Vec<Vec<(u32, FlowEdgeKind)>>,
     /// `in_edges[n]`: nodes whose value flows into `n`.
     pub in_edges: Vec<Vec<(u32, FlowEdgeKind)>>,
-    by_span: HashMap<(u32, u32), u32>,
+    by_span: FxHashMap<(u32, u32), u32>,
     pub functions: Vec<FunctionFact>,
-    pub fn_by_node: HashMap<u32, u32>,
+    pub fn_by_node: FxHashMap<u32, u32>,
     pub calls: Vec<CallFact>,
-    pub call_by_node: HashMap<u32, u32>,
+    pub call_by_node: FxHashMap<u32, u32>,
     pub mutations: Vec<MutationFact>,
-    pub imports: HashMap<u32, ImportFact>,
+    pub imports: FxHashMap<u32, ImportFact>,
     /// Object literal node -> (property name, value node).
-    pub object_members: HashMap<u32, Vec<(String, u32)>>,
+    pub object_members: FxHashMap<u32, Vec<(String, u32)>>,
     /// Class node -> (method name, function).
-    pub class_methods: HashMap<u32, Vec<(String, u32)>>,
+    pub class_methods: FxHashMap<u32, Vec<(String, u32)>>,
     pub loops: Vec<ByteRange>,
 }
 
@@ -274,26 +275,46 @@ pub fn build_file_flow(file_path: &Path, content: &str) -> Result<FileFlow, JsSe
     }
     let program = parsed.program;
     let semantic = SemanticBuilder::new().build(&program).semantic;
+    Ok(facts_from_semantic(&semantic, content))
+}
 
+/// Value-flow facts from a module's semantic model. The symbol pass and the
+/// facts share one parse through this.
+pub(crate) fn facts_from_semantic(semantic: &Semantic<'_>, content: &str) -> FileFlow {
+    let node_count = semantic.nodes().len();
     let mut builder = Builder {
-        semantic: &semantic,
+        semantic,
         source: content,
         flow: FileFlow::default(),
-        fn_by_ast: HashMap::new(),
-        binding_by_symbol: HashMap::new(),
+        fn_by_ast: vec![NONE; node_count],
+        fn_ast: Vec::new(),
+        enclosing: Vec::new(),
+        binding_by_symbol: vec![NONE; semantic.scoping().symbols_len()],
     };
     builder.collect_functions();
     builder.collect_bindings();
     builder.collect_expressions();
-    Ok(builder.flow)
+    builder.flow
+}
+
+/// No entry, in the builder's id-indexed tables.
+const NONE: u32 = u32::MAX;
+
+fn some(value: u32) -> Option<u32> {
+    (value != NONE).then_some(value)
 }
 
 struct Builder<'s, 'a> {
     semantic: &'s Semantic<'a>,
     source: &'s str,
     flow: FileFlow,
-    fn_by_ast: HashMap<NodeId, u32>,
-    binding_by_symbol: HashMap<SymbolId, u32>,
+    /// Function index by syntax node id.
+    fn_by_ast: Vec<u32>,
+    /// Syntax node of each function, in function order.
+    fn_ast: Vec<NodeId>,
+    /// Innermost enclosing function by syntax node id, not counting the node.
+    enclosing: Vec<u32>,
+    binding_by_symbol: Vec<u32>,
 }
 
 fn range_of(span: Span) -> ByteRange {
@@ -365,18 +386,50 @@ impl<'s, 'a> Builder<'s, 'a> {
 
     /// Innermost function around a syntax node, not counting the node itself.
     fn enclosing_fn(&self, id: NodeId) -> Option<u32> {
-        self.semantic
-            .nodes()
-            .ancestors(id)
-            .filter(|ancestor| ancestor.id() != id)
-            .find_map(|ancestor| self.fn_by_ast.get(&ancestor.id()).copied())
+        some(self.enclosing[id.index()])
+    }
+
+    /// Fill [`Self::enclosing`] in one pass: a node's enclosing function is
+    /// its parent when the parent is a function, else the parent's.
+    fn compute_enclosing(&mut self) {
+        let nodes = self.semantic.nodes();
+        let mut enclosing = vec![NONE; nodes.len()];
+        for node in nodes.iter() {
+            let id = node.id();
+            let parent = nodes.parent_node(id).id();
+            if parent == id {
+                continue;
+            }
+            enclosing[id.index()] = if parent.index() < id.index() {
+                match self.fn_by_ast[parent.index()] {
+                    NONE => enclosing[parent.index()],
+                    function => function,
+                }
+            } else {
+                // Parents come before children in OXC's node order; if not,
+                // walk up.
+                nodes
+                    .ancestors(id)
+                    .filter(|ancestor| ancestor.id() != id)
+                    .find_map(|ancestor| some(self.fn_by_ast[ancestor.id().index()]))
+                    .unwrap_or(NONE)
+            };
+        }
+        self.enclosing = enclosing;
+    }
+
+    fn binding_for_symbol(&self, symbol: SymbolId) -> Option<u32> {
+        self.binding_by_symbol
+            .get(symbol.index())
+            .copied()
+            .and_then(some)
     }
 
     fn binding_of(&self, ident: &IdentifierReference<'a>) -> Option<u32> {
         let reference = self.semantic.scoping().get_reference(ident.reference_id());
         reference
             .symbol_id()
-            .and_then(|symbol| self.binding_by_symbol.get(&symbol).copied())
+            .and_then(|symbol| self.binding_for_symbol(symbol))
     }
 
     /// The binding at the root of `x`, `x.a.b`, `x[i]`, `(x)`.
@@ -465,14 +518,15 @@ impl<'s, 'a> Builder<'s, 'a> {
                 class_node: None,
             });
             self.flow.fn_by_node.insert(flow_node, index);
-            self.fn_by_ast.insert(node.id(), index);
+            self.fn_by_ast[node.id().index()] = index;
+            self.fn_ast.push(node.id());
         }
+        self.compute_enclosing();
 
         // Parents and classes need every function to be known first.
-        for node in nodes.iter() {
-            let Some(index) = self.fn_by_ast.get(&node.id()).copied() else {
-                continue;
-            };
+        for (index, id) in self.fn_ast.clone().into_iter().enumerate() {
+            let index = index as u32;
+            let node = nodes.get_node(id);
             let parent = self.enclosing_fn(node.id());
             self.flow.functions[index as usize].parent = parent;
             let flow_node = self.flow.functions[index as usize].node;
@@ -554,7 +608,7 @@ impl<'s, 'a> Builder<'s, 'a> {
             self.flow.nodes[binding as usize].kind = kind;
             self.flow.nodes[binding as usize].index = index;
             self.flow.nodes[binding as usize].binding = true;
-            self.binding_by_symbol.insert(symbol, binding);
+            self.binding_by_symbol[symbol.index()] = binding;
 
             if let Some((name, namespace)) = import {
                 if let AstKind::ImportDeclaration(import_declaration) =
@@ -581,7 +635,7 @@ impl<'s, 'a> Builder<'s, 'a> {
     fn bind_pattern(&mut self, pattern: &BindingPattern<'a>, from: u32, kind: FlowEdgeKind) {
         match &pattern.kind {
             BindingPatternKind::BindingIdentifier(ident) => {
-                if let Some(binding) = self.binding_by_symbol.get(&ident.symbol_id()).copied() {
+                if let Some(binding) = self.binding_for_symbol(ident.symbol_id()) {
                     self.edge(from, binding, kind);
                 }
             }
@@ -680,12 +734,12 @@ impl<'s, 'a> Builder<'s, 'a> {
                 (FlowNodeKind::Member, Some(member.field.name.to_string()))
             }
             AstKind::CallExpression(call) => {
-                self.record_call(id, call.span, &call.callee, &call.arguments, false);
-                (FlowNodeKind::Call, Some(self.text(call.callee.span())))
+                let callee = self.record_call(id, call.span, &call.callee, &call.arguments, false);
+                (FlowNodeKind::Call, Some(callee))
             }
             AstKind::NewExpression(call) => {
-                self.record_call(id, call.span, &call.callee, &call.arguments, true);
-                (FlowNodeKind::Call, Some(self.text(call.callee.span())))
+                let callee = self.record_call(id, call.span, &call.callee, &call.arguments, true);
+                (FlowNodeKind::Call, Some(callee))
             }
             AstKind::Function(function) => (
                 FlowNodeKind::Function,
@@ -788,7 +842,7 @@ impl<'s, 'a> Builder<'s, 'a> {
         callee: &Expression<'a>,
         arguments: &[Argument<'a>],
         is_new: bool,
-    ) {
+    ) -> String {
         let call_node = self.node(span);
         let callee_fact = match callee.get_inner_expression() {
             Expression::StaticMemberExpression(member) if !is_new => {
@@ -844,6 +898,7 @@ impl<'s, 'a> Builder<'s, 'a> {
         }
 
         let function = self.enclosing_fn(id);
+        let callee_text = self.text(callee.span());
         self.flow
             .call_by_node
             .insert(call_node, self.flow.calls.len() as u32);
@@ -851,11 +906,12 @@ impl<'s, 'a> Builder<'s, 'a> {
             range: range_of(span),
             function,
             callee: callee_fact,
-            callee_text: self.text(callee.span()),
+            callee_text: callee_text.clone(),
             args,
             is_new,
             is_jsx: false,
         });
+        callee_text
     }
 
     /// `<Component />` calls `Component`.
