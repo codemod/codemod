@@ -33,7 +33,7 @@ async function __one(path: string, text: string): Promise<__FileOutcome> {
   const handle = __fileHandle(path, text, __lang);
   let output: unknown;
   try {
-    output = await __cb(handle.file);
+    output = __plain(await __cb(handle.file));
     if (output !== undefined) __checkJson(output, "return value");
   } catch (error) {
     return { ok: false, error: __describe(error) };
@@ -58,7 +58,7 @@ export function __runBatch(paths: string[], texts: string[]): Promise<string> {
 /** Run a function step: call it with no arguments; never throws. */
 export async function __runStep(): Promise<string> {
   try {
-    let result = await __cb();
+    let result = __plain(await __cb());
     if (result === undefined) result = null;
     __checkJson(result, "the step's result");
     return JSON.stringify({ ok: true, result });
@@ -81,12 +81,16 @@ export async function __runGraph(): Promise<string> {
   }
 }
 
-/** Graph nodes and edges (class instances with toJSON) into plain values. */
+/**
+ * Class instances with toJSON into plain values: graph nodes and edges,
+ * syntax nodes (their keys) and lookups (their edges, nodes as keys).
+ */
 function __plain(value: unknown): unknown {
-  if (value && typeof value === "object") {
+  // A Date stays a Date, so the JSON check can say what to do with it.
+  if (value && typeof value === "object" && !(value instanceof Date)) {
     const prototype = Object.getPrototypeOf(value);
     if ("toJSON" in value && typeof value.toJSON === "function" && prototype !== Object.prototype) {
-      return value.toJSON();
+      return __plain(value.toJSON());
     }
     if (Array.isArray(value)) return value.map(__plain);
     if (prototype === Object.prototype) {
@@ -129,7 +133,7 @@ export function __reduceEnd(): string {
 /** Call the function with arguments (a JSON array): a shard function. Never throws. */
 export async function __runCall(args: string): Promise<string> {
   try {
-    let result = await __cb(...(JSON.parse(args) as unknown[]));
+    let result = __plain(await __cb(...(JSON.parse(args) as unknown[])));
     if (result === undefined) result = null;
     __checkJson(result, "the function's result");
     return JSON.stringify({ ok: true, result });

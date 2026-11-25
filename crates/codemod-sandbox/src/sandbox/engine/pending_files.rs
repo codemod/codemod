@@ -169,6 +169,13 @@ impl PendingFiles {
         }
     }
 
+    /// A file's text as the step started: what analyses answer for, even
+    /// after the step changed it.
+    pub fn text_at_step_start(&self, path: &Path) -> std::io::Result<String> {
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        self.read_base(&key)
+    }
+
     /// A file's text before the step changed it.
     fn read_base(&self, key: &Path) -> std::io::Result<String> {
         match self.base.as_ref().and_then(|base| (base.0)(key)) {

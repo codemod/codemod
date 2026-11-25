@@ -15,8 +15,14 @@
 //!
 //! `join({ from, to, meta })` makes a lookup from two patterns matched across
 //! the workspace, with an edge wherever both capture the same text.
+//!
+//! Across steps, nodes are their keys. A lookup or a crawl's result returned
+//! from a step becomes JSON (`toJSON()`), and `lookup(result)` in a later
+//! step makes it a lookup again, its keys resolved against that step's
+//! files. Anywhere a node goes in (`get`, `crawl`'s start, `lookup`'s
+//! edges), its key goes too.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use rquickjs::{
@@ -24,10 +30,10 @@ use rquickjs::{
     IntoJs, JsLifetime, Object, Promise, Result, Value,
 };
 
-use super::sg_node::{root_for_path, SgNodeRjs, SgRootInner};
+use super::sg_node::{parse_node_key, root_for_path, root_for_text, SgNodeRjs, SgRootInner};
 use super::utils::{convert_matcher, JsMatcherRjs};
 use super::{DefaultParseLanguage, ParseSemanticProvider};
-use crate::sandbox::engine::execution_engine::TargetDirectory;
+use crate::sandbox::engine::execution_engine::{JssgFileChanges, TargetDirectory};
 
 /// The languages an analysis covers: one provider each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,7 +165,7 @@ impl<'js> Lookup<'js> {
                 None => Value::new_undefined(ctx.clone()),
             });
         };
-        let class = node_from_value(ctx, node, kind.name())?;
+        let class = as_node(ctx, node, kind.name())?;
         let sg = class.borrow();
         let node_family = Family::from_lang(&sg.language_name());
         if node_family != Some(family) {
@@ -342,6 +348,78 @@ impl<'js> Lookup<'js> {
     pub fn to_string_tag(&self) -> &'static str {
         "Lookup"
     }
+
+    /// The lookup as JSON, so a step can return it: nodes become their keys.
+    /// `{ lookup: [[from, to, meta], ...], nodeFields }` for edges, or
+    /// `{ reached: [[node, edge | null], ...], nodeFields }` for a crawl's
+    /// result, where `nodeFields` names the edge fields that held nodes.
+    /// `lookup(json)` in a later step makes it a lookup again.
+    #[qjs(rename = "toJSON")]
+    pub fn to_json(&self, ctx: Ctx<'js>) -> Result<Object<'js>> {
+        if let Some((kind, _)) = self.builtin {
+            return Err(Exception::throw_type(
+                &ctx,
+                &format!(
+                    "{}: a built-in lookup can't be a step's result; it answers node by node \
+                     in the step that asks. Ask for it again in the later step.",
+                    kind.name()
+                ),
+            ));
+        }
+        let mut node_fields: BTreeSet<String> = BTreeSet::new();
+        let list = Array::new(ctx.clone())?;
+        for entry in &self.entries {
+            let from = key_of(&ctx, &entry.node, "toJSON()")?;
+            if self.reached {
+                let row = Array::new(ctx.clone())?;
+                row.set(0, from)?;
+                match entry.value.as_object() {
+                    Some(edge) => row.set(1, plain_edge(&ctx, edge, None, &mut node_fields)?)?,
+                    None => row.set(1, Value::new_null(ctx.clone()))?,
+                }
+                list.set(list.len(), row)?;
+                continue;
+            }
+            for edge in array_items(&entry.value)? {
+                let edge: Object = edge.get()?;
+                let to = key_of(&ctx, &edge.get::<_, Value>("node")?, "toJSON()")?;
+                let row = Array::new(ctx.clone())?;
+                row.set(0, from.clone())?;
+                row.set(1, to)?;
+                row.set(2, plain_edge(&ctx, &edge, Some("node"), &mut node_fields)?)?;
+                list.set(list.len(), row)?;
+            }
+        }
+        let json = Object::new(ctx.clone())?;
+        json.set(if self.reached { "reached" } else { "lookup" }, list)?;
+        json.set("nodeFields", node_fields.into_iter().collect::<Vec<_>>())?;
+        Ok(json)
+    }
+}
+
+/// An edge's fields with nodes as their keys, leaving out `skip`; records
+/// which fields held nodes.
+fn plain_edge<'js>(
+    ctx: &Ctx<'js>,
+    edge: &Object<'js>,
+    skip: Option<&str>,
+    node_fields: &mut BTreeSet<String>,
+) -> Result<Object<'js>> {
+    let plain = Object::new(ctx.clone())?;
+    for prop in edge.props::<String, Value>() {
+        let (name, value) = prop?;
+        if Some(name.as_str()) == skip {
+            continue;
+        }
+        match Class::<SgNodeRjs>::from_value(&value) {
+            Ok(node) => {
+                plain.set(name.as_str(), node.borrow().key())?;
+                node_fields.insert(name);
+            }
+            Err(_) => plain.set(name, value)?,
+        }
+    }
+    Ok(plain)
 }
 
 /// Freeze each stored edge list, so a lookup reads the same in every step.
@@ -371,10 +449,107 @@ fn iterator_over<'js>(ctx: &Ctx<'js>, items: Vec<Value<'js>>) -> Result<Value<'j
     values.call((rquickjs::function::This(array),))
 }
 
+/// A node's key: from the node, or a key itself (`node.key()`, or a node an
+/// earlier step returned).
 fn key_of<'js>(ctx: &Ctx<'js>, node: &Value<'js>, what: &str) -> Result<String> {
+    if let Some(key) = node.as_string() {
+        let key = key.to_string()?;
+        if parse_node_key(&key).is_none() {
+            return Err(not_a_key(ctx, &key, what));
+        }
+        return Ok(key);
+    }
     let class = node_from_value(ctx, node, what)?;
     let key = class.borrow().key();
     Ok(key)
+}
+
+/// A node, or the node a key names in this step's files.
+fn as_node<'js>(
+    ctx: &Ctx<'js>,
+    value: &Value<'js>,
+    what: &str,
+) -> Result<Class<'js, SgNodeRjs<'js>>> {
+    match value.as_string() {
+        Some(key) => {
+            let node = Nodes::default().resolve(ctx, &key.to_string()?, what)?;
+            Class::instance(ctx.clone(), node)
+        }
+        None => node_from_value(ctx, value, what),
+    }
+}
+
+fn not_a_key(ctx: &Ctx<'_>, key: &str, what: &str) -> rquickjs::Error {
+    Exception::throw_type(
+        ctx,
+        &format!("{what}: \"{key}\" is not a node or a node.key() (file:start-end:kind)"),
+    )
+}
+
+/// A file's text as the step started: in a dry run, as earlier steps left
+/// it in memory.
+fn step_text(ctx: &Ctx<'_>, path: &std::path::Path) -> Option<String> {
+    let pending = ctx
+        .userdata::<JssgFileChanges>()
+        .and_then(|changes| changes.pending.clone());
+    match pending {
+        Some(pending) => pending.text_at_step_start(path).ok(),
+        None => std::fs::read_to_string(path).ok(),
+    }
+}
+
+/// Turns keys back into nodes, parsing each file once.
+#[derive(Default)]
+struct Nodes {
+    roots: HashMap<String, Option<Arc<SgRootInner>>>,
+}
+
+impl Nodes {
+    fn resolve<'js>(&mut self, ctx: &Ctx<'js>, key: &str, what: &str) -> Result<SgNodeRjs<'js>> {
+        let Some((file, start, end, kind)) = parse_node_key(key) else {
+            return Err(not_a_key(ctx, key, what));
+        };
+        let root = self
+            .roots
+            .entry(file.to_string())
+            .or_insert_with(|| {
+                let path = std::path::Path::new(file);
+                let text = step_text(ctx, path)?;
+                root_for_text(
+                    step_provider(ctx),
+                    path,
+                    text,
+                    target_directory(ctx).as_deref(),
+                )
+            })
+            .clone();
+        let gone = |why: &str| {
+            Exception::throw_type(
+                ctx,
+                &format!("{what}: no node for \"{key}\" in this step's files: {why}"),
+            )
+        };
+        let root = root.ok_or_else(|| gone("the file can't be read"))?;
+        SgNodeRjs::node_with(&root, start, end, kind)
+            .ok_or_else(|| gone("the file changed after the step that made the key"))
+    }
+
+    fn value<'js>(&mut self, ctx: &Ctx<'js>, key: &str, what: &str) -> Result<Value<'js>> {
+        self.resolve(ctx, key, what)?.into_js(ctx)
+    }
+
+    /// A node as given, or the node its key names.
+    fn node<'js>(
+        &mut self,
+        ctx: &Ctx<'js>,
+        value: Value<'js>,
+        what: &str,
+    ) -> Result<Option<Value<'js>>> {
+        if let Some(key) = value.as_string() {
+            return self.value(ctx, &key.to_string()?, what).map(Some);
+        }
+        Ok(Class::<SgNodeRjs>::from_value(&value).ok().map(|_| value))
+    }
 }
 
 /// The items of an iterable (an array, a Set, a generator).
@@ -534,24 +709,50 @@ fn node_from_value<'js>(
     })
 }
 
-/// `lookup(edges)`: a lookup from `[from, to, meta?]` edges.
+/// `lookup(edges)`: a lookup from `[from, to, meta?]` edges, where `from`
+/// and `to` are nodes or their keys; or `lookup(json)`, a lookup or a
+/// crawl's result an earlier step returned, made a lookup again.
 pub(crate) fn lookup_rjs<'js>(ctx: Ctx<'js>, edges: Value<'js>) -> Result<Lookup<'js>> {
+    let mut nodes = Nodes::default();
+    if let Some(json) = edges.as_object().filter(|_| edges.as_array().is_none()) {
+        let node_fields: Option<Vec<String>> = json.get("nodeFields")?;
+        let node_fields = node_fields.unwrap_or_default();
+        let reached: Value = json.get("reached")?;
+        if !reached.is_undefined() {
+            return reached_from_json(&ctx, &mut nodes, &reached, &node_fields);
+        }
+        let list: Value = json.get("lookup")?;
+        if !list.is_undefined() {
+            return edges_lookup(&ctx, &mut nodes, &list, &node_fields);
+        }
+    }
+    edges_lookup(&ctx, &mut nodes, &edges, &[])
+}
+
+fn edges_lookup<'js>(
+    ctx: &Ctx<'js>,
+    nodes: &mut Nodes,
+    edges: &Value<'js>,
+    node_fields: &[String],
+) -> Result<Lookup<'js>> {
     let mut entries: Vec<Stored<'js>> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
-    for (n, item) in iterate_values(&ctx, &edges, "lookup(edges)")?
+    for (n, item) in iterate_values(ctx, edges, "lookup(edges)")?
         .into_iter()
         .enumerate()
     {
-        let bad =
-            |what: &str| Exception::throw_type(&ctx, &format!("lookup(edges): edge {n} {what}"));
+        let what = format!("lookup(edges): edge {n}");
+        let bad = |why: &str| Exception::throw_type(ctx, &format!("{what} {why}"));
         let parts = item
             .as_array()
             .ok_or_else(|| bad("must be [from, to] or [from, to, meta]"))?;
-        let from: Value = parts.get(0)?;
-        let to: Value = parts.get(1)?;
         let meta: Value = parts.get(2)?;
-        let from_key = node_key_or(&ctx, &from, || bad("has a `from` that is not a node"))?;
-        node_key_or(&ctx, &to, || bad("has a `to` that is not a node"))?;
+        let from_key = key_of(ctx, &parts.get(0)?, &what)
+            .map_err(|_| bad("has a `from` that is not a node or a node's key"))?;
+        key_of(ctx, &parts.get(1)?, &what)
+            .map_err(|_| bad("has a `to` that is not a node or a node's key"))?;
+        let from = nodes.node(ctx, parts.get(0)?, &what)?.expect("checked");
+        let to = nodes.node(ctx, parts.get(1)?, &what)?.expect("checked");
         let edge = Object::new(ctx.clone())?;
         edge.set("node", to)?;
         if let Some(meta) = meta.as_object() {
@@ -562,6 +763,12 @@ pub(crate) fn lookup_rjs<'js>(ctx: Ctx<'js>, edges: Value<'js>) -> Result<Lookup
                         "has `{name}` in its meta, and the edge sets it"
                     )));
                 }
+                let value = match value.as_string() {
+                    Some(key) if node_fields.contains(&name) => {
+                        nodes.value(ctx, &key.to_string()?, &what)?
+                    }
+                    _ => value,
+                };
                 edge.set(name, value)?;
             }
         } else if !meta.is_undefined() && !meta.is_null() {
@@ -581,22 +788,54 @@ pub(crate) fn lookup_rjs<'js>(ctx: Ctx<'js>, edges: Value<'js>) -> Result<Lookup
         let list = entries[slot].value.as_array().cloned().expect("an array");
         list.set(list.len(), edge)?;
     }
-    freeze_all(&ctx, &entries)?;
+    freeze_all(ctx, &entries)?;
     Ok(Lookup::stored(entries, index, false))
 }
 
-fn node_key_or<'js>(
+/// A crawl's result an earlier step returned: `[[node, edge | null], ...]`.
+fn reached_from_json<'js>(
     ctx: &Ctx<'js>,
-    value: &Value<'js>,
-    bad: impl FnOnce() -> rquickjs::Error,
-) -> Result<String> {
-    match Class::<SgNodeRjs>::from_value(value) {
-        Ok(class) => Ok(class.borrow().key()),
-        Err(_) => {
-            let _ = ctx;
-            Err(bad())
+    nodes: &mut Nodes,
+    rows: &Value<'js>,
+    node_fields: &[String],
+) -> Result<Lookup<'js>> {
+    let mut entries: Vec<Stored<'js>> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for (n, row) in iterate_values(ctx, rows, "lookup(reached)")?
+        .into_iter()
+        .enumerate()
+    {
+        let what = format!("lookup(reached): node {n}");
+        let bad = || Exception::throw_type(ctx, &format!("{what} must be [node, edge | null]"));
+        let row = row.as_array().ok_or_else(bad)?;
+        let key = key_of(ctx, &row.get(0)?, &what)?;
+        let node = nodes.node(ctx, row.get(0)?, &what)?.ok_or_else(bad)?;
+        let edge: Value = row.get(1)?;
+        let value = match edge.as_object() {
+            Some(edge) => {
+                let reached = Object::new(ctx.clone())?;
+                for prop in edge.props::<String, Value>() {
+                    let (name, value) = prop?;
+                    let value = match value.as_string() {
+                        Some(key) if node_fields.contains(&name) => {
+                            nodes.value(ctx, &key.to_string()?, &what)?
+                        }
+                        _ => value,
+                    };
+                    reached.set(name, value)?;
+                }
+                reached.set("node", node.clone())?;
+                reached.into_value()
+            }
+            None => Value::new_null(ctx.clone()),
+        };
+        if index.contains_key(&key) {
+            continue;
         }
+        index.insert(key, entries.len());
+        entries.push(Stored { node, value });
     }
+    Ok(Lookup::stored(entries, index, true))
 }
 
 /// `crawl(lookups, start, { stopAt })`: every node reached from `start`
@@ -630,10 +869,18 @@ fn crawl<'js>(
     };
     for candidate in candidates {
         let lookup = Class::<Lookup>::from_value(&candidate).map_err(|_| {
+            let from_a_step = candidate
+                .as_object()
+                .is_some_and(|o| o.contains_key("lookup").unwrap_or(false));
             Exception::throw_type(
                 ctx,
-                "crawl(lookups): each lookup must be a built-in lookup or one lookup(edges) made. \
-                 Make a Map into one with lookup([...map].flatMap(([from, tos]) => tos.map((to) => [from, to]))).",
+                if from_a_step {
+                    "crawl(lookups): this is a lookup an earlier step returned, as JSON. \
+                     Make it a lookup again with lookup(result)."
+                } else {
+                    "crawl(lookups): each lookup must be a built-in lookup or one lookup(edges) made. \
+                     Make a Map into one with lookup([...map].flatMap(([from, tos]) => tos.map((to) => [from, to])))."
+                },
             )
         })?;
         let lookup = lookup.borrow().clone();
@@ -652,7 +899,7 @@ fn crawl<'js>(
         walk.push(lookup);
     }
 
-    let starts = if Class::<SgNodeRjs>::from_value(&start).is_ok() {
+    let starts = if Class::<SgNodeRjs>::from_value(&start).is_ok() || start.is_string() {
         vec![start]
     } else {
         iterate_values(ctx, &start, "crawl(lookups, start)")?
@@ -671,11 +918,15 @@ fn crawl<'js>(
     let mut entries: Vec<Stored<'js>> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut queue: VecDeque<(String, Value<'js>)> = VecDeque::new();
+    let mut nodes = Nodes::default();
     for node in starts {
         let key = key_of(ctx, &node, "crawl(lookups, start)")?;
         if index.contains_key(&key) {
             continue;
         }
+        let node = nodes
+            .node(ctx, node, "crawl(lookups, start)")?
+            .expect("a node or a key");
         index.insert(key.clone(), entries.len());
         entries.push(Stored {
             node: node.clone(),

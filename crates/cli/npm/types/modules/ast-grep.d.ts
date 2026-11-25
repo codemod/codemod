@@ -120,6 +120,13 @@ declare module "codemod:ast-grep" {
     key(): string;
 
     /**
+     * The node in JSON: its key. A node a step returns is its key in the
+     * step's result; analyses in later steps take the key where they take a
+     * node, and `root.nodeByKey(key)` makes it a node again.
+     */
+    toJSON(): string;
+
+    /**
      * Whether `other` is the same syntax node (same file, range and kind),
      * even when it comes from another query or root. Same as comparing `key()`.
      */
@@ -1577,16 +1584,46 @@ declare module "codemod:ast-grep" {
   export type Edge<To = SgNode, Meta = {}> = { node: To } & Meta;
 
   /**
+   * A node's key, `node.key()`. Across steps, a node is its key: anywhere an
+   * analysis takes a node, its key works too.
+   */
+  export type NodeKey = string;
+
+  /** A lookup row in JSON: `[from, to, meta]` for edges, `[node, edge | null]` for a crawl. */
+  export type LookupRow = ReadonlyArray<NodeKey | { readonly [field: string]: unknown } | null>;
+
+  /**
+   * A lookup as a step's result, nodes as keys: `lookup` holds
+   * `[from, to, meta]` edges and `nodeFields` names the meta fields that
+   * held nodes. `lookup(json)` in a later step makes it a lookup again.
+   */
+  export interface LookupJSON {
+    readonly lookup: ReadonlyArray<LookupRow>;
+    readonly nodeFields: ReadonlyArray<string>;
+  }
+
+  /** A crawl's result as a step's result: `[node, edge | null]` rows. */
+  export interface ReachedJSON {
+    readonly reached: ReadonlyArray<LookupRow>;
+    readonly nodeFields: ReadonlyArray<string>;
+  }
+
+  /**
    * A read-only map from a node to the edges that leave it. Nodes match by
-   * syntax node (`node.key()`), not by object, so a node from another query
-   * finds its edges. `get(node)` is `undefined` when no edge leaves it.
+   * syntax node (`node.key()`), not by object, so a node from another query,
+   * or its key, finds its edges. `get(node)` is `undefined` when no edge
+   * leaves it.
    *
    * Built-in lookups (`callGraph`, `dataflow`, `symbols`) are answered node
    * by node and can't be listed: `size`, `keys()` and iteration throw.
-   * Lookups from `lookup()` and `join()` list their edges, as a Map does.
+   * Lookups from `lookup()` and `join()` list their edges, as a Map does,
+   * and can be a step's result (`toJSON()`).
    */
   export interface Lookup<From = SgNode, To = SgNode, Meta = {}>
     extends ReadonlyMap<From, ReadonlyArray<Edge<To, Meta>>> {
+    get(node: From | NodeKey): ReadonlyArray<Edge<To, Meta>> | undefined;
+    has(node: From | NodeKey): boolean;
+    toJSON(): LookupJSON;
     readonly [Symbol.toStringTag]: "Lookup";
   }
 
@@ -1641,17 +1678,31 @@ declare module "codemod:ast-grep" {
   export function entryPoints(language: AnalysisLanguage): SgNode[];
 
   /**
-   * A lookup from `[from, to, meta?]` edges. Both ends must be nodes; the
-   * error names the edge that is not. Built once, read-only.
+   * A lookup from `[from, to, meta?]` edges. Both ends are nodes or their
+   * keys (a key resolves against this step's files); the error names the
+   * edge that is neither. Built once, read-only.
    *
    * @example
    * ```ts
    * const renders = lookup(pages.map((page) => [page, page.find("<$C $$$/>")!, { via: "jsx" }]));
    * ```
    */
-  export function lookup<From extends SgNode = SgNode, To extends SgNode = SgNode, Meta extends object = {}>(
-    edges: Iterable<readonly [From, To] | readonly [From, To, Meta]>,
-  ): Lookup<From, To, Meta>;
+  export function lookup<Meta extends object = {}>(
+    edges: Iterable<readonly [SgNode | NodeKey, SgNode | NodeKey] | readonly [SgNode | NodeKey, SgNode | NodeKey, Meta]>,
+  ): Lookup<SgNode, SgNode, Meta>;
+  /**
+   * A lookup an earlier step returned, made a lookup again: its keys name
+   * nodes in this step's files, and fail if the file changed since.
+   *
+   * @example
+   * ```ts
+   * const routes = await step(() => join({ ... }));
+   * await step(async () => crawl([lookup(routes), callees], start));
+   * ```
+   */
+  export function lookup<Meta extends object = any>(json: LookupJSON): Lookup<SgNode, SgNode, Meta>;
+  /** A crawl's result an earlier step returned, made one again. */
+  export function lookup<Meta extends object = any>(json: ReachedJSON): ReachedMap<Meta>;
 
   /** One side of a `join`. */
   export interface JoinSide<M extends TypesMap = TypesMap> {
@@ -1701,15 +1752,24 @@ declare module "codemod:ast-grep" {
   /** How `crawl` reached a node: the edge, and the node it left from. */
   export type Reached<Meta = {}> = Edge<SgNode, Meta> & { from: SgNode };
 
+  /** What `crawl` reached: each node, and the edge that reached it (null for a start). */
+  export interface ReachedMap<Meta = {}> extends ReadonlyMap<SgNode, Reached<Meta> | null> {
+    get(node: SgNode | NodeKey): Reached<Meta> | null | undefined;
+    has(node: SgNode | NodeKey): boolean;
+    toJSON(): ReachedJSON;
+  }
+
   /**
    * Every node reached from `start` through the lookups' edges, breadth
    * first, each once. Maps each node to the edge that reached it first, and
    * each start node to `null`. Never walks past a node in `stopAt` (it is
-   * still reached). Takes lookups only: make a Map into one with `lookup()`.
+   * still reached). Takes lookups only: make a Map into one with `lookup()`,
+   * and a lookup an earlier step returned with `lookup(result)`. Start and
+   * `stopAt` take nodes or their keys.
    */
   export function crawl<Meta = {}>(
     lookups: Lookup<SgNode, SgNode, Meta> | ReadonlyArray<Lookup<SgNode, SgNode, any>>,
-    start: SgNode | Iterable<SgNode>,
-    options?: { stopAt?: Iterable<SgNode> },
-  ): Promise<ReadonlyMap<SgNode, Reached<Meta> | null>>;
+    start: SgNode | NodeKey | Iterable<SgNode | NodeKey>,
+    options?: { stopAt?: Iterable<SgNode | NodeKey> },
+  ): Promise<ReachedMap<Meta>>;
 }

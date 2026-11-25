@@ -93,7 +93,12 @@ declare module "codemod:workflow" {
             ? NotJson<"a function">
             : T extends ReadonlySet<unknown>
               ? NotJson<"a Set: use an array">
-              : T extends ReadonlyMap<unknown, unknown>
+              : T extends Date
+                ? NotJson<"a Date: use date.toISOString()">
+                : // A syntax node (its key) or a lookup (its edges): JSON by toJSON.
+                  T extends { toJSON(): unknown }
+                  ? T
+                  : T extends ReadonlyMap<unknown, unknown>
                 ? NotJson<"a Map: use a plain object">
                 : T extends Date
                   ? NotJson<"a Date: use date.toISOString()">
@@ -103,9 +108,14 @@ declare module "codemod:workflow" {
                       ? { [K in keyof T]: JsonCompatible<T[K]> }
                       : NotJson<"not JSON">;
 
-  /** Step results are deeply frozen. */
+  /** Step results are JSON (a value with `toJSON()` is what it returns), deeply frozen. */
   export type Frozen<T> = T extends (...args: never[]) => unknown
     ? T
+    : T extends Date
+      ? T
+      : // What the step recorded: a node's key, a lookup's JSON.
+        T extends { toJSON(): infer J }
+        ? Frozen<J>
     : T extends readonly (infer U)[]
       ? readonly Frozen<U>[]
       : T extends object

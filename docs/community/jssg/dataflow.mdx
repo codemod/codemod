@@ -311,7 +311,8 @@ const changed = items.mutations({ after: auditCall }).some((m) => m.confidence !
 
 Each query wraps nodes in new objects, and other files in new roots, so `===` and `id()` do not
 match across answers. `node.key()` is a string (file, range, kind) that does; `a.equals(b)` compares
-keys. Use keys in a `Set` to edit each function once.
+keys. Use keys in a `Set` or a `Map` to edit each function once; a `Map` keyed by node objects
+never finds a node that came from another query.
 
 ## Rewrite imports: module resolution
 
@@ -434,6 +435,28 @@ const dead = exported.filter((fn) => !live.has(fn));
 
 `crawl()` takes lookups only. To crawl edges you hold in a `Map`, make it one with
 `lookup([...map].flatMap(([from, tos]) => tos.map((to) => [from, to])))`.
+
+### Across steps: nodes are keys
+
+A step's result is JSON, so a node a step returns is its key, and a lookup or a crawl's result is
+its edges with keys for nodes. Anywhere an analysis takes a node (`get()`, `crawl()`'s start and
+`stopAt`, `lookup()`'s edges), its key works too. `lookup(result)` makes a returned lookup or crawl
+result a lookup again:
+
+```ts
+const routes = await step(() => join({ /* ... */ }));          // a lookup, as JSON
+const reached = await step(() => crawl([lookup(routes), callees], startKey));
+
+await step(forEachFile({ language: "typescript" }, (file) => {
+  const live = lookup(reached);                                  // a crawl's result again
+  const root = parse(file).root();
+  // ... edit what live.has(node) says was reached
+}));
+```
+
+Keys name nodes in the files as the step starts. A key from before an earlier step changed its file
+no longer names a node, and using it fails with the key in the message; find the node again after
+the edit. In a dry run, keys name nodes as earlier steps left the files in memory.
 
 ## Cookbook
 

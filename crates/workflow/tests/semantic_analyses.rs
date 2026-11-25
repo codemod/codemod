@@ -128,3 +128,142 @@ export default async function main() {
         json!(["path(\"orders/\", views.order_list) -> order_list (django-url)"])
     );
 }
+
+#[test]
+fn a_node_a_step_returns_is_its_key_and_a_later_step_asks_about_it() {
+    let h = harness();
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, callGraph } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "src/a.ts" }, (file) =>
+    parse(file).root().find("function run() { $$$ }"),
+  ));
+  const run = found.outputs[0];
+  return await step(() => ({
+    isKey: typeof run === "string" && run.endsWith(":function_declaration"),
+    callees: callGraph("typescript").callees.get(run).map((edge) => edge.site.text()),
+  }));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "isKey": true, "callees": ["helper()"] })
+    );
+}
+
+#[test]
+fn a_lookup_a_step_returns_is_a_lookup_again_in_a_later_step() {
+    let h = harness();
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { join, lookup } from "codemod/ast-grep";
+export default async function main() {
+  const exports = await step(() =>
+    join({
+      language: "typescript",
+      from: { find: "export function $F() { $$$ }", on: "$F" },
+      to: { find: "function $F() { $$$ }", on: "$F" },
+      meta: { via: "export" },
+    }),
+  );
+  return await step(() =>
+    [...lookup(exports)].map(([from, [edge]]) =>
+      [from.kind(), edge.node.kind(), edge.site.kind(), edge.name, edge.via].join(" "),
+    ).sort(),
+  );
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!([
+            "export_statement function_declaration export_statement helper export",
+            "export_statement function_declaration export_statement run export",
+        ])
+    );
+}
+
+#[test]
+fn a_crawl_result_a_step_returns_keeps_where_each_node_came_from() {
+    let h = harness();
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, callGraph, crawl, lookup } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "src/a.ts" }, (file) =>
+    parse(file).root().find("function run() { $$$ }"),
+  ));
+  const reached = await step(() => crawl(callGraph("typescript").callees, found.outputs[0]));
+  return await step(() => {
+    const name = (node) => node.text().match(/function (\w+)/)[1];
+    return [...lookup(reached)].map(([node, edge]) =>
+      edge ? `${name(edge.from)} -> ${name(node)} at ${edge.site.text()}` : `start ${name(node)}`,
+    );
+  });
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!(["start run", "run -> helper at helper()"])
+    );
+}
+
+#[test]
+fn a_key_from_before_its_file_changed_fails_and_says_so() {
+    let h = harness();
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, lookup } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "src/a.ts" }, (file) =>
+    parse(file).root().find("function run() { $$$ }"),
+  ));
+  await step(forEachFile({ include: "src/a.ts" }, (file) => {
+    file.write(`// moved\n${file.text}`);
+  }));
+  const run = found.outputs[0];
+  return await step(() => lookup([[run, run]]).size);
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("no node for")
+            && error.contains("the file changed after the step that made the key"),
+        "{error}"
+    );
+}
+
+#[test]
+fn in_a_dry_run_keys_name_nodes_as_earlier_steps_left_the_files() {
+    let h = harness();
+    let report = h.dry_run(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, lookup } from "codemod/ast-grep";
+export default async function main() {
+  await step(forEachFile({ include: "src/a.ts" }, (file) => {
+    file.write(`// moved\n${file.text}`);
+  }));
+  const found = await step(forEachFile({ include: "src/a.ts" }, (file) =>
+    parse(file).root().find("function run() { $$$ }"),
+  ));
+  const run = found.outputs[0];
+  return await step(() => [...lookup([[run, run]]).keys()].map((node) => node.text().split("\n")[0]));
+}
+"#,
+    );
+    assert_eq!(output(&report).unwrap(), json!(["function run() {"]));
+    assert!(h.read("src/a.ts").starts_with("import"));
+}

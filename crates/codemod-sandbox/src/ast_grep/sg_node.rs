@@ -337,54 +337,19 @@ impl<'js> SgRootRjs<'js> {
     /// workflow steps and turned back into nodes here.
     #[qjs(rename = "nodeByKey")]
     pub fn node_by_key(&self, ctx: Ctx<'js>, key: String) -> Result<Value<'js>> {
-        let malformed = || {
-            Exception::throw_type(
+        let Some((file, start, end, kind)) = parse_node_key(&key) else {
+            return Err(Exception::throw_type(
                 &ctx,
                 &format!("nodeByKey(key): `{key}` is not a node.key() (file:start-end:kind)"),
-            )
-        };
-        let (rest, kind) = key.rsplit_once(':').ok_or_else(malformed)?;
-        let (file, range) = rest.rsplit_once(':').ok_or_else(malformed)?;
-        let (start, end) = range.split_once('-').ok_or_else(malformed)?;
-        let (Ok(start), Ok(end)) = (start.parse::<usize>(), end.parse::<usize>()) else {
-            return Err(malformed());
+            ));
         };
         if file != self.inner.canonical_filename() {
             return Ok(Value::new_null(ctx));
         }
-        // The innermost node with the range, then outward through nodes with
-        // the same range (`f()` and its expression statement) to the kind.
-        let mut current = self.inner.grep.root();
-        loop {
-            let inner = current.children().find(|child| {
-                let r = child.range();
-                r.start <= start && r.end >= end
-            });
-            match inner {
-                Some(child) => current = child,
-                None => break,
-            }
+        match SgNodeRjs::node_with(&self.inner, start, end, kind) {
+            Some(node) => node.into_js(&ctx),
+            None => Ok(Value::new_null(ctx)),
         }
-        let mut candidate = Some(current);
-        while let Some(node) = candidate {
-            let r = node.range();
-            if r.start != start || r.end != end {
-                break;
-            }
-            if node.kind() == kind {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                return SgNodeRjs {
-                    root: Arc::clone(&self.inner),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                }
-                .into_js(&ctx);
-            }
-            candidate = node.parent();
-        }
-        Ok(Value::new_null(ctx))
     }
 
     /// The specifiers other packages can import this file with (its
@@ -1648,6 +1613,14 @@ impl<'js> SgNodeRjs<'js> {
         )
     }
 
+    /// The node in JSON, as in a step's result: its key. A later step makes
+    /// it a node again with `root.nodeByKey(key)`, or passes the key where
+    /// an analysis takes a node.
+    #[qjs(rename = "toJSON")]
+    pub fn to_json(&self) -> String {
+        self.key()
+    }
+
     /// Whether `other` is this node or inside it (same file, its range within
     /// this one's), even when it comes from another query or root. False for
     /// anything but an SgNode.
@@ -2472,6 +2445,57 @@ impl<'js> SgNodeRjs<'js> {
     }
 }
 
+/// The parts of a `node.key()`: file, start, end and kind.
+pub(crate) fn parse_node_key(key: &str) -> Option<(&str, usize, usize, &str)> {
+    let (rest, kind) = key.rsplit_once(':')?;
+    let (file, range) = rest.rsplit_once(':')?;
+    let (start, end) = range.split_once('-')?;
+    Some((file, start.parse().ok()?, end.parse().ok()?, kind))
+}
+
+impl SgNodeRjs<'_> {
+    /// The node in `root` with this range and kind: the innermost node with
+    /// the range, then outward through nodes with the same range (`f()` and
+    /// its expression statement) to the kind.
+    pub(crate) fn node_with(
+        root: &Arc<SgRootInner>,
+        start: usize,
+        end: usize,
+        kind: &str,
+    ) -> Option<Self> {
+        let mut current = root.grep.root();
+        loop {
+            let inner = current.children().find(|child| {
+                let r = child.range();
+                r.start <= start && r.end >= end
+            });
+            match inner {
+                Some(child) => current = child,
+                None => break,
+            }
+        }
+        let mut candidate = Some(current);
+        while let Some(node) = candidate {
+            let r = node.range();
+            if r.start != start || r.end != end {
+                return None;
+            }
+            if node.kind() == kind {
+                let node_match: NodeMatch<_> = node.into();
+                let static_node_match: NodeMatch<'static, TSDoc> =
+                    unsafe { std::mem::transmute(node_match) };
+                return Some(SgNodeRjs {
+                    root: Arc::clone(root),
+                    inner_node: static_node_match,
+                    _phantom: PhantomData,
+                });
+            }
+            candidate = node.parent();
+        }
+        None
+    }
+}
+
 /// A root for a file the analyses read from disk, with the step's semantic
 /// analysis, so its nodes answer `callers()`, `callees()` and the rest.
 #[cfg(feature = "native")]
@@ -2481,6 +2505,18 @@ pub(crate) fn root_for_path(
     target_directory: Option<&std::path::Path>,
 ) -> Option<Arc<SgRootInner>> {
     let content = std::fs::read_to_string(file_path).ok()?;
+    root_for_text(provider, file_path, content, target_directory)
+}
+
+/// [`root_for_path`], for the file's text as the caller has it (in a dry
+/// run, as earlier steps left it).
+#[cfg(feature = "native")]
+pub(crate) fn root_for_text(
+    provider: Option<Arc<dyn SemanticProvider>>,
+    file_path: &std::path::Path,
+    content: String,
+    target_directory: Option<&std::path::Path>,
+) -> Option<Arc<SgRootInner>> {
     let lang = Lang::from_str(&detect_language_from_path(file_path)).ok()?;
     let root = SgRootRjs::try_new_with_semantic(
         AstGrep::new(content, lang),
