@@ -4,7 +4,7 @@
 //! modules: an imported callee is resolved by the host, which is the same
 //! import/re-export resolution that answers go-to-definition.
 
-use crate::dataflow::{CallFact, CalleeFact, FileFlow, Name};
+use crate::dataflow::{Accessor, CallFact, CalleeFact, FileFlow, Name};
 use language_core::{
     ByteRange, CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
     CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
@@ -361,10 +361,15 @@ fn origins(
                     commonjs_export(host, path, specifier, None, seen, out);
                 } else {
                     out.push(Origin::Node(path.to_path_buf(), Arc::clone(flow), current));
+                    // f(): what the functions it calls return.
+                    returned_origins(host, path, flow, current, seen, out);
                 }
                 continue;
             }
-            FlowNodeKind::Function | FlowNodeKind::Class | FlowNodeKind::Object => {
+            FlowNodeKind::Function
+            | FlowNodeKind::Class
+            | FlowNodeKind::Object
+            | FlowNodeKind::Array => {
                 out.push(Origin::Node(path.to_path_buf(), Arc::clone(flow), current));
                 continue;
             }
@@ -400,6 +405,32 @@ fn origins(
                 }
             }
         }
+        // `const [a, b] = v`, `v[1]`: the element of whatever v may be.
+        for &(array, edge) in &flow.in_edges[current as usize] {
+            if edge != FlowEdgeKind::Element {
+                continue;
+            }
+            let position = match node.kind {
+                FlowNodeKind::Member => node.name.as_deref().and_then(|n| n.parse::<u32>().ok()),
+                _ => flow.element_index.get(&(array, current)).copied(),
+            };
+            let Some(position) = position else {
+                continue;
+            };
+            let mut bases = Vec::new();
+            origins(host, path, flow, array, seen, &mut bases);
+            for base in &bases {
+                if let Origin::Node(base_path, base_flow, base_node) = base {
+                    let element = base_flow
+                        .array_elements
+                        .get(base_node)
+                        .and_then(|elements| elements.get(position as usize).copied().flatten());
+                    if let Some(element) = element {
+                        origins(host, base_path, base_flow, element, seen, out);
+                    }
+                }
+            }
+        }
         // `obj.f`, `ns.f`, `require("./m").f`, `const { f } = obj`: the
         // property of whatever the object may be.
         for &(object, edge) in &flow.in_edges[current as usize] {
@@ -431,6 +462,73 @@ fn origins(
             }
         }
     }
+}
+
+/// Calls whose returns are being followed nest at most this deep.
+const MAX_RETURN_DEPTH: usize = 8;
+
+thread_local! {
+    /// The calls returned_origins is resolving, on this thread.
+    static RETURNS_IN_PROGRESS: std::cell::RefCell<Vec<(PathBuf, u32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The values a call may return: the return values of the workspace
+/// functions it calls (`const [s, setS] = createSignal()`).
+fn returned_origins(
+    host: &dyn FlowHost,
+    path: &Path,
+    flow: &Arc<FileFlow>,
+    call_node: u32,
+    seen: &mut HashSet<(PathBuf, u32)>,
+    out: &mut Vec<Origin>,
+) {
+    let Some(&call) = flow.call_by_node.get(&call_node) else {
+        return;
+    };
+    let call = &flow.calls[call as usize];
+    if call.is_new || call.is_jsx {
+        return;
+    }
+    // f.bind(…) is f, with some arguments filled in.
+    if let CalleeFact::Member { object, property } = &call.callee {
+        if &**property == "bind" {
+            origins(host, path, flow, *object, seen, out);
+            return;
+        }
+    }
+    // Resolving the call starts a new walk (call_targets), which can come
+    // back here: f()() inside f, chains of factories. Each call is entered
+    // once per walk, and no deeper than MAX_RETURN_DEPTH.
+    let key = (path.to_path_buf(), call_node);
+    let entered = RETURNS_IN_PROGRESS.with(|calls| {
+        let mut calls = calls.borrow_mut();
+        if calls.len() >= MAX_RETURN_DEPTH || calls.contains(&key) {
+            false
+        } else {
+            calls.push(key.clone());
+            true
+        }
+    });
+    if !entered {
+        return;
+    }
+    let targets = call_targets(host, path, flow, call);
+    for (target_path, target, _) in targets {
+        let Some(target_flow) = host.flow(&target_path) else {
+            continue;
+        };
+        let function_node = target_flow.functions[target as usize].node;
+        let returned: Vec<u32> = target_flow.in_edges[function_node as usize]
+            .iter()
+            .filter(|(_, edge)| *edge == FlowEdgeKind::Return)
+            .map(|(value, _)| *value)
+            .collect();
+        for value in returned {
+            origins(host, &target_path, &target_flow, value, seen, out);
+        }
+    }
+    RETURNS_IN_PROGRESS.with(|calls| calls.borrow_mut().retain(|k| k != &key));
 }
 
 /// What a CommonJS module exports: `module.exports` as a whole (name
@@ -652,7 +750,11 @@ fn member_origins(
                     .get(node)
                     .and_then(|members| members.iter().find(|(name, _)| &**name == property));
                 if let Some((_, value)) = member {
-                    origins(host, path, flow, *value, seen, out);
+                    let accessor = flow
+                        .fn_by_node
+                        .get(value)
+                        .and_then(|f| flow.functions[*f as usize].accessor);
+                    accessor_or_value(host, path, flow, *value, accessor, seen, out);
                 }
             }
             FlowNodeKind::Class => class_member(path, flow, *node, property, host, seen, out),
@@ -692,6 +794,33 @@ fn member_origins(
     }
 }
 
+/// What reading a member gives: a plain member's value, a getter's
+/// return values, nothing for a setter.
+fn accessor_or_value(
+    host: &dyn FlowHost,
+    path: &Path,
+    flow: &Arc<FileFlow>,
+    value: u32,
+    accessor: Option<Accessor>,
+    seen: &mut HashSet<(PathBuf, u32)>,
+    out: &mut Vec<Origin>,
+) {
+    match accessor {
+        None => origins(host, path, flow, value, seen, out),
+        Some(Accessor::Set) => {}
+        Some(Accessor::Get) => {
+            let returned: Vec<u32> = flow.in_edges[value as usize]
+                .iter()
+                .filter(|(_, edge)| *edge == FlowEdgeKind::Return)
+                .map(|(source, _)| *source)
+                .collect();
+            for source in returned {
+                origins(host, path, flow, source, seen, out);
+            }
+        }
+    }
+}
+
 /// A class's method, or the value of its field, else the nearest one up
 /// its `extends` chain.
 fn class_member(
@@ -718,8 +847,8 @@ fn class_member_at(
     depth: u32,
 ) {
     if let Some(function) = method_of(flow, class_node, property) {
-        let node = flow.functions[function as usize].node;
-        out.push(Origin::Node(path.to_path_buf(), Arc::clone(flow), node));
+        let fact = &flow.functions[function as usize];
+        accessor_or_value(host, path, flow, fact.node, fact.accessor, seen, out);
         return;
     }
     let fields = field_values(flow, class_node, property);
@@ -803,6 +932,12 @@ pub(crate) fn call_targets(
                 origins(host, path, flow, *object, &mut seen, &mut found);
                 for origin in &found {
                     member_functions(host, origin, property, &mut functions);
+                }
+                // f.call(this, …), f.apply(this, args): f.
+                if functions.is_empty() && matches!(&**property, "call" | "apply") {
+                    for origin in &found {
+                        functions_of(host, origin, &mut functions);
+                    }
                 }
             }
             if call.is_jsx {

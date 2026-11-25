@@ -329,6 +329,17 @@ fn measure_callers_known(
     totals: &mut Totals,
 ) {
     let mut names: HashSet<String> = HashSet::new();
+    // Accessors run on any read or write of their name.
+    let mut member_names: HashSet<String> = HashSet::new();
+    for (_, flow) in files {
+        for node in &flow.nodes {
+            if node.kind == FlowNodeKind::Member {
+                if let Some(name) = node.name.as_deref() {
+                    member_names.insert(name.to_string());
+                }
+            }
+        }
+    }
     let mut escaped: HashMap<(PathBuf, u32), &'static str> = HashMap::new();
     let mut escape = |functions: Vec<(PathBuf, u32)>, why: &'static str| {
         for key in functions {
@@ -377,7 +388,14 @@ fn measure_callers_known(
         for (index, function) in flow.functions.iter().enumerate() {
             totals.functions += 1;
             let key = (file.clone(), index as u32);
-            let why = if function.name.as_deref().is_some_and(|n| names.contains(n)) {
+            let why = if function.accessor.is_some()
+                && function
+                    .name
+                    .as_deref()
+                    .is_some_and(|n| member_names.contains(n))
+            {
+                Some("an accessor, and a property read or write uses its name")
+            } else if function.name.as_deref().is_some_and(|n| names.contains(n)) {
                 *totals
                     .blocking_names
                     .entry(function.name.as_deref().unwrap_or("").to_string())

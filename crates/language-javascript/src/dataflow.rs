@@ -116,6 +116,16 @@ pub struct FunctionFact {
     pub parent: Option<u32>,
     /// The class node, for methods.
     pub class_node: Option<u32>,
+    /// `get p() {}` or `set p(v) {}`: run by reading or writing the
+    /// property, not by calling it.
+    pub accessor: Option<Accessor>,
+}
+
+/// Which side of a property an accessor function runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Accessor {
+    Get,
+    Set,
 }
 
 /// What a call calls, as far as one module can tell.
@@ -196,6 +206,12 @@ pub struct FileFlow {
     pub class_extends: FxHashMap<u32, u32>,
     /// `super` in `super(…)` and `super.m(…)`.
     pub super_nodes: FxHashSet<u32>,
+    /// The position of an `element` edge into a destructured binding:
+    /// `const [a, b] = v` gives (v, b) -> 1.
+    pub element_index: FxHashMap<(u32, u32), u32>,
+    /// Array literal node -> its elements' value nodes by position (up to
+    /// the first spread; holes are None).
+    pub array_elements: FxHashMap<u32, Vec<Option<u32>>>,
     /// `import("m")` node -> "m".
     pub dynamic_imports: FxHashMap<u32, String>,
     /// Edges that come from a builtin method model (`.then(cb)`,
@@ -970,6 +986,19 @@ impl<'s, 'a> Builder<'s, 'a> {
                 name_range: named.map(|(_, range)| range),
                 parent: None,
                 class_node: None,
+                accessor: match nodes.parent_kind(node.id()) {
+                    AstKind::MethodDefinition(method) => match method.kind {
+                        MethodDefinitionKind::Get => Some(Accessor::Get),
+                        MethodDefinitionKind::Set => Some(Accessor::Set),
+                        _ => None,
+                    },
+                    AstKind::ObjectProperty(property) => match property.kind {
+                        PropertyKind::Get => Some(Accessor::Get),
+                        PropertyKind::Set => Some(Accessor::Set),
+                        PropertyKind::Init => None,
+                    },
+                    _ => None,
+                },
             });
             self.flow.fn_by_node.insert(flow_node, index);
             self.fn_by_ast[node.id().index()] = index;
@@ -1142,8 +1171,23 @@ impl<'s, 'a> Builder<'s, 'a> {
                 }
             }
             BindingPatternKind::ArrayPattern(array) => {
-                for element in array.elements.iter().flatten() {
+                for (position, element) in array.elements.iter().enumerate() {
+                    let Some(element) = element else {
+                        continue;
+                    };
                     self.bind_pattern(element, from, FlowEdgeKind::Element);
+                    // `const [a, b] = v`: remember that b is v[1].
+                    let leaf = match &element.kind {
+                        BindingPatternKind::AssignmentPattern(assignment) => &assignment.left.kind,
+                        other => other,
+                    };
+                    if let BindingPatternKind::BindingIdentifier(ident) = leaf {
+                        if let Some(binding) = self.binding_for_symbol(ident.symbol_id()) {
+                            self.flow
+                                .element_index
+                                .insert((from, binding), position as u32);
+                        }
+                    }
                 }
                 if let Some(rest) = &array.rest {
                     self.bind_pattern(&rest.argument, from, FlowEdgeKind::Capture);
@@ -1172,8 +1216,24 @@ impl<'s, 'a> Builder<'s, 'a> {
                 self.edge(from, node, FlowEdgeKind::Store);
             }
             AssignmentTarget::ArrayAssignmentTarget(array) => {
-                for element in array.elements.iter().flatten() {
+                for (position, element) in array.elements.iter().enumerate() {
+                    let Some(element) = element else {
+                        continue;
+                    };
                     self.bind_target_default(element, from, FlowEdgeKind::Element);
+                    let leaf = match element {
+                        AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) => {
+                            Some(&d.binding)
+                        }
+                        other => other.as_assignment_target(),
+                    };
+                    if let Some(AssignmentTarget::AssignmentTargetIdentifier(ident)) = leaf {
+                        if let Some(binding) = self.binding_of(ident) {
+                            self.flow
+                                .element_index
+                                .insert((from, binding), position as u32);
+                        }
+                    }
                 }
                 if let Some(rest) = &array.rest {
                     self.bind_target(&rest.target, from, FlowEdgeKind::Capture);
@@ -1864,6 +1924,19 @@ impl<'s, 'a> Builder<'s, 'a> {
             AstKind::ArrayExpression(array) => {
                 let whole = self.node(array.span);
                 self.edge(index, whole, FlowEdgeKind::Capture);
+                // `[read, write]`: element positions, up to the first spread.
+                let position = array
+                    .elements
+                    .iter()
+                    .take_while(|e| !matches!(e, ArrayExpressionElement::SpreadElement(_)))
+                    .position(|e| e.span() == span);
+                if let Some(position) = position {
+                    let elements = self.flow.array_elements.entry(whole).or_default();
+                    if elements.len() <= position {
+                        elements.resize(position + 1, None);
+                    }
+                    elements[position] = Some(index);
+                }
             }
             AstKind::ObjectProperty(property) => {
                 if property.value.span() == span {

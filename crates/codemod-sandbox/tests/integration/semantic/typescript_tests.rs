@@ -175,6 +175,15 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_callees_through_returned_values,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_callees_through_returns.js",
+    fixture_dir: "typescript/returns",
+    target: "src/app.ts",
+    scope: workspace,
+}
+
+jssg_test! {
     name: test_callees_jsx_member_tag,
     language: CodemodLang::Static(SupportLang::Tsx),
     codemod: "tsx_callees_jsx_element.js",
