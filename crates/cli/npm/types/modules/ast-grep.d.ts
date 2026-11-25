@@ -120,7 +120,8 @@ declare module "codemod:ast-grep" {
      * Follow this node's value backward: what it is computed from.
      *
      * Steps come nearest first (by `depth`). The answer stays inside the
-     * node's file and is computed from its current content.
+     * node's file unless `interprocedural` is set, and is computed from the
+     * files' current content.
      *
      * Soundness:
      * - `boundary: true` marks where the trail ends because the value comes
@@ -277,6 +278,9 @@ declare module "codemod:ast-grep" {
      * one entry per call on those paths.
      *
      * Soundness:
+     * - Getters and setters are run by property reads and writes
+     *   (`obj.value`, `obj.value = x`), which are not calls: `[]` for a
+     *   getter or setter does not mean it is unused.
      * - An empty answer does not mean "unused": a function stored as a value
      *   (`{ round: fn }`, `export default fn`) or called dynamically has no
      *   callers the graph can see. Check `references()` too.
@@ -955,6 +959,23 @@ declare module "codemod:ast-grep" {
     /** Stop after this many steps from the node. `1` gives the direct sources (or uses) only. */
     maxDepth?: number;
     /**
+     * Cross function boundaries inside the workspace. Backward, a parameter
+     * continues at its callers' arguments and a resolved call's result at the
+     * callee's return values; forward, an argument goes into the callee's
+     * parameter and a returned value out to the call sites. A value that
+     * enters a function through a call leaves it through that same call.
+     * Answers then span files (`step.root` differs) and can be much larger:
+     * combine with `maxDepth` or `stopAt`. Callback edges are not followed.
+     * Uses the workspace callers table (a snapshot, as for `callers()`).
+     * @default false
+     * @example
+     * ```ts
+     * // Does a request value reach query() through helper functions?
+     * sql.dependsOn((s) => s.kind === "member" && s.name === "body", { interprocedural: true });
+     * ```
+     */
+    interprocedural?: boolean;
+    /**
      * Report steps reached through these edges, but do not walk past them:
      * "the first sink". `flowsTo({ stopAt: ["jsx-child", "jsx-attribute", "argument"] })`
      * answers where a value is first used, not every place its uses go on to.
@@ -973,6 +994,7 @@ declare module "codemod:ast-grep" {
      * The step this one was reached from, or null for a step reached directly
      * from the queried node (`depth` 1). Follow `from` to print the whole
      * path, or to find the step right before one, without counting depths.
+     * With `interprocedural`, `from` can be a step in another file.
      *
      * @example
      * ```ts

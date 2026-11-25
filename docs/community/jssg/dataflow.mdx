@@ -83,8 +83,10 @@ Steps come nearest first. Each has:
 | `boundary` | The trail ends here because the value comes from outside the analyzed code: a parameter, an import, a global, `this`, or a call result |
 
 Options: `throughCalls` (default `true`: a call's result counts as derived from its arguments and
-receiver, and the walk continues into them), `maxDepth`, and `stopAt` (edge kinds to report but not
-walk past).
+receiver, and the walk continues into them), `maxDepth`, `stopAt` (edge kinds to report but not
+walk past), and `interprocedural` (default `false`: cross function boundaries inside the workspace;
+a parameter continues at its callers' arguments, a call's result at the callee's returns, and the
+answer can span files, so `step.root` and `step.from` may be in another file).
 
 ```ts
 // The value a variable was initialized with: the step after the variable.
@@ -136,7 +138,8 @@ for (const caller of callers) {
 ```
 
 <Warning>
-  **No callers does not mean unused.** A function stored as a value (`{ round: fn }`,
+  **No callers does not mean unused.** Getters and setters run on property reads and writes
+  (`obj.value`), which are not calls, so they have no callers either. A function stored as a value (`{ round: fn }`,
   `export default fn`) or called dynamically has no callers the graph can see. Before deleting,
   also check that `references()` finds nothing but the declaration, and that the answer is
   complete (`!truncated && unparsed.length === 0`).
@@ -246,7 +249,8 @@ for (const fn of root.root().findAll({ rule: { kind: "function_declaration", ins
   const callers = fn.callers();
   if (callers.length > 0 || callers.truncated || callers.unparsed.length > 0) continue;
   const name = fn.field("name")!;
-  // No callers is not enough: a function stored as a value is referenced, not called.
+  // No callers is not enough: a function stored as a value is referenced, not called,
+  // and a getter or setter runs on property reads and writes, which are not calls.
   if (name.references().flatMap((f) => f.nodes).some((n) => !n.equals(name))) continue;
   // ...remove the export statement
 }
@@ -333,7 +337,7 @@ it models and says where it stops. Build automatic rewrites only on complete ans
 | Control dependence: `c ? a : b` | `a` and `b` are sources, `c` is not |
 | Whether an unknown method mutates | `confidence: "maybe"` |
 | Callbacks handed to unknown code | Assumed called: `via: "callback"`. Can be a false edge |
-| Namespace members (`ns.fn` stored or passed as a value) | Not seen by `callers()` or `references()` yet |
+| Namespace members (`ns.fn` stored or passed as a value) | `references()` finds `ns.fn` uses through `import * as ns`; check it alongside `callers()` before deleting |
 | Files that do not parse | Listed in `unparsed` on call-graph answers; asking about one throws |
 | Result limits (50,000 steps or entries) | `truncated: true` on the array |
 | Edits during a run | `flowsFrom`, `flowsTo`, `mutations` use current content. `callers()` and `importers()` answer from tables built on their first query: snapshots. A file rewritten later still counts as calling or importing what it did then |
