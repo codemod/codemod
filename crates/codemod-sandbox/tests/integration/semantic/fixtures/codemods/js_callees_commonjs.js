@@ -24,11 +24,13 @@ export default function transform(root) {
       .sort(),
     [
       "constructor@db.js", // new Db(), module.exports = Db
-      "format@lib.js", // lib.format, and again.format through module.exports = require("./lib")
+      "format@lib.js", // lib.format
+      "format@lib.js", // again.format through module.exports = require("./lib"): its own call site
       "load@store.js", // module.exports = { load: () => null }
       "parse@lib.js", // const { parse } = require("./lib"); module.exports.parse = parse
       "query@db.js", // db.query() on new Db()
-      "save@store.js", // store.save(), and persist: exports.persist = require("./store").save
+      "save@store.js", // store.save()
+      "save@store.js", // persist: exports.persist = require("./store").save
     ],
     "callees of run",
   );
