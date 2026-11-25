@@ -191,6 +191,10 @@ pub struct FileFlow {
     /// The key of a `property` edge into a destructured binding:
     /// `const { f: g } = o` gives (o, g) -> "f".
     pub property_keys: FxHashMap<(u32, u32), String>,
+    /// Class node -> its `extends` expression's node.
+    pub class_extends: FxHashMap<u32, u32>,
+    /// `super` in `super(…)` and `super.m(…)`.
+    pub super_nodes: FxHashSet<u32>,
     /// `import("m")` node -> "m".
     pub dynamic_imports: FxHashMap<u32, String>,
     /// Edges that come from a builtin method model (`.then(cb)`,
@@ -1416,8 +1420,19 @@ impl<'s, 'a> Builder<'s, 'a> {
                 None => self.skip("commonjs-require-dynamic"),
             }
         }
-        if matches!(callee.get_inner_expression(), Expression::Super(_)) {
-            self.skip("super-call");
+        // super(...) and super.m(...): resolved against the class's parent.
+        match callee.get_inner_expression() {
+            Expression::Super(sup) => {
+                let node = self.node(sup.span);
+                self.flow.super_nodes.insert(node);
+            }
+            Expression::StaticMemberExpression(member) => {
+                if let Expression::Super(sup) = &member.object {
+                    let node = self.node(sup.span);
+                    self.flow.super_nodes.insert(node);
+                }
+            }
+            _ => {}
         }
         let callee_fact = match callee.get_inner_expression() {
             Expression::StaticMemberExpression(member) if !is_new => {
@@ -1796,7 +1811,8 @@ impl<'s, 'a> Builder<'s, 'a> {
             AstKind::Class(class)
                 if class.super_class.as_ref().is_some_and(|s| s.span() == span) =>
             {
-                self.skip("class-extends")
+                let class_node = self.node(class.span);
+                self.flow.class_extends.insert(class_node, index);
             }
             other => {
                 let what = format!("{:?}", other.ty());

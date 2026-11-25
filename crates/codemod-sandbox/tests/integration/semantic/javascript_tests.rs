@@ -152,6 +152,15 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_call_graph_class_inheritance,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "js_callees_inheritance.js",
+    fixture_dir: "javascript/inheritance",
+    target: "main.js",
+    scope: workspace,
+}
+
+jssg_test! {
     name: test_call_graph_commonjs,
     language: CodemodLang::Static(SupportLang::JavaScript),
     codemod: "js_callees_commonjs.js",

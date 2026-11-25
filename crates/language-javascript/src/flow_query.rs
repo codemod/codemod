@@ -480,8 +480,58 @@ fn field_values(flow: &FileFlow, class_node: u32, name: &str) -> Vec<u32> {
         .collect()
 }
 
+/// Classes deeper than this in an `extends` chain are not looked at.
+const MAX_CLASS_DEPTH: u32 = 16;
+
+/// The classes a class extends (`class A extends B`), through local aliases
+/// and imports. Empty for `extends mixin(B)` and other expressions.
+fn parent_classes(
+    host: &dyn FlowHost,
+    path: &Path,
+    flow: &Arc<FileFlow>,
+    class_node: u32,
+) -> Vec<(PathBuf, Arc<FileFlow>, u32)> {
+    let Some(&parent) = flow.class_extends.get(&class_node) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    origins(host, path, flow, parent, &mut HashSet::new(), &mut found);
+    found
+        .into_iter()
+        .filter_map(|origin| match origin {
+            Origin::Node(path, flow, node)
+                if flow.nodes[node as usize].kind == FlowNodeKind::Class =>
+            {
+                Some((path, flow, node))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A class's constructor, or the nearest one up its `extends` chain.
+fn constructor_of(
+    host: &dyn FlowHost,
+    path: &Path,
+    flow: &Arc<FileFlow>,
+    class_node: u32,
+    depth: u32,
+    out: &mut Vec<(PathBuf, u32)>,
+) {
+    if let Some(function) = method_of(flow, class_node, "constructor") {
+        out.push((path.to_path_buf(), function));
+        return;
+    }
+    if depth >= MAX_CLASS_DEPTH {
+        return;
+    }
+    for (parent_path, parent_flow, parent) in parent_classes(host, path, flow, class_node) {
+        constructor_of(host, &parent_path, &parent_flow, parent, depth + 1, out);
+    }
+}
+
 /// The functions an origin stands for when it is called.
-fn functions_of(origin: &Origin, out: &mut Vec<(PathBuf, u32)>) {
+fn functions_of(host: &dyn FlowHost, origin: &Origin, out: &mut Vec<(PathBuf, u32)>) {
     let Origin::Node(path, flow, node) = origin else {
         return;
     };
@@ -491,11 +541,7 @@ fn functions_of(origin: &Origin, out: &mut Vec<(PathBuf, u32)>) {
                 out.push((path.clone(), *function));
             }
         }
-        FlowNodeKind::Class => {
-            if let Some(function) = method_of(flow, *node, "constructor") {
-                out.push((path.clone(), function));
-            }
-        }
+        FlowNodeKind::Class => constructor_of(host, path, flow, *node, 0, out),
         _ => {}
     }
 }
@@ -565,7 +611,8 @@ fn member_origins(
     }
 }
 
-/// A class's method, or the value of its field.
+/// A class's method, or the value of its field, else the nearest one up
+/// its `extends` chain.
 fn class_member(
     path: &Path,
     flow: &Arc<FileFlow>,
@@ -575,13 +622,46 @@ fn class_member(
     seen: &mut HashSet<(PathBuf, u32)>,
     out: &mut Vec<Origin>,
 ) {
+    class_member_at(path, flow, class_node, property, host, seen, out, 0);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn class_member_at(
+    path: &Path,
+    flow: &Arc<FileFlow>,
+    class_node: u32,
+    property: &str,
+    host: &dyn FlowHost,
+    seen: &mut HashSet<(PathBuf, u32)>,
+    out: &mut Vec<Origin>,
+    depth: u32,
+) {
     if let Some(function) = method_of(flow, class_node, property) {
         let node = flow.functions[function as usize].node;
         out.push(Origin::Node(path.to_path_buf(), Arc::clone(flow), node));
         return;
     }
-    for value in field_values(flow, class_node, property) {
-        origins(host, path, flow, value, seen, out);
+    let fields = field_values(flow, class_node, property);
+    if !fields.is_empty() {
+        for value in fields {
+            origins(host, path, flow, value, seen, out);
+        }
+        return;
+    }
+    if depth >= MAX_CLASS_DEPTH {
+        return;
+    }
+    for (parent_path, parent_flow, parent) in parent_classes(host, path, flow, class_node) {
+        class_member_at(
+            &parent_path,
+            &parent_flow,
+            parent,
+            property,
+            host,
+            seen,
+            out,
+            depth + 1,
+        );
     }
 }
 
@@ -595,7 +675,7 @@ fn member_functions(
     let mut found = Vec::new();
     member_origins(host, origin, property, &mut HashSet::new(), &mut found);
     for origin in &found {
-        functions_of(origin, out);
+        functions_of(host, origin, out);
     }
 }
 
@@ -610,21 +690,32 @@ pub(crate) fn call_targets(
     let mut seen = HashSet::new();
     let via = match &call.callee {
         CalleeFact::Member { object, property } => {
-            if flow.nodes[*object as usize].kind == FlowNodeKind::This {
-                let class = flow.class_of(call.function);
-                let method = class.and_then(|class| method_of(flow, class, property));
-                if let Some(function) = method {
-                    functions.push((path.to_path_buf(), function));
-                } else if let Some(class) = class {
-                    // `run = bound(fn)`, `handler = existing`: a field whose
-                    // value is a function.
-                    let mut found = Vec::new();
-                    for value in field_values(flow, class, property) {
-                        origins(host, path, flow, value, &mut seen, &mut found);
+            let is_super = flow.super_nodes.contains(object);
+            if is_super || flow.nodes[*object as usize].kind == FlowNodeKind::This {
+                // this.m(): a method or function-valued field of the class or
+                // its parents. super.m(): of its parents only.
+                let mut found = Vec::new();
+                if let Some(class) = flow.class_of(call.function) {
+                    if is_super {
+                        for (parent_path, parent_flow, parent) in
+                            parent_classes(host, path, flow, class)
+                        {
+                            class_member(
+                                &parent_path,
+                                &parent_flow,
+                                parent,
+                                property,
+                                host,
+                                &mut seen,
+                                &mut found,
+                            );
+                        }
+                    } else {
+                        class_member(path, flow, class, property, host, &mut seen, &mut found);
                     }
-                    for origin in &found {
-                        functions_of(origin, &mut functions);
-                    }
+                }
+                for origin in &found {
+                    functions_of(host, origin, &mut functions);
                 }
             } else {
                 let mut found = Vec::new();
@@ -639,11 +730,20 @@ pub(crate) fn call_targets(
                 CallEdgeKind::Method
             }
         }
+        // super(...): the parent class's constructor.
+        CalleeFact::Node(callee) if flow.super_nodes.contains(callee) => {
+            if let Some(class) = flow.class_of(call.function) {
+                for (parent_path, parent_flow, parent) in parent_classes(host, path, flow, class) {
+                    constructor_of(host, &parent_path, &parent_flow, parent, 0, &mut functions);
+                }
+            }
+            CallEdgeKind::Constructor
+        }
         CalleeFact::Node(callee) => {
             let mut found = Vec::new();
             origins(host, path, flow, *callee, &mut seen, &mut found);
             for origin in &found {
-                functions_of(origin, &mut functions);
+                functions_of(host, origin, &mut functions);
             }
             if call.is_new {
                 CallEdgeKind::Constructor
@@ -677,7 +777,7 @@ pub(crate) fn callback_targets(
         for origin in &found {
             if let Origin::Node(_, origin_flow, node) = origin {
                 if origin_flow.nodes[*node as usize].kind == FlowNodeKind::Function {
-                    functions_of(origin, &mut functions);
+                    functions_of(host, origin, &mut functions);
                 }
             }
         }
@@ -733,7 +833,7 @@ fn functions_at(
             let mut found = Vec::new();
             origins(host, path, &flow, node, &mut HashSet::new(), &mut found);
             for origin in &found {
-                functions_of(origin, &mut functions);
+                functions_of(host, origin, &mut functions);
             }
         }
         if !functions.is_empty() {
