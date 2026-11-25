@@ -1023,7 +1023,10 @@ fn callees(
 pub(crate) struct CallerIndex {
     flows: HashMap<PathBuf, Arc<FileFlow>>,
     contents: HashMap<PathBuf, Arc<str>>,
-    calls_of: HashMap<FunctionKey, Vec<(PathBuf, u32, CallEdgeKind)>>,
+    /// Calling file (index into `paths`), call index, how.
+    calls_of: HashMap<FunctionKey, Vec<(u32, u32, CallEdgeKind)>>,
+    /// The files with calls, in path order.
+    paths: Vec<PathBuf>,
     unparsed: Vec<UnparsedFile>,
 }
 
@@ -1033,6 +1036,7 @@ impl CallerIndex {
             flows: HashMap::new(),
             contents: HashMap::new(),
             calls_of: HashMap::new(),
+            paths: Vec::new(),
             unparsed: Vec::new(),
         };
         let mut files = host.workspace_files();
@@ -1050,13 +1054,15 @@ impl CallerIndex {
             })
             .collect();
         for (file, flow, content, calls) in contributions {
+            let file_id = index.paths.len() as u32;
             for (target, call_index, via) in calls {
                 index
                     .calls_of
                     .entry(target)
                     .or_default()
-                    .push((file.clone(), call_index, via));
+                    .push((file_id, call_index, via));
             }
+            index.paths.push(file.clone());
             index.flows.insert(file.clone(), flow);
             index.contents.insert(file, content);
         }
@@ -1154,17 +1160,18 @@ fn callers(
     let mut entries = Entries::default();
     let mut truncated = false;
     let mut visited: HashSet<FunctionKey> = start.iter().cloned().collect();
-    let mut reported: HashSet<(PathBuf, u32)> = HashSet::new();
+    let mut reported: HashSet<(u32, u32)> = HashSet::new();
     let mut queue: VecDeque<(FunctionKey, u32)> = start.into_iter().map(|key| (key, 0)).collect();
 
     'walk: while let Some((key, depth)) = queue.pop_front() {
         if options.max_depth.is_some_and(|max| depth >= max) {
             continue;
         }
-        for (file, call_index, via) in index.calls_of.get(&key).into_iter().flatten() {
-            if !reported.insert((file.clone(), *call_index)) {
+        for (file_id, call_index, via) in index.calls_of.get(&key).into_iter().flatten() {
+            if !reported.insert((*file_id, *call_index)) {
                 continue;
             }
+            let file = &index.paths[*file_id as usize];
             let Some(flow) = index.flows.get(file) else {
                 continue;
             };
