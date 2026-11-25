@@ -19,42 +19,65 @@ To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha wor
 
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
 
-<Update label="Unreleased (alpha.9)" description="Not published yet">
+<Update label="2.0.0-alpha.9" description="November 25, 2026">
+```bash
+npx codemod@2.0.0-alpha.9 --version   # codemod 2.0.0-alpha.9
+```
+
 **Highlights**
 
 - `--control stdio`: drive a run from another program. Approvals wait for an answer on stdin instead of exiting. See [Drive codemod from a program](/community/workflows/control).
+- Rejecting an approval ends the run for good; Ctrl-C pauses it instead of canceling it.
 - `workflow attach` replays a run's events and follows it live; `workflow inspect` describes a workflow's params and steps.
 - `codemod/protocol`: TypeScript types for the JSONL events and the control commands.
 
 **Breaking changes**
 
-- **Rejecting an approval ends the run as `rejected`.** Before, answering no to an `approval(...)` step in the launcher failed the step, and a resume asked again. Now the run is `rejected`: it is over, what earlier steps changed stays, and `workflow resume` refuses it unless you pass `--force`.
-- **Ctrl-C pauses; `workflow cancel` ends.** Before, both left a `canceled` run that `workflow resume` continued. Now Ctrl-C (and closing a control channel) leaves the run `paused`, which resumes as before, and a canceled run takes `--force` to resume.
+- **Rejecting an approval ends the run as `rejected`** ([#2525](https://github.com/codemod/codemod/pull/2525)). Before, answering no to an `approval(...)` step failed the step, and a resume asked again. Now the run is `rejected`: steps running alongside stop, nothing after the approval runs, what earlier steps changed **stays changed**, and the CLI exits `1`. `workflow resume` refuses a rejected run unless you pass `--force`, which asks the approval again. In the launcher, `n` now rejects; `l` still stops the run there to resume later.
+- **Ctrl-C pauses; `workflow cancel` ends** ([#2525](https://github.com/codemod/codemod/pull/2525)). Before, both left a `canceled` run that `workflow resume` continued. Now Ctrl-C (and closing a control channel's stdin) leaves the run `paused`, which resumes as before. A run canceled with `workflow cancel` is over: resuming it takes `--force`.
 
   ```
-  # before
+  # before (Ctrl-C)
   The run was canceled.
     Resume with: codemod workflow resume --id <ID>
   # after (Ctrl-C)
   The run was paused.
     Resume with: codemod workflow resume --id <ID>
+
+  # after: resuming a canceled run
+  $ npx codemod@2.0.0-alpha.9 workflow resume --id <ID>
+    × run '<ID>' was canceled: it is over. Resume it anyway with --force
   ```
 
-- **`--format jsonl` shows a nested codemod's steps as steps.** Before, a `codemod(...)` step's own steps came as `step_log` lines of that step. Now they are `step_started`/`step_finished` events with `step: "3/0"` and `parent: "3"`; a client that tracks steps by `position` alone should use `step`. Text output and the launcher show them as before.
-- **A dry run that reaches an approval exits 1.** It is not saved, so it cannot wait to be resumed; it says to pass `--approve` instead of printing a resume command that could not work.
+- **`--format jsonl` shows a nested codemod's steps as steps** ([#2525](https://github.com/codemod/codemod/pull/2525)). Before, a `codemod(...)` step's own steps came as `step_log` lines of that step. Now they are `step_started`/`step_finished` events with `step: "3/0"` and `parent: "3"`; a client that tracks steps by `position` alone should use `step`. Text output and the launcher show them as before.
+- **A dry run that reaches an approval exits `1`** ([#2525](https://github.com/codemod/codemod/pull/2525)). It is not saved, so it cannot wait to be resumed; it says to pass `--approve` instead of exiting `0` with no diff. With `--control stdio` it waits like a real run.
 
 **New**
 
-- `workflow resume --approve <QUESTION_ID>` gives one approval (`approval:3`); `--approve` alone still gives all. `workflow status` shows the `question` a run waits for.
-- Events: `seq` keeps counting across resumes; step events carry `step`, `parent` and `kind`; `run_log` carries `step`; `run_started` echoes `target`, `params`, `dry_run` and `settings`; real runs report `step_diff` per changed file.
-- Every saved run keeps its events in the run store, for `workflow attach`.
+- **`--control stdio`** on `workflow run`, `workflow resume` and `codemod <package>` ([#2525](https://github.com/codemod/codemod/pull/2525)), with `--format jsonl`: a `hello` line first, then the run's events; `question` / `question_closed` around every approval and agent pick; commands `approve`, `reject`, `answer` and `stop` on stdin. Experimental.
+- **`workflow resume --approve <QUESTION_ID>`** gives one approval (`approval:3`); `--approve` alone still gives all. `workflow status` and `run_finished` show the `question` a run waits for.
+- **Events**: `seq` keeps counting across resumes; step events carry `step`, `parent` and `kind`; `run_log` carries `step`; `run_started` echoes `target`, `params`, `dry_run` and `settings`; real runs report `step_diff` per changed file.
+- **`workflow attach --id <ID>`**: every saved run keeps its events in the run store; attach prints them and follows a run another process executes.
+- **`workflow inspect -w <file> --format json`**: declared params (type, doc comment, `@default`), imports, capabilities and `step(...)` calls, for a setup form.
+- **`codemod/protocol`**: types for all of the above, kept in step with the Rust types by a test.
 
 **Fixes**
 
 - `workflow send <EVENT>` to a run waiting for an approval said it sent the event and did nothing; it now fails and names the `workflow resume --approve` command.
 - A canceled run could be resumed to success.
 - `workflow list --format json` left out `failedFiles`; `workflow status --format json` showed `attempts` and `files` as `null` for most steps. `attempts` is now always the count, and `files` is set for every step that works on files.
-- A `--dry-run` that reaches `approval()` without `--approve` exited `0` with no hint. It now exits `1` and says to pass `--approve`; with `--control stdio` it waits like a real run.
+- A run waiting at a question over the control channel now stops when `workflow cancel` is run from another terminal.
+
+**Known gaps**
+
+- The control protocol is experimental: messages can still change (`hello.protocol` goes up when a change breaks clients).
+- `workflow attach` only watches; answering a run's questions takes its control channel or `workflow resume`.
+- Runs started with `runWorkflow` in Node.js have no control channel and keep no event journal.
+- With `--allow-fs` or `--allow-child-process`, every `forEachFile`, function and `dependencyGraph` step counts as a write.
+- Dry runs are not saved, so `workflow status` and `workflow attach` can't show them; their output is in `run_finished` and the text output.
+- The skill files `codemod ai` installs still say `npx codemod ai ...` unpinned.
+- `codemod/assess` has no free-text question type.
+- Values interpolated into shell commands (`${{ }}` in a translated `run:`, or `${x}` in `shell(...)`) are not shell-quoted. Quote them yourself, or use the `` shell`...` `` tagged template, which does.
 </Update>
 
 <Update label="2.0.0-alpha.8" description="November 25, 2026">
