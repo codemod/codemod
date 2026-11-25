@@ -75,7 +75,6 @@ pub fn analyze(
         let name = scoping.symbol_name(symbol_id).to_string();
         let flags = scoping.symbol_flags(symbol_id);
         let span = scoping.symbol_span(symbol_id);
-        let scope_id = scoping.symbol_scope_id(symbol_id);
 
         let kind = symbol_flags_to_kind(flags);
 
@@ -84,7 +83,6 @@ pub fn analyze(
             kind,
             range: span_to_byte_range(span),
             symbol_id: symbol_id.index() as u32,
-            scope_id: scope_id.index() as u32,
         });
 
         // Extract references for this symbol
@@ -95,7 +93,6 @@ pub fn analyze(
             file_symbols.references.push(SymbolReference {
                 symbol_id: symbol_id.index() as u32,
                 range: span_to_byte_range(ref_span),
-                is_write: reference.flags().is_write(),
             });
         }
     }
