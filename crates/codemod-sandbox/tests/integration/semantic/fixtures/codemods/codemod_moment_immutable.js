@@ -10,10 +10,8 @@ export default function transform(root) {
     const name = decl.getMatch("NAME");
     if (name.kind() !== "identifier") continue;
     // Only variables created by moment(...) directly, not aliases of one.
-    const created = name
-      .flowsFrom({ maxDepth: 1 })
-      .some((s) => s.kind === "call" && s.name === "moment");
-    if (!created) continue;
+    const created = (s) => s.kind === "call" && s.name === "moment";
+    if (!name.dependsOn(created, { maxDepth: 1 })) continue;
 
     let reassigned = false;
     for (const m of name.mutations()) {

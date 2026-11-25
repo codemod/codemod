@@ -26,7 +26,8 @@ export default function transform(root) {
   });
   if (!fn) return null;
 
-  const callers = fn.callers({ transitive: true });
+  // A callback edge gets a TODO and is not followed further.
+  const callers = fn.callers({ transitive: true, stopAt: ["callback"] });
   if (callers.truncated || callers.unparsed.length > 0) {
     throw new Error("call graph incomplete; not propagating async");
   }
@@ -39,12 +40,7 @@ export default function transform(root) {
     if (!files.has(key)) files.set(key, { root: r, edits: [] });
     return files.get(key).edits;
   };
-  const once = (r, node) => {
-    const key = r.filename() + ":" + node.range().start.index + ":" + node.kind();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  };
+  const once = (node) => !seen.has(node.key()) && !!seen.add(node.key());
 
   const own = editsFor(root);
   own.push(
@@ -65,22 +61,16 @@ export default function transform(root) {
   own.push(makeAsync(fn));
 
   for (const c of callers) {
-    if (!c.callSite) continue;
     const site = c.callSite;
-    if (!once(site.root, site.node)) continue;
+    if (!once(site.node)) continue;
     if (c.via === "callback") {
-      editsFor(site.root).push(
-        site.node.replace(
-          `/* TODO(async): ${c.callSite.node.text().match(/\((\w+)\)/)?.[1] ?? "callee"} is async now; this call gets promises */ ${site.node.text()}`,
-        ),
-      );
+      const todo = `/* TODO(async): ${c.callee.name} is async now; this call gets promises */ `;
+      editsFor(site.root).push(site.node.replace(todo + site.node.text()));
       continue;
     }
     editsFor(site.root).push(awaitCall(site.node));
-    if (c.resolved && once(c.root, c.node)) {
-      const edit = makeAsync(c.node);
-      if (edit) editsFor(c.root).push(edit);
-    }
+    const edit = once(c.node) && makeAsync(c.node);
+    if (edit) editsFor(c.root).push(edit);
   }
 
   let result = null;

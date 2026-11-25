@@ -38,22 +38,17 @@ export default function transform(root) {
   const edits = [];
   for (const call of root.root().findAll({ rule: { pattern: "$DB.query($SQL)" } })) {
     const sql = call.getMatch("SQL");
-    const sources = sql.flowsFrom();
-    const fromRequest = sources.some((s) => s.kind === "parameter" && s.name === "req");
-    if (!fromRequest) continue;
+    if (!sql.dependsOn((s) => s.kind === "parameter" && s.name === "req")) continue;
 
     // The expression that builds the text: the argument, or the value the
     // variable passed as the argument was initialized with.
-    let built = sql;
-    if (sql.kind() === "identifier") {
-      const init = sources.find((s) => s.via === "assign" && s.depth === 2);
-      if (!init) continue;
-      built = init.node;
-    }
+    const init = sql.flowsFrom().find((s) => s.via === "assign" && s.from?.kind === "variable");
+    const built = sql.kind() === "identifier" ? init?.node : sql;
+    if (!built) continue;
     const { sql: text, params } = parameterize(built);
     if (params.length === 0) continue;
     const literal = JSON.stringify(text);
-    if (built === sql || built.text() === sql.text()) {
+    if (built.equals(sql)) {
       edits.push(call.field("arguments").replace(`(${literal}, [${params.join(", ")}])`));
     } else {
       edits.push(built.replace(literal));

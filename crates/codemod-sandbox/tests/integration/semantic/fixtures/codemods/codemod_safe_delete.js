@@ -10,22 +10,9 @@ export default function transform(root) {
     const fn = exp.find({ rule: { kind: "function_declaration" } });
     const name = fn.field("name");
     const callers = fn.callers();
-    if (callers.truncated || (callers.unparsed && callers.unparsed.length > 0)) continue;
-    if (callers.length > 0) continue;
-    if (!callers.every((c) => c.resolved)) continue;
-
-    const refs = name
-      .references()
-      .flatMap((file) =>
-        file.nodes.filter(
-          (n) =>
-            !(
-              file.root.filename() === root.filename() &&
-              n.range().start.index === name.range().start.index
-            ),
-        ),
-      );
-    if (refs.length > 0) continue;
+    if (callers.length > 0 || callers.truncated || callers.unparsed.length > 0) continue;
+    const refs = name.references().flatMap((file) => file.nodes);
+    if (refs.some((n) => !n.equals(name))) continue;
 
     // Remove the statement and the blank line after it.
     const next = exp.next();
