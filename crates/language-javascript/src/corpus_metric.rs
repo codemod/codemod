@@ -285,7 +285,7 @@ fn measure_repo(root: &Path, totals: &mut Totals) {
             if !call_targets(&analyzer, &file, &flow, call).is_empty() {
                 totals.resolved += 1;
             } else {
-                if !callback_targets(&analyzer, &file, &flow, call).is_empty() {
+                if !callback_targets(&analyzer, &file, &flow, call, &[]).is_empty() {
                     totals.callback_only += 1;
                 }
                 let why = why_unresolved(&analyzer, &file, &flow, &call.callee);

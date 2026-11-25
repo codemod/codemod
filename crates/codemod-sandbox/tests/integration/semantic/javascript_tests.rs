@@ -152,6 +152,15 @@ jssg_test! {
 }
 
 jssg_test! {
+    name: test_namespace_member_uses_count_as_references_and_callers,
+    language: CodemodLang::Static(SupportLang::JavaScript),
+    codemod: "js_namespace_uses.js",
+    fixture_dir: "javascript/namespace_uses",
+    target: "utils.js",
+    scope: workspace,
+}
+
+jssg_test! {
     name: test_call_graph_class_inheritance,
     language: CodemodLang::Static(SupportLang::JavaScript),
     codemod: "js_callees_inheritance.js",

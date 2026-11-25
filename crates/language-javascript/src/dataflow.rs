@@ -1472,6 +1472,21 @@ impl<'s, 'a> Builder<'s, 'a> {
                     property: self.intern(&format!("#{}", member.field.name)),
                 }
             }
+            // `o["m"]()`: a method call with a known name.
+            Expression::ComputedMemberExpression(member)
+                if !is_new && member.static_property_name().is_some() =>
+            {
+                let object = self.node(member.object.span());
+                self.edge(object, call_node, FlowEdgeKind::Receiver);
+                let name = member
+                    .static_property_name()
+                    .map(|n| n.to_string())
+                    .unwrap_or_default();
+                CalleeFact::Member {
+                    object,
+                    property: self.intern(&name),
+                }
+            }
             other => CalleeFact::Node(self.node(other.span())),
         };
 

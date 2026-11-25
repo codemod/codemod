@@ -794,14 +794,45 @@ impl AccurateAnalyzer {
                     };
 
                     for import in &other_symbols.imports {
-                        if import.is_namespace {
-                            continue;
-                        }
                         let Ok(module) =
                             self.resolve_module(&import.module_specifier, &cached_path)
                         else {
                             continue;
                         };
+                        // `import * as ns`: each `ns.name` / `ns["name"]`
+                        // whose export lands on this symbol.
+                        if import.is_namespace {
+                            let Some((_, other_content)) = self.cache.get(&cached_path) else {
+                                continue;
+                            };
+                            let ns_symbol = other_symbols.symbols.iter().find(|s| {
+                                s.name == import.local_name
+                                    && import.range.start <= s.range.start
+                                    && import.range.end >= s.range.end
+                            });
+                            let Some(ns_symbol) = ns_symbol else {
+                                continue;
+                            };
+                            for use_site in other_symbols.find_references_to(ns_symbol.symbol_id) {
+                                let Some((name, name_range)) =
+                                    member_after(&other_content, use_site.range.end)
+                                else {
+                                    continue;
+                                };
+                                if lands_on_sym(self.resolve_export_memo(&module, &name, &mut memo))
+                                {
+                                    files_map.entry(cached_path.clone()).or_default().push(
+                                        SymbolLocation::new(
+                                            cached_path.clone(),
+                                            name_range,
+                                            sym.kind,
+                                            name,
+                                        ),
+                                    );
+                                }
+                            }
+                            continue;
+                        }
                         let name = import_export_name(import);
                         if !lands_on_sym(self.resolve_export_memo(&module, name, &mut memo)) {
                             continue;
@@ -1401,6 +1432,58 @@ enum ExportTarget {
         range: ByteRange,
         name: String,
     },
+}
+
+/// The property read right after an expression that ends at `end`:
+/// `.name`, `?.name` or `["name"]`, with the property's range.
+fn member_after(content: &str, end: u32) -> Option<(String, ByteRange)> {
+    let bytes = content.as_bytes();
+    let mut at = end as usize;
+    let skip_space = |mut at: usize| {
+        while at < bytes.len() && bytes[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        at
+    };
+    at = skip_space(at);
+    // `?.name` reads like `.name`; `?.["name"]` like `["name"]`.
+    let mut dotted = false;
+    if bytes.get(at) == Some(&b'?') && bytes.get(at + 1) == Some(&b'.') {
+        at = skip_space(at + 2);
+        dotted = bytes.get(at) != Some(&b'[');
+    } else if bytes.get(at) == Some(&b'.') {
+        at = skip_space(at + 1);
+        dotted = true;
+    }
+    match bytes.get(at)? {
+        _ if dotted => {
+            let start = at;
+            let mut stop = start;
+            while stop < bytes.len()
+                && (bytes[stop].is_ascii_alphanumeric()
+                    || bytes[stop] == b'_'
+                    || bytes[stop] == b'$'
+                    || bytes[stop] >= 0x80)
+            {
+                stop += 1;
+            }
+            let name = content.get(start..stop)?;
+            (!name.is_empty())
+                .then(|| (name.to_string(), ByteRange::new(start as u32, stop as u32)))
+        }
+        b'[' => {
+            let open = skip_space(at + 1);
+            let quote = *bytes.get(open)?;
+            if quote != b'"' && quote != b'\'' && quote != b'`' {
+                return None;
+            }
+            let start = open + 1;
+            let close = start + content.get(start..)?.find(quote as char)?;
+            let name = content.get(start..close)?;
+            Some((name.to_string(), ByteRange::new(start as u32, close as u32)))
+        }
+        _ => None,
+    }
 }
 
 /// The name an import binding asks its source module for.

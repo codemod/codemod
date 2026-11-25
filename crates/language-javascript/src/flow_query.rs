@@ -763,15 +763,28 @@ pub(crate) fn call_targets(
 
 /// Functions handed to a call the analysis cannot see into. They are
 /// assumed to be called: items.map(f), setTimeout(f), app.get("/", f).
+///
+/// `resolved` are the call's own targets. When there are some, a function
+/// argument is a callback only if one of them may call (or pass on) the
+/// parameter it lands in: `register(fn)` storing `fn` counts, a parameter
+/// that is never used does not.
 pub(crate) fn callback_targets(
     host: &dyn FlowHost,
     path: &Path,
     flow: &Arc<FileFlow>,
     call: &CallFact,
+    resolved: &[(PathBuf, u32, CallEdgeKind)],
 ) -> Vec<(PathBuf, u32, CallEdgeKind)> {
     let mut functions = Vec::new();
     let mut seen = HashSet::new();
-    for argument in &call.args {
+    for (position, argument) in call.args.iter().enumerate() {
+        if !resolved.is_empty()
+            && !resolved.iter().any(|(target_path, target, _)| {
+                parameter_may_be_called(host, target_path, *target, position as u32)
+            })
+        {
+            continue;
+        }
         let mut found = Vec::new();
         origins(host, path, flow, *argument, &mut seen, &mut found);
         for origin in &found {
@@ -786,6 +799,49 @@ pub(crate) fn callback_targets(
         .into_iter()
         .map(|(path, function)| (path, function, CallEdgeKind::Callback))
         .collect()
+}
+
+/// Whether a function may call the value it gets as parameter `position`,
+/// or hand it to code that might: it is called, passed to a call, stored,
+/// captured, returned. False only when the parameter provably goes nowhere.
+fn parameter_may_be_called(host: &dyn FlowHost, path: &Path, function: u32, position: u32) -> bool {
+    let Some(flow) = host.flow(path) else {
+        return true;
+    };
+    let parameter = flow.nodes.iter().position(|node| {
+        node.binding
+            && node.kind == FlowNodeKind::Parameter
+            && node.index == Some(position)
+            && node.function == Some(function)
+    });
+    // Destructured, rest, or `arguments`: no single binding to follow.
+    let Some(parameter) = parameter else {
+        return true;
+    };
+    let mut seen = HashSet::from([parameter as u32]);
+    let mut stack = vec![parameter as u32];
+    while let Some(current) = stack.pop() {
+        let is_callee = flow.calls.iter().any(|call| match &call.callee {
+            CalleeFact::Node(callee) => *callee == current,
+            // cb.call(...), cb.apply(...)
+            CalleeFact::Member { object, .. } => *object == current,
+        });
+        if is_callee {
+            return true;
+        }
+        for &(next, edge) in &flow.out_edges[current as usize] {
+            match edge {
+                FlowEdgeKind::Read | FlowEdgeKind::Assign | FlowEdgeKind::Alias => {
+                    if seen.insert(next) {
+                        stack.push(next);
+                    }
+                }
+                FlowEdgeKind::Property | FlowEdgeKind::Element | FlowEdgeKind::Derive => {}
+                _ => return true,
+            }
+        }
+    }
+    false
 }
 
 fn unresolved_kind(call: &CallFact) -> CallEdgeKind {
@@ -1090,8 +1146,9 @@ fn callees(
                     truncated = true;
                     break 'walk;
                 }
-                targets = callback_targets(host, &path, &flow, call);
             }
+            let callbacks = callback_targets(host, &path, &flow, call, &targets);
+            targets.extend(callbacks);
             for (target_path, target, via) in targets {
                 let key = (target_path.clone(), Some(target));
                 if !reported.insert(key.clone()) {
@@ -1216,9 +1273,8 @@ fn file_calls(
     let mut calls = Vec::new();
     for (call_index, call) in flow.calls.iter().enumerate() {
         let mut targets = call_targets(host, file, flow, call);
-        if targets.is_empty() {
-            targets = callback_targets(host, file, flow, call);
-        }
+        let callbacks = callback_targets(host, file, flow, call, &targets);
+        targets.extend(callbacks);
         for (target_path, target, via) in targets {
             calls.push(((target_path, Some(target)), call_index as u32, via));
         }
