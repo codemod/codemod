@@ -36,8 +36,9 @@ pub struct Command {
     #[arg(long = "target", short = 't', hide = true)]
     target_path: Option<PathBuf>,
 
-    /// Ignored: a run checks for uncommitted changes when it starts, not when it resumes
-    #[arg(long, hide = true)]
+    /// Write even if the target has uncommitted changes, for a run that stopped before it first
+    /// wrote (a run that already wrote is not checked again)
+    #[arg(long)]
     allow_dirty: bool,
 }
 
@@ -48,6 +49,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         ExecSettings {
             approve_all: args.approve || args.trigger_all,
             managed_git: args.managed_git,
+            allow_dirty: args.allow_dirty,
             ..args.flags.settings(
                 args.flags.granted(),
                 create_registry_client(None)?,
