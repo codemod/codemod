@@ -1737,6 +1737,37 @@ impl<'js> SgNodeRjs<'js> {
         self.call_graph(ctx, options, false)
     }
 
+    /// Why the function at this node is called from outside the workspace's
+    /// code: its package exports it (`{ kind: "export", label:
+    /// "@acme/ui#Button" }`), or a rule in the selector's
+    /// `semanticAnalysis.entryPoints` declares it (`{ kind: "http", label:
+    /// "GET app/api/users/[id]/route.ts" }`). `[]` when neither applies.
+    /// `callers()` never includes these. Needs workspace scope.
+    #[qjs(rename = "entryPoints")]
+    pub fn entry_points(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        #[cfg(not(feature = "native"))]
+        {
+            return Err(Exception::throw_message(&ctx, &not_in_wasm("entryPoints")));
+        }
+        #[cfg(feature = "native")]
+        {
+            let (provider, file_path, range) = self
+                .semantic_query("entryPoints")
+                .map_err(|message| Exception::throw_message(&ctx, &message))?;
+            let found = provider.get_entry_points(&file_path, range).map_err(|e| {
+                self.query_error(&ctx, "entryPoints", "Failed to find entry points", e)
+            })?;
+            let result = rquickjs::Array::new(ctx.clone())?;
+            for (index, entry) in found.iter().enumerate() {
+                let object = rquickjs::Object::new(ctx.clone())?;
+                object.set("kind", entry.kind.clone())?;
+                object.set("label", entry.label.clone())?;
+                result.set(index, object)?;
+            }
+            result.into_js(&ctx)
+        }
+    }
+
     /// Places that change the variable at this node, or the object it holds.
     ///
     /// `options.after` (an SgNode in the same file) keeps only the mutations

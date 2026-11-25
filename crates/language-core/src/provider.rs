@@ -1,9 +1,9 @@
 //! Core trait for semantic analysis providers.
 
 use crate::{
-    ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult, FlowOptions,
-    FlowResult, ImportersResult, MutationOptions, MutationsResult, ReferencesResult, SemanticError,
-    SemanticResult, SpecifierOptions,
+    ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult, EntryPoint,
+    EntryPointRule, FlowOptions, FlowResult, ImportersResult, MutationOptions, MutationsResult,
+    ReferencesResult, SemanticError, SemanticResult, SpecifierOptions,
 };
 use std::path::{Path, PathBuf};
 
@@ -198,6 +198,25 @@ pub trait SemanticProvider: Send + Sync {
         Err(unsupported("publicSpecifiers"))
     }
 
+    /// Rules from the selector's `semanticAnalysis.entryPoints`: functions
+    /// they match count as entry points, besides the package's exports.
+    ///
+    /// The default ignores them, for providers without entry points.
+    fn set_entry_point_rules(&self, _rules: Vec<EntryPointRule>) {}
+
+    /// Why the function at the given byte range is called from outside the
+    /// workspace's code: its package exports it, or a rule declares it.
+    /// Empty when neither applies.
+    ///
+    /// The default is an `Unsupported` error.
+    fn get_entry_points(
+        &self,
+        _file_path: &Path,
+        _range: ByteRange,
+    ) -> SemanticResult<Vec<EntryPoint>> {
+        Err(no_call_graph("entryPoints"))
+    }
+
     /// Notify the provider that a file has been processed.
     ///
     /// This is called after each file is processed during codemod execution.
@@ -241,5 +260,12 @@ fn unsupported(operation: &str) -> SemanticError {
     SemanticError::Unsupported {
         operation: operation.to_string(),
         reason: "this language's semantic provider does not resolve modules".to_string(),
+    }
+}
+
+fn no_call_graph(operation: &str) -> SemanticError {
+    SemanticError::Unsupported {
+        operation: operation.to_string(),
+        reason: "this provider has no workspace call graph".to_string(),
     }
 }

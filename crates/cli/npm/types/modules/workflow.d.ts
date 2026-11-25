@@ -318,7 +318,35 @@ declare module "codemod:workflow" {
          * @experimental
          */
         types?: "ts7" | "none";
+        /**
+         * Functions that count as entry points besides the package's
+         * exports: what `entryPoints()` reports.
+         * @experimental
+         */
+        entryPoints?: EntryPointRule[];
       };
+
+  /**
+   * Functions matching this rule are entry points of its `kind`. A rule
+   * names `exports`, `decorators` or both (a function must match both).
+   *
+   * ```ts
+   * { files: "app/**&#47;route.ts", exports: ["GET", "POST"], kind: "http" }
+   * { decorators: ["*.route", "shared_task"], kind: "handler" }
+   * ```
+   */
+  export interface EntryPointRule {
+    /**
+     * A glob over the path relative to the workspace root. `**` crosses
+     * directories; brackets are literal (`[id]`). Absent: any file.
+     */
+    files?: string;
+    /** Export names (`"default"` for the default export). */
+    exports?: string[];
+    /** Decorator names without arguments; `*` matches any run of characters. */
+    decorators?: string[];
+    kind: string;
+  }
 
   /**
    * Which files `forEachFile` visits, and how: a glob, a list of globs, or an

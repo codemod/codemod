@@ -10,9 +10,9 @@ use crate::vfs_fs::VfsFileSystem;
 use crate::workspace_packages::{self, WorkspacePackages};
 use language_core::{
     filesystem, ByteRange, CallGraphOptions, CallGraphResult, DefinitionKind, DefinitionOptions,
-    DefinitionResult, FileReferences, FlowOptions, FlowResult, FunctionRef, MutationOptions,
-    MutationsResult, ReferencesResult, SemanticResult, SpecifierOptions, SpecifierStyle,
-    SymbolLocation, UnparsedFile,
+    DefinitionResult, EntryPoint, EntryPointRule, FileReferences, FlowOptions, FlowResult,
+    FunctionEntry, FunctionRef, MutationOptions, MutationsResult, ReferencesResult, SemanticResult,
+    SpecifierOptions, SpecifierStyle, SymbolLocation, UnparsedFile,
 };
 use oxc_resolver::{
     Resolution, ResolveError, ResolveOptions, Resolver, ResolverGeneric, TsconfigDiscovery,
@@ -188,6 +188,11 @@ pub struct AccurateAnalyzer {
     types_enabled: AtomicBool,
     /// Texts the run told this analyzer about, for the TypeScript checker.
     type_texts: Arc<ts_api::FileTexts>,
+    /// The selector's `semanticAnalysis.entryPoints`.
+    entry_point_rules: RwLock<Vec<EntryPointRule>>,
+    /// By package directory: the declarations its public entry modules
+    /// export (file, name range), with each one's label (`@acme/ui#Button`).
+    package_exports: RwLock<HashMap<PathBuf, Arc<PackageExports>>>,
 }
 
 /// Importing file's directory, module specifier, export name.
@@ -255,6 +260,8 @@ impl AccurateAnalyzer {
             types: std::sync::OnceLock::new(),
             types_enabled: AtomicBool::new(false),
             type_texts: Default::default(),
+            entry_point_rules: Default::default(),
+            package_exports: Default::default(),
         }
     }
 
@@ -1793,6 +1800,140 @@ impl AccurateAnalyzer {
         Ok(flow_query::call_graph(self, file_path, range, options))
     }
 
+    /// Why the function at `range` is called from outside the workspace's
+    /// code: its package exports it, or a selector rule declares it.
+    pub fn entry_points(
+        &self,
+        file_path: &Path,
+        content: &str,
+        range: ByteRange,
+    ) -> SemanticResult<Vec<EntryPoint>> {
+        self.process_file_with(file_path, content, true)?;
+        flow_query::applicable(self, file_path, range, flow_query::QueryKind::Callers)?;
+        Ok(flow_query::entry_points(self, file_path, range))
+    }
+
+    pub fn set_entry_point_rules(&self, rules: Vec<EntryPointRule>) {
+        *self.entry_point_rules.write() = rules;
+    }
+
+    /// `path` relative to the workspace root, with `/` separators.
+    fn workspace_relative(&self, path: &Path) -> String {
+        let root = self.canonical_path(&self.workspace_root);
+        path.strip_prefix(&root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+
+    /// The name `export_name` of `module` lands on, as (file, range).
+    fn export_lands_on(&self, module: &Path, export_name: &str) -> Option<(PathBuf, ByteRange)> {
+        let found = self.resolve_export_definition(module, export_name)?;
+        Some((
+            self.canonical_path(&found.location.file_path),
+            found.location.range,
+        ))
+    }
+
+    /// The names `module` exports explicitly (`export *` forwards names it
+    /// does not list).
+    fn export_names(&self, module: &Path) -> Vec<String> {
+        let _ = self.ensure_indexed(module);
+        let Some((symbols, _)) = self.cache.get(module) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = symbols
+            .exports
+            .iter()
+            .filter(|e| e.name != "*")
+            .map(|e| {
+                if e.is_default {
+                    "default".to_string()
+                } else {
+                    e.name.clone()
+                }
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// What the public entry modules of the package in `dir` export: the
+    /// modules its `exports` (without patterns) or, without `exports`, its
+    /// `main`/`module`/`source` name.
+    fn package_exports(&self, package: &PackageInfo) -> Arc<PackageExports> {
+        if let Some(found) = self.package_exports.read().get(&package.dir) {
+            return Arc::clone(found);
+        }
+        let mut targets: Vec<&str> = Vec::new();
+        match &package.exports {
+            Some(exports) => string_leaves(exports, &mut targets),
+            None => targets.extend(package.entries.iter().map(String::as_str)),
+        }
+        let manifest = package.dir.join("package.json");
+        let mut modules: Vec<PathBuf> = targets
+            .iter()
+            .filter(|target| !target.contains('*') && !target.ends_with(".d.ts"))
+            .filter_map(|target| {
+                let relative = format!("./{}", target.trim_start_matches("./"));
+                self.resolve_module_path(&manifest, &relative)
+            })
+            .collect();
+        modules.sort();
+        modules.dedup();
+        let mut found = Vec::new();
+        for module in modules {
+            let specifiers = self.public_specifiers_of(&module);
+            if specifiers.is_empty() {
+                continue;
+            }
+            for name in self.export_names(&module) {
+                if let Some((file, range)) = self.export_lands_on(&module, &name) {
+                    for specifier in &specifiers {
+                        found.push((file.clone(), range, format!("{specifier}#{name}")));
+                    }
+                }
+            }
+        }
+        let found = Arc::new(found);
+        self.package_exports
+            .write()
+            .insert(package.dir.clone(), Arc::clone(&found));
+        found
+    }
+
+    /// The `export` entry points of a declaration named at `name_range` in
+    /// `path`: the package's entry modules that export it, and its own file
+    /// when that file is public itself (an `exports` pattern).
+    fn export_entry_points(&self, path: &Path, name_range: ByteRange) -> Vec<EntryPoint> {
+        let Some(package) = self.package_of(path) else {
+            return Vec::new();
+        };
+        let mut labels: Vec<String> = self
+            .package_exports(&package)
+            .iter()
+            .filter(|(file, range, _)| file == path && *range == name_range)
+            .map(|(_, _, label)| label.clone())
+            .collect();
+        // Its own file, imported directly; also names an entry module
+        // forwards with `export *`, which the table does not list.
+        if let Some(own) = self.cache.export_name_at(path, name_range) {
+            for specifier in self.public_specifiers_of(path) {
+                labels.push(format!("{specifier}#{own}"));
+            }
+        }
+        labels.sort();
+        labels.dedup();
+        labels
+            .into_iter()
+            .map(|label| EntryPoint {
+                kind: "export".to_string(),
+                label,
+            })
+            .collect()
+    }
+
     /// Places that change the binding at `range` or the value it holds.
     pub fn mutations(
         &self,
@@ -1893,6 +2034,44 @@ impl FlowHost for AccurateAnalyzer {
     /// Callers answers are a snapshot: the table of every call is built once.
     fn caller_index(&self) -> Option<&CallerIndexSlot> {
         Some(&self.callers)
+    }
+
+    fn entry_points_of(&self, path: &Path, flow: &FileFlow, function: u32) -> Vec<EntryPoint> {
+        let Some(fact) = flow.functions.get(function as usize) else {
+            return Vec::new();
+        };
+        let Some(name_range) = fact.name_range else {
+            return Vec::new();
+        };
+        let mut found = self.export_entry_points(path, name_range);
+        let rules = self.entry_point_rules.read();
+        if !rules.is_empty() {
+            let file = self.workspace_relative(path);
+            let exports: Vec<String> = self
+                .cache
+                .export_name_at(path, name_range)
+                .into_iter()
+                .collect();
+            found.extend(language_core::declared_entry_points(
+                &rules,
+                &FunctionEntry {
+                    file: &file,
+                    name: fact.name.as_deref(),
+                    exports: &exports,
+                    decorators: flow
+                        .decorators
+                        .get(&function)
+                        .map(|d| d.iter().map(|n| n.to_string()).collect::<Vec<_>>())
+                        .as_deref()
+                        .unwrap_or(&[]),
+                },
+            ));
+        }
+        found
+    }
+
+    fn relative_path(&self, path: &Path) -> String {
+        self.workspace_relative(path)
     }
 
     fn typed_method_targets(
@@ -2355,6 +2534,10 @@ fn specifier_forms(target_str: &str) -> Vec<String> {
 }
 
 /// A workspace package: its directory, `name` and `exports`.
+/// The declarations a package's entry modules export: (file, name range,
+/// label such as `@acme/ui#Button`).
+type PackageExports = Vec<(PathBuf, ByteRange, String)>;
+
 struct PackageInfo {
     dir: PathBuf,
     name: Option<String>,

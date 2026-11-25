@@ -379,6 +379,26 @@ impl SemanticProvider for OxcSemanticProvider {
         }
     }
 
+    fn set_entry_point_rules(&self, rules: Vec<language_core::EntryPointRule>) {
+        if let AnalyzerKind::WorkspaceScope(analyzer) = &self.analyzer {
+            analyzer.set_entry_point_rules(rules);
+        }
+    }
+
+    fn get_entry_points(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+    ) -> SemanticResult<Vec<language_core::EntryPoint>> {
+        let content = self.read_file(file_path)?;
+        match &self.analyzer {
+            AnalyzerKind::FileScope(_) => Err(needs_workspace("entryPoints")),
+            AnalyzerKind::WorkspaceScope(analyzer) => {
+                analyzer.entry_points(file_path, &content, range)
+            }
+        }
+    }
+
     fn get_mutations(
         &self,
         file_path: &Path,
@@ -492,6 +512,15 @@ fn with_export_name(mut definition: DefinitionResult, cache: &SymbolCache) -> De
         _ => cache.export_name_at(&location.file_path, location.range),
     };
     definition
+}
+
+/// Entry points are about the whole workspace: a package's exports, and
+/// everything that calls a function.
+fn needs_workspace(operation: &str) -> language_core::SemanticError {
+    language_core::SemanticError::Unsupported {
+        operation: operation.to_string(),
+        reason: "it needs `semanticAnalysis: \"workspace\"`".to_string(),
+    }
 }
 
 #[cfg(test)]

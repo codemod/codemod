@@ -8,9 +8,9 @@ use crate::facts::{Accessor, CallFact, CalleeFact, FileFlow, Name};
 use crate::once::BuildOnce;
 use language_core::{
     ByteRange, CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
-    CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
-    FlowResult, FlowStep, FunctionRef, Mutation, MutationKind, MutationOptions, MutationsResult,
-    SemanticError, UnparsedFile,
+    CallGraphResult, EntryPoint, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind,
+    FlowOptions, FlowResult, FlowStep, FunctionRef, Mutation, MutationKind, MutationOptions,
+    MutationsResult, SemanticError, UnparsedFile,
 };
 use parking_lot::RwLock;
 use rayon::prelude::*;
@@ -79,6 +79,16 @@ pub trait FlowHost: Sync {
         _call: &CallFact,
     ) -> Option<FunctionRef> {
         None
+    }
+    /// Why the function at index `function` of `path` is called from outside
+    /// the workspace's code: its package exports it, or a rule on the
+    /// selector declares it. Empty without either.
+    fn entry_points_of(&self, _path: &Path, _flow: &FileFlow, _function: u32) -> Vec<EntryPoint> {
+        Vec::new()
+    }
+    /// `path` as answers show it: relative to the workspace root, with `/`.
+    fn relative_path(&self, path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
     }
 }
 
@@ -1376,20 +1386,50 @@ pub fn call_graph(
             )
         }
         CallGraphDirection::Callers => {
-            let mut start = functions_at(host, &path, range, true);
-            if start.is_empty() {
-                start = host
-                    .flow(&path)
-                    .and_then(|flow| flow.function_at(range))
-                    .map(|function| vec![(path.clone(), Some(function))])
-                    .unwrap_or_default();
-            }
+            let start = target_functions(host, &path, range);
             if start.is_empty() {
                 return CallGraphResult::default();
             }
             callers(host, start, options)
         }
     }
+}
+
+/// The functions a callers question about `range` is about: the function
+/// it names or is, else the one it is in.
+fn target_functions(host: &dyn FlowHost, path: &Path, range: ByteRange) -> Vec<FunctionKey> {
+    let start = functions_at(host, path, range, true);
+    if !start.is_empty() {
+        return start;
+    }
+    host.flow(path)
+        .and_then(|flow| flow.function_at(range))
+        .map(|function| vec![(path.to_path_buf(), Some(function))])
+        .unwrap_or_default()
+}
+
+/// Entry points of `key`.
+fn entry_points_of_key(host: &dyn FlowHost, key: &FunctionKey) -> Vec<EntryPoint> {
+    let Some(function) = key.1 else {
+        return Vec::new();
+    };
+    let Some(flow) = host.flow(&key.0) else {
+        return Vec::new();
+    };
+    host.entry_points_of(&key.0, &flow, function)
+}
+
+/// Why the function at `range` is called from outside the workspace's
+/// code. `callers()` never includes these: an entry point is not a call site.
+pub fn entry_points(host: &dyn FlowHost, path: &Path, range: ByteRange) -> Vec<EntryPoint> {
+    let path = host.canonical(path);
+    let mut found: Vec<EntryPoint> = target_functions(host, &path, range)
+        .iter()
+        .flat_map(|key| entry_points_of_key(host, key))
+        .collect();
+    found.sort();
+    found.dedup();
+    found
 }
 
 /// Where a callees walk starts inside its first function.

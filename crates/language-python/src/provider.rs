@@ -287,6 +287,19 @@ impl SemanticProvider for RuffSemanticProvider {
         self.flow.call_graph(file_path, &content, range, options)
     }
 
+    fn set_entry_point_rules(&self, rules: Vec<language_core::EntryPointRule>) {
+        self.flow.set_entry_point_rules(rules);
+    }
+
+    fn get_entry_points(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+    ) -> SemanticResult<Vec<language_core::EntryPoint>> {
+        let content = self.read_file(file_path)?;
+        self.flow.entry_points(file_path, &content, range)
+    }
+
     fn get_mutations(
         &self,
         file_path: &Path,

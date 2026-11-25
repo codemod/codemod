@@ -20,6 +20,7 @@ use codemod_sandbox::sandbox::runtime_module::{
     RuntimeEvent, RuntimeEventCallback, RuntimeEventKind,
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
+pub use language_core::EntryPointRule;
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
 pub use semantic_factory::SemanticTypes;

@@ -39,6 +39,8 @@ use crate::factory::SemanticFactory;
 pub struct LazySemanticProvider {
     inner: OnceLock<Option<Arc<dyn SemanticProvider>>>,
     config: SemanticConfig,
+    /// Set before the provider exists; handed to it when it is created.
+    entry_point_rules: std::sync::Mutex<Vec<language_core::EntryPointRule>>,
 }
 
 impl LazySemanticProvider {
@@ -47,6 +49,7 @@ impl LazySemanticProvider {
         Self {
             inner: OnceLock::new(),
             config,
+            entry_point_rules: Default::default(),
         }
     }
 
@@ -124,7 +127,18 @@ impl LazySemanticProvider {
             return None;
         }
         self.inner
-            .get_or_init(|| SemanticFactory::create(language, self.config.clone()))
+            .get_or_init(|| {
+                let provider = SemanticFactory::create(language, self.config.clone())?;
+                let rules = self
+                    .entry_point_rules
+                    .lock()
+                    .map(|r| r.clone())
+                    .unwrap_or_default();
+                if !rules.is_empty() {
+                    provider.set_entry_point_rules(rules);
+                }
+                Some(provider)
+            })
             .as_ref()
     }
 
@@ -231,6 +245,26 @@ impl SemanticProvider for LazySemanticProvider {
         match self.get_or_init(lang) {
             Some(provider) => provider.get_mutations(file_path, range, options),
             None => Ok(MutationsResult::default()), // Unsupported language
+        }
+    }
+
+    fn set_entry_point_rules(&self, rules: Vec<language_core::EntryPointRule>) {
+        if let Some(Some(provider)) = self.inner.get() {
+            provider.set_entry_point_rules(rules.clone());
+        }
+        if let Ok(mut kept) = self.entry_point_rules.lock() {
+            *kept = rules;
+        }
+    }
+
+    fn get_entry_points(
+        &self,
+        file_path: &Path,
+        range: ByteRange,
+    ) -> SemanticResult<Vec<language_core::EntryPoint>> {
+        match self.get_or_init(Self::detect_language(file_path)) {
+            Some(provider) => provider.get_entry_points(file_path, range),
+            None => Err(unsupported_language("entryPoints", file_path)),
         }
     }
 

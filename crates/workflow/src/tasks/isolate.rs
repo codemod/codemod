@@ -260,6 +260,39 @@ pub(crate) fn semantic_mode(
     })
 }
 
+/// The rules in `semanticAnalysis.entryPoints`: each
+/// `{ files?, exports?, decorators?, kind }`, naming exports or decorators.
+/// Workspace mode only: entry points are a whole-workspace question.
+pub(crate) fn entry_point_rules(
+    option: Option<&Value>,
+) -> Result<Vec<butterflow_core::jssg_runner::EntryPointRule>, String> {
+    let Some(Value::Object(detail)) = option else {
+        return Ok(Vec::new());
+    };
+    let Some(rules) = detail.get("entryPoints") else {
+        return Ok(Vec::new());
+    };
+    if detail.get("mode").and_then(Value::as_str) != Some("workspace") {
+        return Err("semanticAnalysis.entryPoints needs mode: 'workspace'".into());
+    }
+    let rules: Vec<butterflow_core::jssg_runner::EntryPointRule> =
+        serde_json::from_value(rules.clone()).map_err(|e| {
+            format!(
+                "semanticAnalysis.entryPoints must be a list of {{ files?, exports?, decorators?, kind }}: {e}"
+            )
+        })?;
+    if let Some(rule) = rules
+        .iter()
+        .find(|rule| rule.exports.is_empty() && rule.decorators.is_empty())
+    {
+        return Err(format!(
+            "semanticAnalysis.entryPoints: the rule of kind '{}' names no exports or decorators",
+            rule.kind
+        ));
+    }
+    Ok(rules)
+}
+
 /// A name for an in-memory module that resolves relative imports against
 /// the workflow's directory.
 pub(crate) fn module_name(task: &TaskContext<'_>, id: &str) -> String {

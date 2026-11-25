@@ -8,8 +8,9 @@
 
 use crate::flow::build_file_flow;
 use language_core::{
-    ByteRange, CallGraphOptions, CallGraphResult, FlowEdgeKind, FlowNodeKind, FlowOptions,
-    FlowResult, MutationOptions, MutationsResult, SemanticResult, UnparsedFile,
+    ByteRange, CallGraphOptions, CallGraphResult, EntryPoint, EntryPointRule, FlowEdgeKind,
+    FlowNodeKind, FlowOptions, FlowResult, FunctionEntry, MutationOptions, MutationsResult,
+    SemanticResult, UnparsedFile,
 };
 use language_flow::query::{self, CallerIndexSlot, FlowHost, QueryKind};
 use language_flow::FileFlow;
@@ -54,6 +55,8 @@ pub struct PyFlow {
     root: Option<PathBuf>,
     files: RwLock<HashMap<PathBuf, Cached>>,
     callers: CallerIndexSlot,
+    /// The selector's `semanticAnalysis.entryPoints`.
+    entry_point_rules: RwLock<Vec<EntryPointRule>>,
 }
 
 impl std::fmt::Debug for PyFlow {
@@ -71,6 +74,7 @@ impl PyFlow {
             root,
             files: RwLock::default(),
             callers: CallerIndexSlot::default(),
+            entry_point_rules: RwLock::default(),
         }
     }
 
@@ -124,6 +128,24 @@ impl PyFlow {
             query::applicable(self, path, range, QueryKind::Callers)?;
         }
         Ok(query::call_graph(self, path, range, options))
+    }
+
+    /// Why the function at `range` is called from outside the workspace's
+    /// code: a selector rule declares it. Python has no package exports
+    /// that mark a function public, so only rules count.
+    pub fn entry_points(
+        &self,
+        path: &Path,
+        content: &str,
+        range: ByteRange,
+    ) -> SemanticResult<Vec<EntryPoint>> {
+        self.update(path, content);
+        query::applicable(self, path, range, QueryKind::Callers)?;
+        Ok(query::entry_points(self, path, range))
+    }
+
+    pub fn set_entry_point_rules(&self, rules: Vec<EntryPointRule>) {
+        *self.entry_point_rules.write() = rules;
     }
 
     pub fn mutations(
@@ -499,5 +521,44 @@ impl FlowHost for PyFlow {
 
     fn caller_index(&self) -> Option<&CallerIndexSlot> {
         Some(&self.callers)
+    }
+
+    /// Rules only: a top-level function counts as exported under its name.
+    fn entry_points_of(&self, path: &Path, flow: &FileFlow, function: u32) -> Vec<EntryPoint> {
+        let rules = self.entry_point_rules.read();
+        if rules.is_empty() {
+            return Vec::new();
+        }
+        let Some(fact) = flow.functions.get(function as usize) else {
+            return Vec::new();
+        };
+        let exports: Vec<String> = match (&fact.name, fact.parent, fact.class_node) {
+            (Some(name), None, None) => vec![name.to_string()],
+            _ => Vec::new(),
+        };
+        let decorators: Vec<String> = flow
+            .decorators
+            .get(&function)
+            .map(|names| names.iter().map(|n| n.to_string()).collect())
+            .unwrap_or_default();
+        let file = self.relative_path(path);
+        language_core::declared_entry_points(
+            &rules,
+            &FunctionEntry {
+                file: &file,
+                name: fact.name.as_deref(),
+                exports: &exports,
+                decorators: &decorators,
+            },
+        )
+    }
+
+    fn relative_path(&self, path: &Path) -> String {
+        let root = self.root.as_ref().map(|root| self.canonical(root));
+        let relative = match &root {
+            Some(root) => path.strip_prefix(root).unwrap_or(path),
+            None => path,
+        };
+        relative.to_string_lossy().replace('\\', "/")
     }
 }

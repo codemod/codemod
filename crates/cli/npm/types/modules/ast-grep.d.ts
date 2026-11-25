@@ -311,10 +311,11 @@ declare module "codemod:ast-grep" {
      *   getter or setter does not mean it is unused.
      * - An empty answer does not mean "unused": a function stored as a value
      *   (`{ round: fn }`, `export default fn`) or called dynamically has no
-     *   callers the graph can see. Check `references()` too.
-     * - The workspace answer comes from a table of every call, built on the
-     *   first `callers()` query of the run: a snapshot. Files edited after
-     *   that keep their old calls in it.
+     *   callers the graph can see. Check `references()` too. Callers are call
+     *   sites only: a function a package exports, or a route handler, is
+     *   called from outside the workspace. Ask `entryPoints()` for that.
+     * - Like every semantic answer it describes the workspace as it was when
+     *   the step started: the step's own edits are not in it.
      * - `unparsed`: workspace files that failed to parse; calls in them are
      *   missing. `truncated`: a limit was hit.
      *
@@ -338,6 +339,19 @@ declare module "codemod:ast-grep" {
      * ```
      */
     callers(options?: CallGraphOptions): CallGraphEntries<CallerEntry<M>>;
+
+    /**
+     * Why the function at this node is called from outside the workspace's
+     * code: its package exports it through `exports` or `main`
+     * (`{ kind: "export", label: "@acme/ui#Button" }`), or a rule in the
+     * selector's `semanticAnalysis.entryPoints` declares it
+     * (`{ kind: "http", label: "GET app/api/users/[id]/route.ts" }`).
+     * `[]` when neither applies. `callers()` never includes these.
+     * Needs workspace scope.
+     *
+     * @experimental
+     */
+    entryPoints(): EntryPoint[];
 
     /**
      * Places that change the variable at this node, or the object it holds:
@@ -1141,6 +1155,14 @@ declare module "codemod:ast-grep" {
   };
 
   // ---- Call graph ---------------------------------------------------------
+
+  /** Why a function is called from outside the workspace's code. */
+  export interface EntryPoint {
+    /** `"export"` for the package's public API, else the rule's `kind`. */
+    kind: string;
+    /** What reaches it: `@acme/ui#Button`, `GET app/api/users/[id]/route.ts`. */
+    label: string;
+  }
 
   export interface CallGraphOptions {
     /** Follow calls of calls (callees of callees, callers of callers). @default false */
