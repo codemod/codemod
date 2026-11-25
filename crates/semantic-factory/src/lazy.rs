@@ -93,6 +93,15 @@ impl LazySemanticProvider {
         Self::new(SemanticConfig::workspace_scope(root))
     }
 
+    /// Workspace scope with a type source (`SemanticTypes::Ts7`: the
+    /// TypeScript 7 checker).
+    pub fn workspace_scope_with_types(
+        root: std::path::PathBuf,
+        types: crate::config::SemanticTypes,
+    ) -> Self {
+        Self::new(SemanticConfig::workspace_scope(root).with_types(types))
+    }
+
     /// Create a lazy provider with WorkspaceScope configuration and a custom virtual filesystem.
     ///
     /// # Arguments

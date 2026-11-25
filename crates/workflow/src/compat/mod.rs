@@ -40,7 +40,8 @@ use std::path::{Path, PathBuf};
 
 use butterflow_models::node::NodeType;
 use butterflow_models::step::{
-    SemanticAnalysisConfig, SemanticAnalysisMode, ShardMethod, StepAction, UseJSAstGrep,
+    SemanticAnalysisConfig, SemanticAnalysisMode, SemanticAnalysisTypes, ShardMethod, StepAction,
+    UseJSAstGrep,
 };
 use butterflow_models::trigger::TriggerType;
 use butterflow_models::{Node, Step, Workflow};
@@ -1413,6 +1414,15 @@ impl Generator {
                         let mut parts = vec![("mode", js_string(mode(&detail.mode)))];
                         if let Some(root) = &detail.root {
                             parts.push(("root", js_string(root)));
+                        }
+                        match detail.types {
+                            Some(SemanticAnalysisTypes::Ts7) => {
+                                parts.push(("types", js_string("ts7")))
+                            }
+                            Some(SemanticAnalysisTypes::None) => {
+                                parts.push(("types", js_string("none")))
+                            }
+                            None => {}
                         }
                         object(&parts)
                     }

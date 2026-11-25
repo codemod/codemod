@@ -227,3 +227,43 @@ jssg_test! {
     target: "packages/app/src/App.ts",
     scope: workspace,
 }
+
+// Types from the TypeScript 7 checker (`types: "ts7"`, `ts_api.rs`). They
+// need its `tsc` binary: CODEMOD_TS_API names it (CI installs the pinned
+// typescript@7.0). Without one they pass without checking anything.
+
+#[tokio::test]
+async fn test_callees_through_types_class_method() {
+    use super::fixtures::{run_test, ts7_checker_available, ProviderScope, TestConfig};
+    if !ts7_checker_available() {
+        eprintln!("skipped: set CODEMOD_TS_API to a TypeScript 7.0 tsc");
+        return;
+    }
+    let config = TestConfig::new(
+        "ts_callees_types_class.js",
+        "typescript/type_callees",
+        "service.ts",
+        CodemodLang::Static(SupportLang::TypeScript),
+    )
+    .with_scope(ProviderScope::WorkspaceWithTypes);
+    let result = run_test(config).await;
+    assert!(result.is_ok(), "Test failed: {:?}", result.err());
+}
+
+#[tokio::test]
+async fn test_callees_through_types_interface() {
+    use super::fixtures::{run_test, ts7_checker_available, ProviderScope, TestConfig};
+    if !ts7_checker_available() {
+        eprintln!("skipped: set CODEMOD_TS_API to a TypeScript 7.0 tsc");
+        return;
+    }
+    let config = TestConfig::new(
+        "ts_callees_types_interface.js",
+        "typescript/type_callees",
+        "service.ts",
+        CodemodLang::Static(SupportLang::TypeScript),
+    )
+    .with_scope(ProviderScope::WorkspaceWithTypes);
+    let result = run_test(config).await;
+    assert!(result.is_ok(), "Test failed: {:?}", result.err());
+}

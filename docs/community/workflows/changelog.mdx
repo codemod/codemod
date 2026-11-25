@@ -23,6 +23,7 @@ Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://
 **New**
 
 - **Data flow and call graph in JSSG (experimental, JavaScript and TypeScript)**: `node.flowsFrom()`, `flowsTo()`, `callees()`, `callers()` and `mutations()`, with `dependsOn()` / `reaches()`, `key()` / `equals()`, and module resolution on the root (`resolveModule()`, `resolveExport()`, `specifierFor()`). `definition()` results now carry `exportName` and `nameNode`, and `definition({ follow: true })` goes through imports. `@jssg/utils` adds `retargetImport` and `importFromDeclarations`. The new queries throw instead of answering `[]` when semantic analysis is off. See [Data Flow and Call Graph](/community/jssg/dataflow).
+- **Types from the TypeScript 7 checker (experimental, opt-in)**: `semanticAnalysis: { mode: "workspace", types: "ts7" }` makes `node.typeInfo()` answer and lets `callees()` / `callers()` follow `x.m()` by the type of `x` (`via: "type"`). Needs `typescript@7.0` and the target's dependencies installed. See [Types](/community/jssg/dataflow#types-the-typescript-7-checker).
 </Update>
 
 <Update label="2.0.0-alpha.9" description="November 25, 2026">

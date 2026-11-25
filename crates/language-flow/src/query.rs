@@ -57,6 +57,27 @@ pub trait FlowHost: Sync {
     /// Where the callers table is kept between queries. None rebuilds it on
     /// every callers query.
     fn caller_index(&self) -> Option<&CallerIndexSlot>;
+    /// The workspace functions `object.property(…)` may call according to
+    /// the type of `object`, for a call the values did not resolve. Empty
+    /// when no type source is available.
+    fn typed_method_targets(
+        &self,
+        _path: &Path,
+        _flow: &FileFlow,
+        _call: &CallFact,
+    ) -> Vec<(PathBuf, u32)> {
+        Vec::new()
+    }
+    /// Where the type checker says the member `object.property(…)` calls is
+    /// declared, for a call that stays unresolved. None without types.
+    fn typed_declaration(
+        &self,
+        _path: &Path,
+        _flow: &FileFlow,
+        _call: &CallFact,
+    ) -> Option<FunctionRef> {
+        None
+    }
 }
 
 /// Which query [`applicable`] checks the node for.
@@ -968,6 +989,14 @@ pub fn call_targets(
                         functions_of(host, origin, &mut functions);
                     }
                 }
+                if functions.is_empty() && !call.is_jsx {
+                    let mut typed = host.typed_method_targets(path, flow, call);
+                    typed.dedup();
+                    return typed
+                        .into_iter()
+                        .map(|(path, function)| (path, function, CallEdgeKind::Type))
+                        .collect();
+                }
             }
             if call.is_jsx {
                 CallEdgeKind::Jsx
@@ -1156,6 +1185,58 @@ fn functions_at(
 }
 
 /// The functions inside range that are not inside another one of them.
+/// The workspace functions a declaration the type checker pointed at
+/// stands for: the outermost functions written inside it (a method, an
+/// arrow-function field or property), else the functions its value may be
+/// (`{ m }`, `m: f`, `m = f`).
+pub fn declaration_functions(
+    host: &dyn FlowHost,
+    path: &Path,
+    range: ByteRange,
+) -> Vec<(PathBuf, u32)> {
+    let Some(flow) = host.flow(path) else {
+        return Vec::new();
+    };
+    let written: Vec<(PathBuf, u32)> = outermost_functions(&flow, path, range)
+        .into_iter()
+        .filter_map(|(path, function)| Some((path, function?)))
+        .collect();
+    if !written.is_empty() {
+        return written;
+    }
+    // The value written to the member.
+    let mut values: Vec<u32> = flow
+        .object_members
+        .values()
+        .chain(flow.class_fields.values())
+        .flatten()
+        .map(|(_, node)| *node)
+        .filter(|node| flow.nodes[*node as usize].range.is_within(&range))
+        .collect();
+    if values.is_empty() {
+        values.extend(
+            flow.nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| n.range.is_within(&range))
+                .max_by_key(|(_, n)| n.range.len())
+                .map(|(index, _)| index as u32),
+        );
+    }
+    let mut functions = Vec::new();
+    let mut seen = HashSet::new();
+    for value in values {
+        let mut found = Vec::new();
+        origins(host, path, &flow, value, &mut seen, &mut found);
+        for origin in &found {
+            functions_of(host, origin, &mut functions);
+        }
+    }
+    functions.sort();
+    functions.dedup();
+    functions
+}
+
 fn outermost_functions(flow: &FileFlow, path: &Path, range: ByteRange) -> Vec<FunctionKey> {
     let inside: Vec<(usize, ByteRange)> = flow
         .functions
@@ -1389,6 +1470,7 @@ fn callees(
                     depth: depth + 1,
                     call_site: Some((path.clone(), call.range)),
                     callee: None,
+                    declaration: host.typed_declaration(&path, &flow, call),
                 };
                 if !entries.push(&path, unresolved) {
                     truncated = true;
@@ -1414,6 +1496,7 @@ fn callees(
                     depth: depth + 1,
                     call_site: Some((path.clone(), call.range)),
                     callee: None,
+                    declaration: None,
                 };
                 if !entries.push(&target_path, entry) {
                     truncated = true;
@@ -1642,6 +1725,7 @@ fn callers(
                 depth: depth + 1,
                 call_site: Some((file.clone(), call_range)),
                 callee: callee_ref(&index, &key),
+                declaration: None,
             };
             if !entries.push(file, entry) {
                 truncated = true;

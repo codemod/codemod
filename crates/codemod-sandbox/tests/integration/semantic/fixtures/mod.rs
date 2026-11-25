@@ -101,6 +101,9 @@ pub enum ProviderScope {
     File,
     /// Workspace-scoped analysis (cross-file)
     Workspace,
+    /// Workspace scope with types from the TypeScript 7 checker
+    /// (`types: "ts7"`).
+    WorkspaceWithTypes,
 }
 
 /// Create a semantic provider for JavaScript/TypeScript
@@ -114,7 +117,17 @@ pub fn create_js_provider(
             let path = workspace_path.expect("Workspace path required for workspace scope");
             Arc::new(OxcSemanticProvider::workspace_scope(path.to_path_buf()))
         }
+        ProviderScope::WorkspaceWithTypes => {
+            let path = workspace_path.expect("Workspace path required for workspace scope");
+            Arc::new(OxcSemanticProvider::workspace_scope(path.to_path_buf()).with_types(true))
+        }
     }
+}
+
+/// Whether a TypeScript 7 checker is around for tests that need one:
+/// `CODEMOD_TS_API` names it (CI installs the pinned version).
+pub fn ts7_checker_available() -> bool {
+    std::env::var("CODEMOD_TS_API").is_ok_and(|value| !value.is_empty() && value != "off")
 }
 
 /// Create a semantic provider for Python
@@ -124,7 +137,7 @@ pub fn create_python_provider(
 ) -> Arc<dyn SemanticProvider> {
     match scope {
         ProviderScope::File => Arc::new(RuffSemanticProvider::file_scope()),
-        ProviderScope::Workspace => {
+        ProviderScope::Workspace | ProviderScope::WorkspaceWithTypes => {
             let path = workspace_path.expect("Workspace path required for workspace scope");
             Arc::new(RuffSemanticProvider::workspace_scope(path.to_path_buf()))
         }

@@ -72,6 +72,19 @@ declare module "codemod:ast-grep" {
     definition(options?: DefinitionOptions): DefinitionResult<M> | null;
 
     /**
+     * The type of this expression or declaration name, as the TypeScript
+     * checker prints it (`"UserRepo"`, `"{ id: string; }"`, `"void"`).
+     *
+     * Needs types to be on: `semanticAnalysis: { mode: "workspace", types:
+     * "ts7" }` with TypeScript 7.0 installed in the workspace (or
+     * `CODEMOD_TS_API` naming its `tsc`). Null otherwise, in file scope,
+     * and when no expression has exactly this node's range. Answers describe
+     * the files as they were when the checker first read them.
+     * @experimental
+     */
+    typeInfo(): string | null;
+
+    /**
      * Find all references to the symbol at this node's position.
      *
      * Returns an array of objects, one per file, each containing:
@@ -1108,8 +1121,11 @@ declare module "codemod:ast-grep" {
    * - 'callback': the function is passed to a call the analysis cannot see
    *   into (`items.map(f)`, `setTimeout(f)`) and is assumed to be called
    * - 'jsx': `<Component />`
+   * - 'type': `x.m()` resolved by the type of `x` (TypeScript checker), when
+   *   the values alone did not resolve it. For an interface member: the
+   *   class members that implement it. Experimental.
    */
-  export type CallEdgeKind = "direct" | "method" | "constructor" | "callback" | "jsx";
+  export type CallEdgeKind = "direct" | "method" | "constructor" | "callback" | "jsx" | "type";
 
   /** A call, with the root of its file. */
   export interface CallSite<M extends TypesMap = TypesMap> {
@@ -1148,6 +1164,15 @@ declare module "codemod:ast-grep" {
     depth: number;
     /** The same call as `node`. */
     callSite: CallSite<M>;
+    /**
+     * With types on (`semanticAnalysis: { mode: "workspace", types: "ts7" }`):
+     * where the TypeScript checker says the called member is declared, when
+     * that is not a function in the workspace. For example the
+     * `isOpen: Accessor<boolean>` property of a context interface, in a
+     * `.d.ts` or the workspace. Absent without types or when unknown.
+     * @experimental
+     */
+    declaration?: { node: SgNode<M>; root: SgRoot<M>; name: string | null };
   }
 
   /** One entry of a `callees()` answer: narrow on `resolved`. */

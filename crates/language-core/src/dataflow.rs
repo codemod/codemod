@@ -284,6 +284,10 @@ str_enum! {
         Callback => "callback",
         /// `<Component />`.
         Jsx => "jsx",
+        /// `x.m()` the analysis could not follow by values, resolved by the
+        /// declared or inferred type of `x` (TypeScript checker). For an
+        /// interface or abstract member: the members that implement it.
+        Type => "type",
     }
 }
 
@@ -308,6 +312,12 @@ pub struct CallGraphEntry {
     /// function at depth 1, a caller found at the previous depth deeper).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callee: Option<FunctionRef>,
+    /// Unresolved calls only: where the type checker says the called member
+    /// is declared, when it is not a workspace function (a library
+    /// accessor such as `isOpen: Accessor<boolean>`, an interface member
+    /// with too many implementations). Needs types to be turned on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declaration: Option<FunctionRef>,
 }
 
 /// A function in the workspace, by file and range.

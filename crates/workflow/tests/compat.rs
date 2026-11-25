@@ -991,6 +991,42 @@ export default function transform(root: any, options: any) {
     }
 }
 
+/// `semantic_analysis: { mode: workspace, types: ts7 }` reaches the step as
+/// `types: "ts7"`: `typeInfo()` answers when a checker is around
+/// (`CODEMOD_TS_API`, set in CI), and is null with types off.
+#[test]
+fn a_yaml_transform_can_turn_types_on() {
+    let transform = r#"
+export default function transform(root: any) {
+  const use = root.root().find({ rule: { pattern: "console.log($A)" } });
+  return { edit: null, data: use.getMatch("A").typeInfo() };
+}
+"#;
+    let checker = std::env::var("CODEMOD_TS_API").is_ok_and(|v| !v.is_empty() && v != "off");
+    for (options, expected) in [
+        ("          semantic_analysis: workspace", json!([null])),
+        (
+            "          semantic_analysis:\n            mode: workspace\n            types: ts7",
+            if checker {
+                json!(["number"])
+            } else {
+                json!([null])
+            },
+        ),
+    ] {
+        let h = Harness::new();
+        h.write(
+            "src/a.ts",
+            "const value: number = 1;\nconsole.log(value);\n",
+        );
+        let step = format!("          include: [\"src/**/*.ts\"]\n{options}");
+        let report = js_step(&h, transform, &step);
+        assert!(output(&report).is_ok(), "{options}: {:?}", report.ending);
+        let result = report.steps[0].result.as_ref().unwrap();
+        assert_eq!(result["outputs"], expected, "{options}: {result}");
+    }
+}
+
 /// A transform that changes other files with `jssgTransform`, driven by
 /// comments in the file it runs on:
 /// `// touch: <path>` appends `// touched by <file>` to `<path>` (relative

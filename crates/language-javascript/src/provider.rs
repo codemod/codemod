@@ -157,6 +157,16 @@ impl OxcSemanticProvider {
         }
     }
 
+    /// Turn on types from the TypeScript 7 checker (`types: "ts7"`):
+    /// `typeInfo()`, and method calls resolved by the receiver's type.
+    /// Workspace scope only; a file-scope provider ignores it.
+    pub fn with_types(self, enabled: bool) -> Self {
+        if let (true, AnalyzerKind::WorkspaceScope(analyzer)) = (enabled, &self.analyzer) {
+            analyzer.enable_types();
+        }
+        self
+    }
+
     /// Clear all cached data.
     pub fn clear_cache(&self) {
         match &self.analyzer {
@@ -306,11 +316,17 @@ impl SemanticProvider for OxcSemanticProvider {
         }
     }
 
-    fn get_type(&self, _file_path: &Path, _range: ByteRange) -> SemanticResult<Option<String>> {
-        // Type inference is more complex and would require TypeScript's type checker
-        // For now, return None (type info not available)
-        // Future: could integrate with oxc's type inference or use TypeScript server
-        Ok(None)
+    /// The TypeScript checker's type for the expression at range. Workspace
+    /// scope only, and only when a TypeScript 7 checker is installed in the
+    /// workspace or named by `CODEMOD_TS_API` (spike).
+    fn get_type(&self, file_path: &Path, range: ByteRange) -> SemanticResult<Option<String>> {
+        match &self.analyzer {
+            AnalyzerKind::FileScope(_) => Ok(None),
+            AnalyzerKind::WorkspaceScope(analyzer) => {
+                let content = self.read_file(file_path)?;
+                analyzer.get_type(file_path, &content, range)
+            }
+        }
     }
 
     fn get_data_flow(

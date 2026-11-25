@@ -238,7 +238,7 @@ fn run_callback(
     let mode = isolate::semantic_mode(task, selector.semantic_analysis.as_ref())?;
     // Only a workspace-wide provider needs the files up front.
     let paths: Vec<_> = match mode {
-        SemanticMode::Workspace(_) => files
+        SemanticMode::Workspace(..) => files
             .iter()
             .map(|selected| {
                 selected

@@ -1312,6 +1312,13 @@ function normalizeSelector(selector: unknown): Selector {
         'forEachFile: semanticAnalysis must be "none", "file", "workspace" or { mode, root }',
       );
     }
+    const types = isRecord(semanticAnalysis) ? semanticAnalysis.types : undefined;
+    if (types !== undefined && types !== "ts7" && types !== "none") {
+      throw new TypeError('forEachFile: semanticAnalysis.types must be "ts7" or "none"');
+    }
+    if (types === "ts7" && mode !== "workspace") {
+      throw new TypeError('forEachFile: semanticAnalysis.types needs mode: "workspace"');
+    }
     checkJson(semanticAnalysis, "forEachFile: semanticAnalysis");
     normalized.semanticAnalysis = semanticAnalysis;
   }
