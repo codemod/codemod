@@ -74,6 +74,11 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         })?,
     };
     let dir: PathBuf = super::changes::under(root, &relative);
+    if !dir.join("package.json").is_file() {
+        if let Some(python) = python_manager(&dir, request.lockfile_only) {
+            return run_python(task, &dir, &relative, python);
+        }
+    }
     let present = project::present_root_files(&dir);
     let read = |path: &str| std::fs::read_to_string(dir.join(path)).ok();
     let project = Project::read(&[], &present, &read);
@@ -320,4 +325,169 @@ mod tests {
         assert!(cloud_allows("objects.githubusercontent.com"));
         assert!(!cloud_allows("evilgithub.com"));
     }
+}
+
+/// A Python project's package manager: program, command, lockfile.
+struct PythonManager {
+    name: &'static str,
+    command: String,
+    lockfile: Option<&'static str>,
+}
+
+/// uv (uv.lock or `[tool.uv]`), Poetry (poetry.lock or `[tool.poetry]`),
+/// else pip with a requirements file (no lockfile: only a full install runs).
+fn python_manager(dir: &Path, lockfile_only: bool) -> Option<PythonManager> {
+    let pyproject = std::fs::read_to_string(dir.join("pyproject.toml")).ok();
+    let has = |table: &str| {
+        pyproject
+            .as_deref()
+            .is_some_and(|text| text.lines().any(|l| l.trim().starts_with(table)))
+    };
+    if dir.join("uv.lock").is_file() || has("[tool.uv") {
+        return Some(PythonManager {
+            name: "uv",
+            command: if lockfile_only { "uv lock" } else { "uv sync" }.to_string(),
+            lockfile: Some("uv.lock"),
+        });
+    }
+    if dir.join("poetry.lock").is_file() || has("[tool.poetry") {
+        return Some(PythonManager {
+            name: "poetry",
+            command: if lockfile_only {
+                "poetry lock --no-interaction"
+            } else {
+                "poetry install --no-interaction"
+            }
+            .to_string(),
+            lockfile: Some("poetry.lock"),
+        });
+    }
+    if pyproject.is_some() && dir.join("pylock.toml").is_file() {
+        return Some(PythonManager {
+            name: "uv",
+            command: "uv lock".to_string(),
+            lockfile: Some("uv.lock"),
+        });
+    }
+    let requirements = ["requirements.txt", "requirements/base.txt"]
+        .into_iter()
+        .find(|file| dir.join(file).is_file());
+    if let Some(file) = requirements {
+        return Some(PythonManager {
+            name: "pip",
+            command: if lockfile_only {
+                String::new()
+            } else {
+                format!("pip install -r {file}")
+            },
+            lockfile: None,
+        });
+    }
+    pyproject.map(|_| PythonManager {
+        name: "uv",
+        command: if lockfile_only { "uv lock" } else { "uv sync" }.to_string(),
+        lockfile: Some("uv.lock"),
+    })
+}
+
+fn run_python(
+    task: &TaskContext<'_>,
+    dir: &Path,
+    relative: &str,
+    manager: PythonManager,
+) -> TaskResult {
+    let run = task.run;
+    let shown = manager.lockfile.map(|lockfile| {
+        if relative == "." {
+            lockfile.to_string()
+        } else {
+            format!("{relative}/{lockfile}")
+        }
+    });
+    let result = |ran: bool, changed: bool| {
+        json!({
+            "packageManager": manager.name,
+            "command": manager.command,
+            "ran": ran,
+            "lockfile": shown,
+            "changed": changed,
+        })
+    };
+    if manager.command.is_empty() {
+        task.log(format!(
+            "{}: no lockfile to refresh in {relative} (pass lockfileOnly: false to install)",
+            manager.name
+        ));
+        return Ok(TaskOutcome::new(result(false, false)));
+    }
+    if run.dry_run {
+        task.log(format!(
+            "dry run: would run {} in {relative} (the lockfile is not refreshed)",
+            manager.command
+        ));
+        return Ok(TaskOutcome::new(result(false, false)));
+    }
+    match run.interaction.approve(&Approval::ShellCommand {
+        command: manager.command.clone(),
+    }) {
+        Decision::Approved => {}
+        Decision::Denied => {
+            return Err(TaskError::Failed(format!(
+                "{} was not approved",
+                manager.command
+            )))
+        }
+        Decision::Deferred => {
+            return Err(TaskError::AwaitingApproval(format!(
+                "approve running: {}",
+                manager.command
+            )))
+        }
+    }
+    if !on_path(manager.name) {
+        return Err(TaskError::Failed(format!(
+            "install: {} is not installed on this machine",
+            manager.name
+        )));
+    }
+    let lockfile_path = manager.lockfile.map(|l| dir.join(l));
+    let before = lockfile_path.as_ref().and_then(|p| std::fs::read(p).ok());
+    let env = child_env(task);
+    task.log(format!("running {} in {relative}", manager.command));
+    let events = Arc::clone(&run.events);
+    let at = task.at();
+    let on_line: butterflow_runners::OutputCallback = Arc::new(move |line: String| {
+        let line = line
+            .strip_prefix("[stdout] ")
+            .map(str::to_string)
+            .unwrap_or(line);
+        events.emit(crate::events::Event::StepLog {
+            at: at.clone(),
+            line,
+        });
+    });
+    let runner = DirectRunner::with_quiet(true)
+        .with_cancel(Arc::clone(&task.cancel))
+        .with_cwd(dir.to_path_buf());
+    let output = block_on(runner.run_command(&manager.command, &env, Some(on_line))).map_err(
+        |e| match e {
+            butterflow_models::Error::Canceled => TaskError::Canceled,
+            other => TaskError::Failed(format!("install: {other}")),
+        },
+    )?;
+    if output.exit_code != 0 {
+        let printed = if output.stderr.trim().is_empty() {
+            &output.stdout
+        } else {
+            &output.stderr
+        };
+        let lines: Vec<&str> = printed.trim_end().lines().collect();
+        let tail = lines[lines.len().saturating_sub(15)..].join("\n");
+        return Err(TaskError::Failed(format!(
+            "install: {} exited with code {}:\n{tail}",
+            manager.command, output.exit_code
+        )));
+    }
+    let after = lockfile_path.as_ref().and_then(|p| std::fs::read(p).ok());
+    Ok(TaskOutcome::new(result(true, before != after)))
 }

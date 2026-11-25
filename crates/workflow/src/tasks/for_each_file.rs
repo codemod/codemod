@@ -233,8 +233,9 @@ fn run_callback(
         }
     };
 
-    let mut isolates = StepIsolates::new(task)?;
-    isolates.capabilities = isolate::capabilities_for_code(task, &selector.capabilities)?;
+    let mut isolates = StepIsolates::new(task, Some(module))?;
+    isolates.capabilities =
+        isolate::capabilities_for_code(task, &selector.capabilities, Some(module))?;
     let mode = isolate::semantic_mode(task, selector.semantic_analysis.as_ref())?;
     // Only a workspace-wide provider needs the files up front.
     let paths: Vec<_> = match mode {
