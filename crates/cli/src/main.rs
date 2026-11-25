@@ -12,10 +12,12 @@ mod auth;
 mod auth_provider;
 mod capabilities_security_callback;
 mod commands;
+mod control;
 mod diagnostics;
 mod dirty_git_check;
 mod engine;
 mod feedback;
+mod journal;
 mod launcher;
 mod person_telemetry;
 mod pro_dry_run;
@@ -139,6 +141,12 @@ enum WorkflowCommands {
 
     /// Send an event to a workflow run that waits for it
     Send(commands::workflow::send::Command),
+
+    /// Print a run's events, then follow it while it runs elsewhere
+    Attach(commands::workflow::attach::Command),
+
+    /// Describe a workflow without running it: params, imports, capabilities, steps
+    Inspect(commands::workflow::inspect::Command),
 
     /// Convert workflow.yaml files to workflow.ts
     Upgrade(commands::workflow::upgrade::Command),
@@ -553,6 +561,12 @@ async fn dispatch_command(cli: &Cli, telemetry_sender: TelemetrySenderMutex) -> 
             }
             WorkflowCommands::Send(args) => {
                 commands::workflow::send::handler(args).await?;
+            }
+            WorkflowCommands::Attach(args) => {
+                commands::workflow::attach::handler(args).await?;
+            }
+            WorkflowCommands::Inspect(args) => {
+                commands::workflow::inspect::handler(args).await?;
             }
             WorkflowCommands::Upgrade(args) => {
                 commands::workflow::upgrade::handler(args)?;

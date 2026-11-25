@@ -227,9 +227,33 @@ pub(crate) fn commit(
         }
     }
     let summary = &run.services.summary;
+    // A real run reports each file as it changes; a dry run reports what it
+    // would have changed when it ends.
+    let report = overlay.is_none() && !dry_run;
     for diff in parallel_map(&diffs, |(path, before, after)| {
         task.diff(path, before, after)
     }) {
+        if report {
+            let (text, diff_omitted) = if diff.diff_text.len() <= crate::events::STEP_DIFF_LIMIT {
+                (diff.diff_text.clone(), None)
+            } else {
+                (
+                    String::new(),
+                    Some(crate::events::Omitted {
+                        bytes: diff.diff_text.len(),
+                        limit: crate::events::STEP_DIFF_LIMIT,
+                    }),
+                )
+            };
+            run.events.emit(crate::events::Event::StepDiff {
+                at: task.at(),
+                path: diff.path.clone(),
+                diff: text,
+                additions: diff.additions,
+                deletions: diff.deletions,
+                diff_omitted,
+            });
+        }
         summary.add_diff(diff);
     }
     summary.add_modified(written.len() + renamed.len() + deleted.len());

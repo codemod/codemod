@@ -148,7 +148,14 @@ export interface DecisionModelOptions {
   baseUrl?: string;
 }
 
-export type RunStatus = "succeeded" | "failed" | "canceled" | "awaiting-approval" | "stopped";
+export type RunStatus =
+  | "succeeded"
+  | "failed"
+  | "canceled"
+  | "paused"
+  | "rejected"
+  | "awaiting-approval"
+  | "stopped";
 
 export interface StepRun {
   readonly position: number;
@@ -855,9 +862,11 @@ function describeFailure(run: WorkflowRun): string {
       ? `the run failed: ${run.error}`
       : run.status === "canceled"
         ? "the run was canceled"
-        : run.status === "awaiting-approval"
-          ? `the run is waiting for an approval: ${run.awaiting}`
-          : `the run ended as ${run.status}`;
+        : run.status === "rejected"
+          ? `an approval was rejected: ${run.error}`
+          : run.status === "awaiting-approval"
+            ? `the run is waiting for an approval: ${run.awaiting}`
+            : `the run ended as ${run.status}`;
   const logs = run.logs.length
     ? `\n\nlogs:\n${run.logs.map((log) => `  ${log.step ? `[${log.step}] ` : ""}${log.line}`).join("\n")}`
     : "";

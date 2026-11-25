@@ -220,6 +220,7 @@ fn checked_start(harness: &Harness, source: &str) -> codemod_workflow::RunReport
     harness
         .engine
         .start(StartRequest {
+            run_id: None,
             workflow: harness.workflow(source),
             target: harness.target.path().to_path_buf(),
             params: Value::Null,
@@ -445,7 +446,10 @@ fn resuming_with_allow_dirty_skips_the_check() {
         .engine
         .resume_with(
             &report.run.id,
-            codemod_workflow::ResumeOptions { allow_dirty: true },
+            codemod_workflow::ResumeOptions {
+                allow_dirty: true,
+                ..Default::default()
+            },
         )
         .unwrap();
     assert!(

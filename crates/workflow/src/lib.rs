@@ -37,19 +37,19 @@ mod write_gate;
 
 pub use build::{
     build, inspect, rewrite_for_node, uses_assess, BuildError, Built, Inspection, InstalledSkill,
-    FLOW_MODULE,
+    StaticStep, FLOW_MODULE,
 };
 pub use butterflow_core::package_workflows::{
     declared_workflows, locate_workflow, DeclaredWorkflow,
 };
 pub use butterflow_state::run_store::{
-    FileCount, LocalStore, MemoryStore, RunRecord, RunSettings, RunStatus, RunStore, StepRecord,
-    StepStatus,
+    FileCount, LocalStore, MemoryStore, Resumable, RunRecord, RunSettings, RunStatus, RunStore,
+    StepRecord, StepStatus,
 };
 pub use callback_file::{run_callback_file, CallbackFileRequest, CallbackFileRun};
 pub use engine::{
     cancel_run, is_typescript, load_workflow, send_event, Canceled, Engine, EngineError,
-    LoadedWorkflow, ResumeOptions, RunReport, StartRequest, StopHandle,
+    LoadedWorkflow, ResumeOptions, RunReport, StartRequest, StopHandle, StopMode,
 };
 pub use hosted::{HostedRun, OpenRequest, SelectedFiles};
 pub use js::orchestrator_version;

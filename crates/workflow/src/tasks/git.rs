@@ -102,7 +102,7 @@ pub(crate) fn pull_request(task: &TaskContext<'_>, request: PullRequest) -> Task
         Some(branch) => branch,
         None => current_branch(target)?,
     };
-    match task.run.interaction.approve(&Approval::PullRequest {
+    match task.approve(&Approval::PullRequest {
         title: request.title.clone(),
         branch: branch.clone(),
     }) {

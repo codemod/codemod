@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,7 +17,9 @@ use butterflow_core::structured_log::OutputFormat;
 use butterflow_state::run_store::{store_from_env, RunRecord, RunStore};
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_workflow::events::{Event, EventSink};
-use codemod_workflow::interaction::{AgentChoice, Approval, Decision, Interaction, NonInteractive};
+use codemod_workflow::interaction::{
+    AgentChoice, Approval, Ask, Decision, Interaction, NonInteractive,
+};
 use codemod_workflow::{
     load_workflow, Ending, Engine, RunReport, RunStatus, Services, StartRequest, StepStatus,
     Summary,
@@ -67,6 +69,11 @@ pub struct RunFlags {
     /// Output format: "text" (default) or "jsonl" for structured logging
     #[arg(long, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
+
+    /// Let another program drive the run: "stdio" reads JSON commands on stdin (answer, approve,
+    /// reject, stop) and waits at questions instead of exiting. Needs --format jsonl
+    #[arg(long, value_enum, value_name = "CHANNEL")]
+    pub control: Option<crate::control::ControlMode>,
 }
 
 fn parse_decision_model(text: &str) -> Result<DecisionModel> {
@@ -144,11 +151,14 @@ impl RunFlags {
                 crate::commands::package_skill::create_install_skill_executor(telemetry.clone())
             }),
             approve_all: false,
+            approve_ids: Vec::new(),
             managed_git: false,
             skip_shard_steps: false,
             nested_observer: None,
             launcher: crate::launcher::enabled(self),
             allow_dirty: false,
+            control: self.control,
+            force: false,
         }
     }
 }
@@ -171,6 +181,8 @@ pub struct ExecSettings {
     pub install_skill: Option<Arc<dyn InstallSkillExecutor>>,
     /// Treat every approval as given.
     pub approve_all: bool,
+    /// Treat these questions as approved (`workflow resume --approve <id>`).
+    pub approve_ids: Vec<String>,
     /// Let `branch`, `commit` and `pullRequest` steps touch git.
     pub managed_git: bool,
     pub skip_shard_steps: bool,
@@ -181,9 +193,47 @@ pub struct ExecSettings {
     /// Applying a dry run for real from the launcher skips the check for
     /// uncommitted changes.
     pub allow_dirty: bool,
+    /// `--control`: another program drives the run.
+    pub control: Option<crate::control::ControlMode>,
+    /// `workflow resume --force`: continue a canceled or rejected run.
+    pub force: bool,
 }
 
 impl ExecSettings {
+    pub fn approvals(&self) -> crate::control::Approvals {
+        crate::control::Approvals {
+            all: self.approve_all,
+            ids: self.approve_ids.clone(),
+        }
+    }
+
+    /// A control channel speaks JSONL.
+    fn check_control(&self) -> Result<()> {
+        if self.control.is_some() && self.format != OutputFormat::Jsonl {
+            return Err(anyhow!(
+                "--control stdio needs --format jsonl: events go to stdout as JSON lines"
+            ));
+        }
+        Ok(())
+    }
+
+    fn hello_settings(&self) -> crate::control::HelloSettings {
+        let mut capabilities: Vec<String> = self
+            .capabilities
+            .iter()
+            .map(|capability| capability.as_str().to_string())
+            .collect();
+        capabilities.sort();
+        crate::control::HelloSettings {
+            capabilities,
+            managed_git: self.managed_git,
+            agent: self.agent.clone(),
+            decision_model: self.decision_model.as_ref().map(DecisionModel::id),
+            approve_all: self.approve_all,
+            approved: self.approve_ids.clone(),
+        }
+    }
+
     /// Fill in what the person saved (coding agent, decision model) where
     /// the flags say nothing. `recorded_agent` is the one a resumed run was
     /// started with, which comes before the saved one.
@@ -240,11 +290,17 @@ impl ExecOutcome {
 
     /// `Ok` when the run finished or is waiting for an approval, even if
     /// some files failed. Failures were already shown while the run
-    /// progressed.
+    /// progressed. A dry run that stopped at an approval is not `Ok`: it
+    /// is not saved, so it cannot wait to be resumed.
     pub fn ended(&self) -> Result<()> {
         match &self.report.ending {
+            Ending::AwaitingApproval(_) if self.dry_run => {
+                Err(WorkflowFailureAlreadyReported.into())
+            }
             Ending::Succeeded(_) | Ending::AwaitingApproval(_) | Ending::Stopped(_) => Ok(()),
-            Ending::Failed(_) | Ending::Canceled => Err(WorkflowFailureAlreadyReported.into()),
+            Ending::Failed(_) | Ending::Canceled | Ending::Paused | Ending::Rejected(_) => {
+                Err(WorkflowFailureAlreadyReported.into())
+            }
             Ending::FailedWithOutput { exit_code, .. } => Err(FailedByWorkflow {
                 exit_code: *exit_code,
             }
@@ -341,6 +397,7 @@ pub fn status_label(store: &dyn RunStore, run: &RunRecord) -> String {
 }
 
 pub async fn start(mut request: ExecRequest) -> Result<ExecOutcome> {
+    request.settings.check_control()?;
     // `--model` (or the launcher's choice), before the saved one fills it in.
     let chosen = request.settings.decision_model.clone();
     request.settings = request.settings.with_saved(None);
@@ -359,10 +416,30 @@ pub async fn start(mut request: ExecRequest) -> Result<ExecOutcome> {
     let format = request.settings.format;
     let dry_run = request.dry_run;
     let allow_dirty = request.settings.allow_dirty;
-    let (engine, renderer, summary) = engine(&request.settings)?;
+    // Picked here, so `hello` can name the run before it starts.
+    let run_id = uuid::Uuid::new_v4().to_string();
+    if request.settings.control.is_some() {
+        crate::control::Hello {
+            event: "hello",
+            protocol: crate::control::PROTOCOL,
+            cli: crate::CLI_VERSION,
+            run_id: run_id.clone(),
+            mode: "run",
+            dry_run,
+            workflow: workflow.path.clone(),
+            target: request.target.clone(),
+            settings: request.settings.hello_settings(),
+            commands: crate::control::COMMANDS.to_vec(),
+        }
+        .print();
+    }
+    // Dry runs are not saved, so they keep no journal.
+    let (engine, renderer, summary) =
+        engine(&request.settings, (!dry_run).then(|| run_id.clone()))?;
     let started = Instant::now();
     let report = run_off_thread(engine, move |engine| {
         engine.start(StartRequest {
+            run_id: Some(run_id),
             workflow,
             target: request.target,
             params: Value::Object(request.params.into_iter().collect()),
@@ -392,9 +469,25 @@ pub async fn start(mut request: ExecRequest) -> Result<ExecOutcome> {
 /// `settings` adds: capabilities granted and git use carry over, so the rest
 /// of the run behaves like its start.
 pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutcome> {
+    settings.check_control()?;
     let record = store()
         .get_run(run_id)?
         .ok_or_else(|| anyhow!("run '{run_id}' not found"))?;
+    // Before asking anything: a run that is over stays over.
+    match record.status.resumable() {
+        codemod_workflow::Resumable::Yes => {}
+        codemod_workflow::Resumable::WithForce if settings.force => {}
+        codemod_workflow::Resumable::WithForce => {
+            return Err(codemod_workflow::EngineError::Ended {
+                run: run_id.to_string(),
+                status: record.status,
+            }
+            .into())
+        }
+        codemod_workflow::Resumable::No => {
+            return Err(codemod_workflow::EngineError::AlreadyFinished(run_id.to_string()).into())
+        }
+    }
     settings.capabilities.extend(
         record
             .settings
@@ -425,11 +518,27 @@ pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutc
     }
 
     let format = settings.format;
-    let (engine, renderer, summary) = engine(&settings)?;
+    if settings.control.is_some() {
+        crate::control::Hello {
+            event: "hello",
+            protocol: crate::control::PROTOCOL,
+            cli: crate::CLI_VERSION,
+            run_id: run_id.to_string(),
+            mode: "resume",
+            dry_run: false,
+            workflow: record.workflow_path.clone(),
+            target: record.target.clone(),
+            settings: settings.hello_settings(),
+            commands: crate::control::COMMANDS.to_vec(),
+        }
+        .print();
+    }
+    let (engine, renderer, summary) = engine(&settings, Some(run_id.to_string()))?;
     let started = Instant::now();
     let run_id = run_id.to_string();
     let options = codemod_workflow::ResumeOptions {
         allow_dirty: settings.allow_dirty,
+        force: settings.force,
     };
     let report = run_off_thread(engine, move |engine| engine.resume_with(&run_id, options)).await?;
     renderer.finish();
@@ -445,15 +554,38 @@ pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutc
     Ok(outcome)
 }
 
-fn engine(settings: &ExecSettings) -> Result<(Engine, Arc<Renderer>, Arc<Summary>)> {
+/// An engine whose events are numbered, kept in the journal of `journal`
+/// (the run's id; `None` for a dry run) and rendered; it asks over the
+/// control channel when there is one, else in the terminal.
+fn engine(
+    settings: &ExecSettings,
+    journal: Option<String>,
+) -> Result<(Engine, Arc<Renderer>, Arc<Summary>)> {
     let renderer = Arc::new(Renderer::new(settings.format));
-    let interaction: Arc<dyn Interaction> = Arc::new(TerminalInteraction {
-        interactive: crate::utils::interactive::is_interactive(settings.no_interactive),
-        approve_all: settings.approve_all,
-        renderer: Arc::clone(&renderer),
-        prompt_lock: Mutex::new(()),
+    let events = Arc::new(crate::journal::Recorder::new(
+        store(),
+        journal,
+        renderer.clone(),
+    ));
+    let control = settings.control.map(|_| {
+        Arc::new(crate::control::Control::new(
+            events.clone(),
+            settings.approvals(),
+        ))
     });
-    let (engine, summary) = engine_with(settings, renderer.clone(), interaction);
+    let interaction: Arc<dyn Interaction> = match &control {
+        Some(control) => control.clone(),
+        None => Arc::new(TerminalInteraction {
+            interactive: crate::utils::interactive::is_interactive(settings.no_interactive),
+            approvals: settings.approvals(),
+            renderer: Arc::clone(&renderer),
+            prompt_lock: Mutex::new(()),
+        }),
+    };
+    let (engine, summary) = engine_with(settings, events, interaction);
+    if let Some(control) = control {
+        control.listen(engine.stop_handle());
+    }
     Ok((engine, renderer, summary))
 }
 
@@ -545,12 +677,38 @@ pub(crate) fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumabl
         Ending::FailedWithOutput { error, .. } => {
             eprintln!("\n{} {error}", style("The run failed:").red().bold());
         }
+        Ending::AwaitingApproval(message) if outcome.dry_run => {
+            eprintln!(
+                "\n{} {message}\n  A dry run is not saved, so it cannot wait to be resumed. Run it again with --approve to go past approvals.",
+                style("The dry run stopped at an approval:").yellow().bold(),
+            );
+        }
         Ending::AwaitingApproval(message) => {
+            let approve = match &run.question {
+                Some(question) => format!("--approve {question}"),
+                None => "--approve".to_string(),
+            };
             eprintln!(
                 "\n{} {message}{}",
                 style("Waiting for approval:").yellow().bold(),
                 hint(format!(
-                    "Resume with: codemod workflow resume --id {} --approve",
+                    "Approve it and go on with: codemod workflow resume --id {} {approve}",
+                    run.id
+                ))
+            );
+        }
+        Ending::Rejected(message) => {
+            eprintln!(
+                "\n{} {message}\n  The run ended; what earlier steps changed was kept.",
+                style("Rejected:").red().bold(),
+            );
+        }
+        Ending::Paused => {
+            eprintln!(
+                "\n{}{}",
+                style("The run was paused.").yellow().bold(),
+                hint(format!(
+                    "Resume with: codemod workflow resume --id {}",
                     run.id
                 ))
             );
@@ -566,14 +724,7 @@ pub(crate) fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumabl
             );
         }
         Ending::Canceled => {
-            eprintln!(
-                "\n{}{}",
-                style("The run was canceled.").yellow().bold(),
-                hint(format!(
-                    "Resume with: codemod workflow resume --id {}",
-                    run.id
-                ))
-            );
+            eprintln!("\n{}", style("The run was canceled.").yellow().bold());
         }
     }
     if let Some(line) = output_summary(outcome.report.ending.output(), &run.id, resumable) {
@@ -620,7 +771,6 @@ pub struct Renderer {
     bars: Mutex<HashMap<u64, ProgressBar>>,
     /// Streamed agent message text not yet followed by a full line.
     agent_text: Mutex<HashMap<u64, String>>,
-    seq: AtomicU64,
     /// A dry run's diff has begun.
     diffs_shown: AtomicBool,
 }
@@ -636,7 +786,6 @@ impl Renderer {
             multi,
             bars: Mutex::new(HashMap::new()),
             agent_text: Mutex::new(HashMap::new()),
-            seq: AtomicU64::new(0),
             diffs_shown: AtomicBool::new(false),
         }
     }
@@ -683,20 +832,18 @@ impl Renderer {
     }
 }
 
-impl EventSink for Renderer {
-    fn emit(&self, event: Event) {
+impl crate::journal::Stamped for Renderer {
+    fn emit(&self, event: Event, record: &Value) {
         if self.format == OutputFormat::Jsonl {
-            let mut record = serde_json::to_value(&event).unwrap_or(Value::Null);
-            // Hold stdout while numbering, so lines come out in `seq` order even
-            // when events arrive from several worker threads at once.
             let mut stdout = std::io::stdout().lock();
-            if let Value::Object(map) = &mut record {
-                map.insert("seq".into(), self.seq.fetch_add(1, Ordering::SeqCst).into());
-                map.insert("ts".into(), chrono::Utc::now().to_rfc3339().into());
-            }
             let _ = writeln!(stdout, "{record}");
+            let _ = stdout.flush();
             return;
         }
+        // A nested codemod's steps show as their parent step's.
+        let Some(event) = event.top_level() else {
+            return;
+        };
         match event {
             Event::RunStarted {
                 run_id, resumed, ..
@@ -722,19 +869,18 @@ impl EventSink for Renderer {
                 style("↻").yellow()
             )),
             Event::StepProgress {
-                position,
+                at,
                 processed,
                 total,
             } => {
-                let bar = self.bar(position, total);
+                let bar = self.bar(at.position, total);
                 bar.set_length(total as u64);
                 bar.set_position(processed as u64);
             }
             Event::StepLog { line, .. } => self.line(format!("  {}", style(line).dim())),
-            Event::RunLog { line } => self.line(style(line).dim().to_string()),
-            Event::StepAgent {
-                position, activity, ..
-            } => {
+            Event::RunLog { line, .. } => self.line(style(line).dim().to_string()),
+            Event::StepAgent { at, activity, .. } => {
+                let position = at.position;
                 let line_open = self
                     .agent_text
                     .lock()
@@ -758,12 +904,14 @@ impl EventSink for Renderer {
                 }
             }
             Event::StepFinished {
-                position,
+                at,
                 label,
                 status,
                 error,
                 duration_ms,
+                ..
             } => {
+                let position = at.position;
                 if let Some(bar) = self.bars.lock().unwrap().remove(&position) {
                     bar.finish_and_clear();
                 }
@@ -793,10 +941,19 @@ impl EventSink for Renderer {
                         "{} {label}: waiting for approval",
                         style("‖").yellow()
                     )),
+                    StepStatus::Rejected => {
+                        self.line(format!("{} {label}: rejected", style("✗").red()))
+                    }
                     // Never reported: a step that began to wait has not finished.
                     StepStatus::Waiting => {}
                 }
             }
+            // Real runs' diffs are for JSONL and the launcher; questions are
+            // only asked over a control channel, which speaks JSONL.
+            Event::StepDiff { .. }
+            | Event::Question { .. }
+            | Event::QuestionClosed { .. }
+            | Event::ControlError { .. } => {}
             Event::RunDiff { diff, .. } => {
                 if !self.diffs_shown.swap(true, Ordering::SeqCst) {
                     self.line(format!(
@@ -858,7 +1015,7 @@ fn color_diff(diff: &str) -> String {
 
 struct TerminalInteraction {
     interactive: bool,
-    approve_all: bool,
+    approvals: crate::control::Approvals,
     renderer: Arc<Renderer>,
     /// Steps running at the same time must not prompt at the same time.
     prompt_lock: Mutex<()>,
@@ -869,34 +1026,20 @@ impl Interaction for TerminalInteraction {
         self.interactive
     }
 
+    fn ask(&self, ask: &Ask, approval: &Approval) -> Decision {
+        if self.approvals.gives(&ask.id, approval) {
+            return Decision::Approved;
+        }
+        self.approve(approval)
+    }
+
     fn approve(&self, approval: &Approval) -> Decision {
-        if !self.interactive || (self.approve_all && approval.given_by_approve_all()) {
-            return NonInteractive {
-                approve_all: self.approve_all,
-            }
-            .approve(approval);
+        let approve_all = self.approvals.all;
+        if !self.interactive || (approve_all && approval.given_by_approve_all()) {
+            return NonInteractive { approve_all }.approve(approval);
         }
         let _guard = self.prompt_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let question = match approval {
-            Approval::Manual { message } => message.clone(),
-            Approval::ShellCommand { command } => format!("Run shell command: {command}?"),
-            Approval::Capabilities { modules } => {
-                format!("Allow the transform to use {}?", modules.join(", "))
-            }
-            Approval::PullRequest { title, branch } => {
-                format!("Push '{branch}' and open pull request '{title}'?")
-            }
-            Approval::UncommittedChanges {
-                path,
-                not_a_repository: false,
-            } => format!("You have uncommitted changes in {path}. Do you want to proceed anyway?"),
-            Approval::UncommittedChanges {
-                path,
-                not_a_repository: true,
-            } => format!(
-                "The target path '{path}' is not tracked by Git. Do you want to proceed anyway?"
-            ),
-        };
+        let question = approval.prompt();
         // Enter never approves: every one of these runs or publishes something.
         let answer = self.renderer.suspend(|| {
             inquire::Confirm::new(&question)

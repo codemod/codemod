@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::build::{Built, ASSESS_MODULE, DEPS_MODULE, FLOW_MODULE, GIT_MODULE};
-use crate::events::{Event, EventSink};
+use crate::events::{step_kind, Event, EventSink, StepAt};
 use crate::interaction::Interaction;
 use crate::tasks::{self, TaskContext};
 use crate::Services;
@@ -183,9 +183,103 @@ pub(crate) struct RunContext {
     /// target; `None` when nothing is checked (dry runs, tests, resumes,
     /// `--allow-dirty`). Shared with nested codemods.
     pub write_gate: Option<Arc<crate::write_gate::WriteGate>>,
+    /// For a nested codemod: the key of the step running it, which its own
+    /// steps' keys start with. `None` for the run itself.
+    pub key_prefix: Option<String>,
+    /// Why the run is stopping, if it is: shared with nested codemods.
+    pub halt: Arc<RunHalt>,
     /// Keeps `cancel` following the store's cancel requests; `None` for
     /// nested codemods, which share their parent's flag.
     pub _cancel_watch: Option<CancelWatch>,
+}
+
+/// Why a run stops before its body ends. Stronger reasons win: a run
+/// paused and then canceled is canceled, and a rejection beats both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub(crate) enum StopReason {
+    None = 0,
+    /// Ctrl-C, `stop {mode: "pause"}`: the run can be resumed.
+    Pause = 1,
+    /// `workflow cancel`, `stop {mode: "cancel"}`: the run is over.
+    Cancel = 2,
+    /// An approval was rejected: the run is over.
+    Reject = 3,
+}
+
+/// How a run is being stopped, shared by the run, its nested codemods and
+/// the engine's stop handle. Also where the approval the run waits for is
+/// noted, so the run's record can name it.
+pub(crate) struct RunHalt {
+    /// The run's own cancel flag (`RunContext::cancel` of the run itself):
+    /// every reason to stop sets it.
+    cancel: Arc<AtomicBool>,
+    reason: AtomicU8,
+    rejected: Mutex<Option<String>>,
+    question: Mutex<Option<String>>,
+}
+
+impl RunHalt {
+    pub fn new(cancel: Arc<AtomicBool>) -> Self {
+        Self {
+            cancel,
+            reason: AtomicU8::new(StopReason::None as u8),
+            rejected: Mutex::new(None),
+            question: Mutex::new(None),
+        }
+    }
+
+    /// The run's own cancel flag.
+    pub fn cancel(&self) -> &Arc<AtomicBool> {
+        &self.cancel
+    }
+
+    pub fn stop(&self, reason: StopReason) {
+        self.reason.fetch_max(reason as u8, Ordering::SeqCst);
+        self.cancel.store(true, Ordering::SeqCst);
+    }
+
+    /// End the run as rejected: `message` is the approval's. Steps running
+    /// alongside stop as on a cancel.
+    pub fn reject(&self, message: String) {
+        self.rejected
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert(message);
+        self.stop(StopReason::Reject);
+    }
+
+    pub fn reason(&self) -> StopReason {
+        match self.reason.load(Ordering::SeqCst) {
+            0 => StopReason::None,
+            1 => StopReason::Pause,
+            2 => StopReason::Cancel,
+            _ => StopReason::Reject,
+        }
+    }
+
+    pub fn rejected(&self) -> Option<String> {
+        self.rejected
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Note the question of an approval the run will wait for; the first
+    /// one is the one its record names.
+    pub fn wait_for(&self, question: String) {
+        self.question
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert(question);
+    }
+
+    pub fn question(&self) -> Option<String> {
+        self.question
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
 }
 
 /// Why a step could not finish.
@@ -197,19 +291,19 @@ pub(crate) enum Interruption {
     AwaitingApproval(String),
 }
 
-/// Sets a run's cancel flag when the store holds a cancel request for it
-/// (`codemod workflow cancel`, from any process). Stops when dropped.
+/// Cancels a run when the store holds a cancel request for it (`codemod
+/// workflow cancel`, from any process). Stops when dropped.
 pub(crate) struct CancelWatch {
     _stop: mpsc::Sender<()>,
 }
 
 impl CancelWatch {
-    pub fn start(store: Arc<dyn RunStore>, run_id: String, cancel: Arc<AtomicBool>) -> Self {
+    pub fn start(store: Arc<dyn RunStore>, run_id: String, halt: Arc<RunHalt>) -> Self {
         let (stop, stopped) = mpsc::channel::<()>();
         std::thread::spawn(move || {
             while let Err(mpsc::RecvTimeoutError::Timeout) = stopped.recv_timeout(CANCEL_POLL) {
                 if store.cancel_requested(&run_id).unwrap_or(false) {
-                    cancel.store(true, Ordering::SeqCst);
+                    halt.stop(StopReason::Cancel);
                 }
             }
         });
@@ -248,6 +342,7 @@ impl RunContext {
     ) -> Self {
         let mut chain = self.chain.clone();
         chain.push(identity);
+        let key_prefix = Some(self.at(position).step);
         Self {
             run_id: format!("{}~{position}", self.run_id),
             target: self.target.clone(),
@@ -272,7 +367,21 @@ impl RunContext {
             interruption: Mutex::new(None),
             assess: Default::default(),
             write_gate: self.write_gate.clone(),
+            key_prefix,
+            halt: Arc::clone(&self.halt),
             _cancel_watch: None,
+        }
+    }
+
+    /// Which step an event at `position` is about.
+    pub fn at(&self, position: u64) -> StepAt {
+        match &self.key_prefix {
+            None => StepAt::top(position),
+            Some(prefix) => StepAt {
+                position,
+                step: format!("{prefix}/{position}"),
+                parent: Some(prefix.clone()),
+            },
         }
     }
 
@@ -280,7 +389,7 @@ impl RunContext {
     /// changes nobody agreed to write over (see `write_gate`).
     pub fn before_write(&self) -> Result<(), String> {
         match &self.write_gate {
-            Some(gate) if !self.dry_run => gate.check(self.interaction.as_ref()),
+            Some(gate) if !self.dry_run => gate.check(self.interaction.as_ref(), &self.cancel),
             _ => Ok(()),
         }
     }
@@ -315,22 +424,38 @@ impl RunContext {
         self.test.as_ref().and_then(|plan| plan.until.clone())
     }
 
-    /// How the run ended, given how its body ended. A step that was canceled
-    /// or waits for an approval decides it even when the body caught the
-    /// error and carried on; a test's `until` step turns success into
-    /// stopped.
+    /// How the run ended, given how its body ended. A rejected approval, a
+    /// step that was stopped or one that waits for an approval decides it
+    /// even when the body caught the error and carried on; a test's `until`
+    /// step turns success into stopped. Why the run was stopped decides
+    /// whether it is paused, canceled or rejected.
     pub fn ending(&self, body: Ending) -> Ending {
+        if let Some(message) = self.halt.rejected() {
+            return Ending::Rejected(message);
+        }
         let interruption = self
             .interruption
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        let stopped = || match self.halt.reason() {
+            StopReason::Cancel | StopReason::Reject => Ending::Canceled,
+            StopReason::None | StopReason::Pause => Ending::Paused,
+        };
         match (interruption, body) {
-            (Some(Interruption::Canceled), _) | (_, Ending::Canceled) => Ending::Canceled,
+            (_, Ending::Rejected(message)) => Ending::Rejected(message),
+            (Some(Interruption::Canceled), _) | (_, Ending::Canceled | Ending::Paused) => stopped(),
+            // A question closed because the run was stopped is not one the
+            // run waits for.
+            (Some(Interruption::AwaitingApproval(_)), _) | (_, Ending::AwaitingApproval(_))
+                if self.halt.reason() != StopReason::None =>
+            {
+                stopped()
+            }
             (Some(Interruption::AwaitingApproval(message)), _)
             | (_, Ending::AwaitingApproval(message)) => Ending::AwaitingApproval(message),
             // Stopping a run mid-step surfaces as that step's failure.
-            (None, Ending::Failed(_)) if self.canceled() => Ending::Canceled,
+            (None, Ending::Failed(_)) if self.canceled() => stopped(),
             (None, Ending::Succeeded(output)) => match self.stopped_at() {
                 Some(label) => Ending::Stopped(label),
                 None => Ending::Succeeded(output),
@@ -349,8 +474,9 @@ impl RunContext {
             return Ok(());
         }
         self.events.emit(Event::StepFinished {
-            position: step.position,
+            at: self.at(step.position),
             label: step.label.clone(),
+            kind: step_kind(&step.key),
             status: step.status,
             error: step.error.clone(),
             duration_ms,
@@ -359,16 +485,26 @@ impl RunContext {
     }
 
     /// Report what the orchestrator says about a step:
-    /// `{ type: "stepStarted" | "stepReplayed", position, label }`, or
+    /// `{ type: "stepStarted" | "stepReplayed", position, label, kind }`, or
     /// `{ type: "stepRetrying", position, label, attempt, attempts, error }`.
     pub fn host_event(&self, event: &str) -> Result<(), String> {
         #[derive(Deserialize)]
         #[serde(tag = "type")]
         enum HostEvent {
             #[serde(rename = "stepStarted")]
-            Started { position: u64, label: String },
+            Started {
+                position: u64,
+                label: String,
+                #[serde(default)]
+                kind: Option<String>,
+            },
             #[serde(rename = "stepReplayed")]
-            Replayed { position: u64, label: String },
+            Replayed {
+                position: u64,
+                label: String,
+                #[serde(default)]
+                kind: Option<String>,
+            },
             #[serde(rename = "stepRetrying")]
             Retrying {
                 position: u64,
@@ -380,8 +516,24 @@ impl RunContext {
         }
         let event = serde_json::from_str(event).map_err(|e| format!("bad step event: {e}"))?;
         self.events.emit(match event {
-            HostEvent::Started { position, label } => Event::StepStarted { position, label },
-            HostEvent::Replayed { position, label } => Event::StepReplayed { position, label },
+            HostEvent::Started {
+                position,
+                label,
+                kind,
+            } => Event::StepStarted {
+                at: self.at(position),
+                label,
+                kind,
+            },
+            HostEvent::Replayed {
+                position,
+                label,
+                kind,
+            } => Event::StepReplayed {
+                at: self.at(position),
+                label,
+                kind,
+            },
             HostEvent::Retrying {
                 position,
                 label,
@@ -389,7 +541,7 @@ impl RunContext {
                 attempts,
                 error,
             } => Event::StepRetrying {
-                position,
+                at: self.at(position),
                 label,
                 attempt,
                 attempts,
@@ -414,7 +566,13 @@ pub enum Ending {
         output: serde_json::Value,
         exit_code: i32,
     },
+    /// Canceled: the run is over (`workflow cancel`, `stop {mode: "cancel"}`).
     Canceled,
+    /// Stopped on request, to be resumed (Ctrl-C, `stop {mode: "pause"}`).
+    Paused,
+    /// A manual approval was rejected (its message here): the run is over,
+    /// and what earlier steps changed stays.
+    Rejected(String),
     /// Stopped at a manual approval nobody could give.
     AwaitingApproval(String),
     /// A test run stopped after its `until` step (named here).
@@ -428,6 +586,8 @@ impl Ending {
             Self::Succeeded(_) => "succeeded",
             Self::Failed(_) | Self::FailedWithOutput { .. } => "failed",
             Self::Canceled => "canceled",
+            Self::Paused => "paused",
+            Self::Rejected(_) => "rejected",
             Self::AwaitingApproval(_) => "awaiting-approval",
             Self::Stopped(_) => "stopped",
         }
@@ -457,6 +617,8 @@ impl Ending {
                 exit_code: *exit_code,
             },
             Self::Canceled => Outcome::Canceled,
+            Self::Paused => Outcome::Paused,
+            Self::Rejected(message) => Outcome::Rejected(message.clone()),
             Self::AwaitingApproval(message) => Outcome::AwaitingApproval(message.clone()),
             Self::Stopped(_) => Outcome::Succeeded(serde_json::Value::Null),
         }
@@ -693,7 +855,10 @@ fn install_host<'js>(
     object.set(
         "log",
         Function::new(ctx.clone(), move |line: String| {
-            logger.events.emit(Event::RunLog { line });
+            logger.events.emit(Event::RunLog {
+                line,
+                step: logger.key_prefix.clone(),
+            });
         })?,
     )?;
 
@@ -806,7 +971,8 @@ pub(crate) fn run_host_task(run: &Arc<RunContext>, request: &str) -> Result<Stri
                 tasks::TaskError::AwaitingApproval(message) => {
                     run.interrupt(Interruption::AwaitingApproval(message.clone()))
                 }
-                tasks::TaskError::Failed(_) => {}
+                // The run's halt already says so.
+                tasks::TaskError::Rejected(_) | tasks::TaskError::Failed(_) => {}
             }
             Err(error.to_payload())
         }
@@ -942,6 +1108,7 @@ fn rejection<'js>(ctx: &Ctx<'js>, promise: &Promise<'js>) -> Ending {
     match name.as_str() {
         "CanceledError" => Ending::Canceled,
         "AwaitingApprovalError" => Ending::AwaitingApproval(message),
+        "RejectedError" => Ending::Rejected(message),
         "WorkflowFailure" => workflow_failure(ctx, &object, message),
         _ => Ending::Failed(format!("{name}: {message}")),
     }

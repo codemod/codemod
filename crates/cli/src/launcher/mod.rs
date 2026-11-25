@@ -21,8 +21,10 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use butterflow_core::structured_log::OutputFormat;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use codemod_workflow::events::{Event, EventSink};
-use codemod_workflow::interaction::{AgentChoice, Approval, Decision, Interaction, NonInteractive};
+use codemod_workflow::events::Event;
+use codemod_workflow::interaction::{
+    AgentChoice, Approval, Ask, Decision, Interaction, NonInteractive,
+};
 use codemod_workflow::{load_workflow, RunReport, RunStatus, StartRequest, Summary};
 use console::style;
 use crossterm::event::{Event as TermEvent, EventStream, KeyEventKind};
@@ -48,6 +50,7 @@ pub fn enabled(flags: &RunFlags) -> bool {
         .map(|value| matches!(value.trim(), "0" | "false" | "off" | "no"))
         .unwrap_or(false);
     flags.format == OutputFormat::Text
+        && flags.control.is_none()
         && !opted_out
         && std::env::var_os("CI").is_none()
         && crate::utils::interactive::is_interactive(flags.no_interactive)
@@ -232,8 +235,8 @@ enum Message {
 
 struct ChannelEvents(UnboundedSender<Message>);
 
-impl EventSink for ChannelEvents {
-    fn emit(&self, event: Event) {
+impl crate::journal::Stamped for ChannelEvents {
+    fn emit(&self, event: Event, _record: &Value) {
         let _ = self.0.send(Message::Event(event));
     }
 }
@@ -241,7 +244,7 @@ impl EventSink for ChannelEvents {
 /// Asks through the screen, waiting on the engine's thread for the answer.
 struct ScreenInteraction {
     messages: UnboundedSender<Message>,
-    approve_all: bool,
+    approvals: crate::control::Approvals,
     /// Steps running at the same time must not ask at the same time.
     asking: Mutex<()>,
 }
@@ -251,8 +254,15 @@ impl Interaction for ScreenInteraction {
         true
     }
 
+    fn ask(&self, ask: &Ask, approval: &Approval) -> Decision {
+        if self.approvals.gives(&ask.id, approval) {
+            return Decision::Approved;
+        }
+        self.approve(approval)
+    }
+
     fn approve(&self, approval: &Approval) -> Decision {
-        if self.approve_all && approval.given_by_approve_all() {
+        if self.approvals.all && approval.given_by_approve_all() {
             return NonInteractive { approve_all: true }.approve(approval);
         }
         let _guard = self.asking.lock().unwrap_or_else(|e| e.into_inner());
@@ -347,13 +357,23 @@ async fn run_on_screen(
     let (sender, mut messages) = unbounded_channel();
     let interaction = Arc::new(ScreenInteraction {
         messages: sender.clone(),
-        approve_all: settings.approve_all,
+        approvals: settings.approvals(),
         asking: Mutex::new(()),
     });
-    let (engine, summary) =
-        crate::workflow_exec::engine_with(settings, Arc::new(ChannelEvents(sender)), interaction);
+    let run_id = match &kind {
+        Kind::Start { .. } => uuid::Uuid::new_v4().to_string(),
+        Kind::Resume(run_id) => run_id.clone(),
+    };
+    // Dry runs are not saved, so they keep no journal.
+    let events = Arc::new(crate::journal::Recorder::new(
+        crate::workflow_exec::store(),
+        (!dry_run).then(|| run_id.clone()),
+        Arc::new(ChannelEvents(sender)),
+    ));
+    let (engine, summary) = crate::workflow_exec::engine_with(settings, events, interaction);
     let stop = engine.stop_handle();
     let allow_dirty = settings.allow_dirty;
+    let force = settings.force;
 
     let workflow = match &kind {
         Kind::Start { workflow, .. } => {
@@ -372,6 +392,7 @@ async fn run_on_screen(
                 dry_run,
                 ..
             } => engine.start(StartRequest {
+                run_id: Some(run_id),
                 workflow: workflow.expect("loaded above"),
                 target,
                 params: Value::Object(params.into_iter().collect()),
@@ -380,9 +401,10 @@ async fn run_on_screen(
                 test: None,
                 check_uncommitted: !allow_dirty,
             }),
-            Kind::Resume(run_id) => {
-                engine.resume_with(&run_id, codemod_workflow::ResumeOptions { allow_dirty })
-            }
+            Kind::Resume(run_id) => engine.resume_with(
+                &run_id,
+                codemod_workflow::ResumeOptions { allow_dirty, force },
+            ),
         };
         let _ = done_sender.send(report);
     });

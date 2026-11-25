@@ -47,6 +47,7 @@ pub(crate) fn evaluate(
                             line: format!(
                                 "warning: skipping a step: its condition '{expression}' cannot be evaluated: {error}"
                             ),
+                            step: run.key_prefix.clone(),
                         });
                         false
                     });

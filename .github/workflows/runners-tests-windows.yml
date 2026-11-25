@@ -9,6 +9,9 @@ on:
       - "crates/workflow/**"
       - "crates/models/**"
       - "crates/llrt-capabilities/**"
+      - "crates/state/**"
+      - "crates/cli/src/**"
+      - "crates/cli/tests/control_e2e.rs"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -21,6 +24,9 @@ on:
       - "crates/workflow/**"
       - "crates/models/**"
       - "crates/llrt-capabilities/**"
+      - "crates/state/**"
+      - "crates/cli/src/**"
+      - "crates/cli/tests/control_e2e.rs"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -34,7 +40,7 @@ jobs:
   runners-tests-windows:
     name: Runner tests (windows-2022)
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,3 +69,19 @@ jobs:
         run: |
           cargo test --locked -p codemod-workflow --test assess
           cargo test --locked -p codemod-workflow --lib "assess::"
+
+      - name: Run run store tests (journal, leases)
+        run: cargo test --locked -p butterflow-state
+
+      - name: Run rejected, paused and canceled run tests
+        run: |
+          cargo test --locked -p codemod-workflow --test tasks -- reject canceled approval
+          cargo test --locked -p codemod-workflow --test engine -- --exact the_stop_handle_stops_a_running_workflow stopping_to_cancel_ends_the_run_for_good
+
+      - name: Run control channel and attach tests
+        shell: bash
+        run: |
+          # The CLI embeds the report UI; the tests don't use it.
+          mkdir -p crates/cli/report-ui/dist
+          echo '<html></html>' > crates/cli/report-ui/dist/index.html
+          cargo test --locked -p codemod --test control_e2e

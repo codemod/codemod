@@ -256,6 +256,8 @@ fn status_badge(view: &RunView) -> Span<'static> {
             RunStatus::Succeeded => ("done", Color::Green),
             RunStatus::Failed => ("failed", Color::Red),
             RunStatus::Canceled => ("canceled", Color::Yellow),
+            RunStatus::Paused => ("paused", Color::Yellow),
+            RunStatus::Rejected => ("rejected", Color::Red),
             RunStatus::AwaitingApproval => ("waiting for approval", Color::Yellow),
             RunStatus::Running => ("running", Color::Cyan),
         },
@@ -678,7 +680,7 @@ fn modal(frame: &mut Frame, title: &str, lines: Vec<Line>, color: Color) {
 mod tests {
     use super::*;
     use crate::launcher::setup::{tests::input, SetupState};
-    use codemod_workflow::events::Event;
+    use codemod_workflow::events::{Event, StepAt};
     use codemod_workflow::StepStatus;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -737,32 +739,45 @@ mod tests {
             run_id: "e7470df3-ef6b-4b4b-b20b-cc00d35ddcae".into(),
             workflow: "workflow.ts".into(),
             resumed: false,
+            target: "target".into(),
+            params: serde_json::Value::Null,
+            dry_run: false,
+            settings: codemod_workflow::events::Settings {
+                capabilities: Vec::new(),
+                managed_git: false,
+                agent: None,
+                host: None,
+            },
         });
         view.apply(Event::StepStarted {
-            position: 0,
+            at: StepAt::top(0),
+            kind: None,
             label: "Who uses moment?".into(),
         });
         view.apply(Event::RunLog {
+            step: None,
             line: "moment@2.30.1".into(),
         });
         view.apply(Event::StepFinished {
-            position: 0,
+            at: StepAt::top(0),
+            kind: None,
             label: "Who uses moment?".into(),
             status: StepStatus::Succeeded,
             error: None,
             duration_ms: 240,
         });
         view.apply(Event::StepStarted {
-            position: 1,
+            at: StepAt::top(1),
+            kind: None,
             label: "Migrate packages/api".into(),
         });
         view.apply(Event::StepProgress {
-            position: 1,
+            at: StepAt::top(1),
             processed: 2,
             total: 4,
         });
         view.apply(Event::StepLog {
-            position: 1,
+            at: StepAt::top(1),
             line: "orders.ts: 3 calls".into(),
         });
         view
@@ -804,13 +819,24 @@ mod tests {
             run_id: "03609be7-1c2d-4e5f-8a9b-0c1d2e3f4a5b".into(),
             workflow: "workflow.ts".into(),
             resumed: false,
+            target: "target".into(),
+            params: serde_json::Value::Null,
+            dry_run: false,
+            settings: codemod_workflow::events::Settings {
+                capabilities: Vec::new(),
+                managed_git: false,
+                agent: None,
+                host: None,
+            },
         });
         view.apply(Event::StepStarted {
-            position: 0,
+            at: StepAt::top(0),
+            kind: None,
             label: "Rename toMoment → toDayjs".into(),
         });
         view.apply(Event::StepFinished {
-            position: 0,
+            at: StepAt::top(0),
+            kind: None,
             label: "Rename toMoment → toDayjs".into(),
             status: StepStatus::Failed,
             error: Some("1 file failed".into()),
@@ -823,6 +849,8 @@ mod tests {
             deletions: 1,
         });
         view.apply(Event::RunFinished {
+            awaiting: None,
+            question: None,
             run_id: "run-2".into(),
             status: RunStatus::Succeeded,
             error: None,

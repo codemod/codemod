@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use butterflow_state::run_store::RunStore;
 
-use crate::interaction::{Approval, Decision, Interaction};
+use crate::interaction::{Approval, Ask, Decision, Interaction};
 
 /// Asks once per run; every later write gets the same answer.
 pub(crate) struct WriteGate {
@@ -55,7 +55,11 @@ impl WriteGate {
     /// `Ok` when the run may change the target: it has no uncommitted
     /// changes, or the person said yes. Held while asking, so steps writing
     /// at the same time wait for the one answer.
-    pub(crate) fn check(&self, interaction: &dyn Interaction) -> Result<(), String> {
+    pub(crate) fn check(
+        &self,
+        interaction: &dyn Interaction,
+        stop: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<(), String> {
         let mut answer = self.answer.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(answer) = answer.as_ref() {
             return answer.clone();
@@ -65,10 +69,16 @@ impl WriteGate {
             None | Some(TreeState::Clean) => Ok(()),
             Some(state) => {
                 let not_a_repository = state == TreeState::NotARepository;
-                match interaction.approve(&Approval::UncommittedChanges {
+                let approval = Approval::UncommittedChanges {
                     path: path.clone(),
                     not_a_repository,
-                }) {
+                };
+                let ask = Ask {
+                    id: approval.question_id(None),
+                    step: None,
+                    stop: Some(std::sync::Arc::clone(stop)),
+                };
+                match interaction.ask(&ask, &approval) {
                     Decision::Approved => Ok(()),
                     Decision::Denied | Decision::Deferred if not_a_repository => Err(format!(
                         "The target path '{path}' is not tracked by Git, and this step would change it; nothing was written. Use --allow-dirty to proceed anyway."

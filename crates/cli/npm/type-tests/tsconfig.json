@@ -18,6 +18,7 @@
     "../types/modules/deps.d.ts",
     "../types/modules/git.d.ts",
     "../types/modules/assess.d.ts",
+    "../types/modules/protocol.d.ts",
     "../testing/index.d.mts",
     "../runtime/host.d.mts",
     "../register.d.mts",

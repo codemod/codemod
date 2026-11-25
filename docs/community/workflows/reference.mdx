@@ -784,9 +784,14 @@ export default async function main({ params }: { params: { team?: string } }) {
 
 `await step(approval("Ship it?"))` asks before continuing.
 
-- In an interactive terminal, you are asked directly. Answering **No** pauses the run.
-- With `--no-interactive`, the run pauses at the approval and exits successfully.
-- Continue a paused run with `codemod workflow resume --id <run-id> --approve`, or pass `--approve` to `workflow run` to approve everything up front.
+- In the launcher, `y` approves, `n` rejects, and `l` stops the run there to resume later. In a plain interactive terminal, answering **No** stops the run there to resume later.
+- With `--no-interactive`, the run stops at the approval, waiting, and exits successfully. Continue it with `codemod workflow resume --id <run-id> --approve <question-id>` to give that approval only (the run stops at the next one), or `--approve` alone to give it and every later one. Pass `--approve` to `workflow run` to approve everything up front.
+- A dry run is not saved, so it cannot wait: one that reaches an approval stops, exits with code 1 and says to pass `--approve`.
+- With [`--control stdio`](/community/workflows/control), the run asks the program driving it and waits for the answer, dry runs included.
+
+Each approval has a **question id** that stays the same across resumes: `approval:<step>`, where `<step>` is the step's key (`approval:3`, or `approval:2/0` inside a codemod that step 2 runs). The run's last lines, `workflow status` and `run_finished` name the one it waits for.
+
+**Rejecting an approval ends the run.** The run is `rejected`: steps running alongside are stopped, nothing after the approval runs, and what earlier steps changed **stays changed** (commit or stash before a run you may reject, or use `git` to undo it). A rejected run is over: `workflow resume` refuses it unless you pass `--force`, which asks the rejected approval again. Stopping a run with Ctrl-C instead leaves it `paused`, to resume; `workflow cancel` ends it as `canceled`, which also takes `--force` to resume.
 
 ## Waiting
 

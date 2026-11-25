@@ -7,6 +7,7 @@
     "*.md",
     "crates/cli/src/templates/**",
     "crates/cli/npm/types/llrt/**",
+    "crates/cli/npm/type-tests/protocol-samples.ts",
     "packages/jssg-types/src/**",
     "schemas/*.json"
   ]

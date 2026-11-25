@@ -456,7 +456,7 @@ export default async function main() {
     );
     assert_eq!(output(&report).unwrap(), json!("b"));
     let logged = h.events.take().into_iter().any(
-        |event| matches!(event, Event::RunLog { line } if line == "hello {\"from\":\"the body\"}"),
+        |event| matches!(event, Event::RunLog { line, .. } if line == "hello {\"from\":\"the body\"}"),
     );
     assert!(logged);
 }

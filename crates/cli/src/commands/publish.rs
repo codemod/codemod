@@ -1061,6 +1061,7 @@ export default async function main() {
         let target_path = target.path().to_path_buf();
         let report = tokio::task::spawn_blocking(move || {
             engine.start(codemod_workflow::StartRequest {
+                run_id: None,
                 workflow: loaded,
                 target: target_path,
                 params: serde_json::Value::Null,
@@ -1179,6 +1180,7 @@ export default async function main() {
         let target_path = target.path().to_path_buf();
         let report = tokio::task::spawn_blocking(move || {
             engine.start(codemod_workflow::StartRequest {
+                run_id: None,
                 workflow: loaded,
                 target: target_path,
                 params: serde_json::Value::Null,
@@ -1703,6 +1705,7 @@ export default async function main() {
         let target_path = target.path().to_path_buf();
         let report = tokio::task::spawn_blocking(move || {
             engine.start(codemod_workflow::StartRequest {
+                run_id: None,
                 workflow: loaded,
                 target: target_path,
                 params: serde_json::Value::Null,

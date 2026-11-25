@@ -1,5 +1,7 @@
+pub mod attach;
 pub mod cancel;
 pub mod harness;
+pub mod inspect;
 pub mod list;
 pub mod resume;
 pub mod run;

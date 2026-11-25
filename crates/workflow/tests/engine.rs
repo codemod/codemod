@@ -3,7 +3,7 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codemod_workflow::events::Event;
+use codemod_workflow::events::{Event, StepAt};
 use codemod_workflow::interaction::NonInteractive;
 use codemod_workflow::{
     build, cancel_run, Canceled, Ending, EngineError, LocalStore, MemoryStore, RunStatus, RunStore,
@@ -276,10 +276,10 @@ fn fixing_the_failed_step_and_resuming_replays_the_finished_ones() {
     // "Touch" was replayed, not run again.
     assert_eq!(h.read("a.txt"), "a+");
     assert_eq!(second.steps[1].status, StepStatus::Succeeded);
-    assert!(h.events.take().contains(&Event::StepReplayed {
-        position: 0,
-        label: "Touch".into()
-    }));
+    assert!(h.events.take().iter().any(|e| matches!(
+        e,
+        Event::StepReplayed { at, label, .. } if at.position == 0 && label == "Touch"
+    )));
 }
 
 #[test]
@@ -324,14 +324,14 @@ fn a_step_added_before_the_failed_one_does_not_disturb_the_finished_ones() {
     assert!(output(&second).is_ok(), "{:?}", second.ending);
     assert_eq!(h.read("a.txt"), "a+", "Touch did not run again");
     let events = h.events.take();
-    assert!(events.contains(&Event::StepStarted {
-        position: 2,
-        label: "Setup".into()
-    }));
-    assert!(events.contains(&Event::StepReplayed {
-        position: 0,
-        label: "Touch".into()
-    }));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::StepStarted { at, label, .. } if at.position == 2 && label == "Setup"
+    )));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::StepReplayed { at, label, .. } if at.position == 0 && label == "Touch"
+    )));
 }
 
 #[test]
@@ -401,22 +401,22 @@ fn events_report_each_step() {
         events.first(),
         Some(Event::RunStarted { resumed: false, .. })
     ));
-    assert!(events.contains(&Event::StepStarted {
-        position: 0,
-        label: "Touch".into()
-    }));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::StepStarted { at, label, kind } if at == &StepAt::top(0) && label == "Touch" && kind.is_some()
+    )));
     assert!(events.contains(&Event::StepProgress {
-        position: 0,
+        at: StepAt::top(0),
         processed: 1,
         total: 1
     }));
     assert!(events.iter().any(|e| matches!(
         e,
         Event::StepFinished {
-            position: 1,
+            at,
             status: StepStatus::Succeeded,
             ..
-        }
+        } if at.position == 1
     )));
     assert!(matches!(
         events.last(),
@@ -444,8 +444,37 @@ export default async function main() {
         stop.stop();
     });
     let report = h.start_loaded(workflow, Value::Null, false);
+    // Ctrl-C pauses: the run can be resumed.
+    assert_eq!(report.ending, Ending::Paused);
+    assert_eq!(report.run.status, RunStatus::Paused);
+    assert_eq!(
+        report.run.status.resumable(),
+        codemod_workflow::Resumable::Yes
+    );
+}
+
+#[test]
+fn stopping_to_cancel_ends_the_run_for_good() {
+    let h = Harness::new();
+    let stop = h.engine.stop_handle();
+    let workflow = h.workflow(
+        r#"
+import { step } from "codemod/workflow";
+export default async function main() {
+  await step("Spin", () => { while (true) {} });
+}
+"#,
+    );
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        stop.stop();
+        stop.stop_with(codemod_workflow::StopMode::Cancel);
+    });
+    let report = h.start_loaded(workflow, Value::Null, false);
     assert_eq!(report.ending, Ending::Canceled);
     assert_eq!(report.run.status, RunStatus::Canceled);
+    let error = h.engine.resume(&report.run.id).unwrap_err().to_string();
+    assert!(error.contains("--force"), "{error}");
 }
 
 #[test]
@@ -903,7 +932,7 @@ fn a_run_whose_process_died_is_canceled_directly() {
     let first = h.start(TWO_STEPS, Value::Null);
     // As a killed process leaves it: running on record, held by nobody.
     let mut record = store.get_run(&first.run.id).unwrap().unwrap();
-    record.reopen().unwrap();
+    record.reopen(false).unwrap();
     store.put_run(&record).unwrap();
 
     assert_eq!(
@@ -1102,7 +1131,7 @@ export default async function main({ target }) {
     });
     let started = std::time::Instant::now();
     let report = h.start_loaded(workflow, Value::Null, false);
-    assert_eq!(report.ending, Ending::Canceled);
+    assert_eq!(report.ending, Ending::Paused);
     assert!(
         started.elapsed() < Duration::from_secs(10),
         "the command was stopped"

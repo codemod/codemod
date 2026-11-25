@@ -100,6 +100,7 @@ impl Harness {
     ) -> RunReport {
         self.engine
             .start(StartRequest {
+                run_id: None,
                 workflow,
                 target: self.target.path().to_path_buf(),
                 params,
@@ -115,6 +116,7 @@ impl Harness {
     pub fn test(&self, source: &str, plan: TestPlan) -> RunReport {
         self.engine
             .start(StartRequest {
+                run_id: None,
                 workflow: self.workflow(source),
                 target: self.target.path().to_path_buf(),
                 params: Value::Null,

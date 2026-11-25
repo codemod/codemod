@@ -9,8 +9,14 @@ export async function examples(): Promise<void> {
     store: "local",
     dryRun: true,
   });
-  const status: "succeeded" | "failed" | "canceled" | "awaiting-approval" | "stopped" =
-    report.status;
+  const status:
+    | "succeeded"
+    | "failed"
+    | "canceled"
+    | "paused"
+    | "rejected"
+    | "awaiting-approval"
+    | "stopped" = report.status;
   const modified: number = report.stats.filesModified;
   void [status, modified, report.steps[0]?.label, report.events[0]?.event];
 

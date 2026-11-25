@@ -146,7 +146,14 @@ export interface HostStepReport {
 
 export interface HostRunReport {
   readonly runId: string;
-  readonly status: "succeeded" | "failed" | "canceled" | "awaiting-approval" | "stopped";
+  readonly status:
+    | "succeeded"
+    | "failed"
+    | "canceled"
+    | "paused"
+    | "rejected"
+    | "awaiting-approval"
+    | "stopped";
   readonly output: JsonValue | null;
   readonly error: string | null;
   /** The approval the run waits for. */
@@ -171,7 +178,7 @@ export interface HostRunReport {
  */
 type BodyEnding =
   | { status: "succeeded"; detail: Json }
-  | { status: "failed" | "awaiting-approval"; detail: string }
+  | { status: "failed" | "awaiting-approval" | "rejected"; detail: string }
   | { status: "failed-with-output"; detail: { error: string; output: Json; exitCode: number } }
   | { status: "canceled" }
   | null;
@@ -736,6 +743,9 @@ function endingOf(error: unknown): BodyEnding {
   }
   if (error instanceof AwaitingApprovalError || name === "AwaitingApprovalError") {
     return { status: "awaiting-approval", detail: String((error as Error).message) };
+  }
+  if (name === "RejectedError") {
+    return { status: "rejected", detail: String((error as Error).message) };
   }
   // `fail()`, which checked both; by name too, for another copy of this package.
   if (

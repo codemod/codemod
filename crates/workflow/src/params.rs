@@ -13,8 +13,11 @@ pub struct DeclaredParam {
     /// The member's type as written (`string`, `boolean | string`).
     pub type_text: String,
     pub optional: bool,
-    /// Its doc comment, without the comment markers.
+    /// Its doc comment, without the comment markers and tags.
     pub description: Option<String>,
+    /// Its doc comment's `@default` tag: JSON when it parses as JSON
+    /// (`@default 2`, `@default "api"`), else the text.
+    pub default: Option<serde_json::Value>,
 }
 
 /// The parameters `source` declares, in declaration order; none when it
@@ -65,7 +68,7 @@ pub fn declared_params(source: &str) -> Vec<DeclaredParam> {
                     })
                     .unwrap_or_default();
                 let start = property.span.start;
-                let description = program
+                let (description, default) = program
                     .comments
                     .iter()
                     .rfind(|comment| comment.span.end <= start)
@@ -75,16 +78,15 @@ pub fn declared_params(source: &str) -> Vec<DeclaredParam> {
                             .is_empty()
                     })
                     .map(|comment| {
-                        clean_comment(
-                            &source[comment.span.start as usize..comment.span.end as usize],
-                        )
+                        doc(&source[comment.span.start as usize..comment.span.end as usize])
                     })
-                    .filter(|text| !text.is_empty());
+                    .unwrap_or_default();
                 Some(DeclaredParam {
                     name,
                     type_text,
                     optional: property.optional,
                     description,
+                    default,
                 })
             })
             .collect();
@@ -121,18 +123,58 @@ fn extract_context_type(source: &str) -> Option<&str> {
     None
 }
 
-fn clean_comment(comment: &str) -> String {
+/// A doc comment's text, without the comment markers and tags, and its
+/// `@default` value.
+fn doc(comment: &str) -> (Option<String>, Option<serde_json::Value>) {
     let body = comment
         .strip_prefix("/**")
         .or_else(|| comment.strip_prefix("/*"))
         .map(|rest| rest.strip_suffix("*/").unwrap_or(rest))
         .or_else(|| comment.strip_prefix("//"))
         .unwrap_or(comment);
-    body.lines()
+    let mut text = Vec::new();
+    let mut default = None;
+    for line in body
+        .lines()
         .map(|line| line.trim().trim_start_matches('*').trim())
         .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
+    {
+        if let Some(value) = line.strip_prefix("@default") {
+            let value = value.trim();
+            default = Some(
+                serde_json::from_str(value)
+                    .unwrap_or_else(|_| serde_json::Value::from(value.to_string())),
+            );
+        } else if !line.starts_with('@') {
+            text.push(line);
+        }
+    }
+    let text = text.join(" ");
+    ((!text.is_empty()).then_some(text), default)
+}
+
+/// The modules `source` imports, as written, in source order without
+/// repeats: `codemod/workflow`, `./scripts/migrate.ts`, ... Static imports
+/// and re-exports only.
+pub fn imported_modules(source: &str) -> Vec<String> {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let mut modules: Vec<String> = Vec::new();
+    for statement in &parsed.program.body {
+        let module = match statement {
+            Statement::ImportDeclaration(import) => import.source.value.to_string(),
+            Statement::ExportAllDeclaration(export) => export.source.value.to_string(),
+            Statement::ExportNamedDeclaration(export) => match &export.source {
+                Some(source) => source.value.to_string(),
+                None => continue,
+            },
+            _ => continue,
+        };
+        if !modules.contains(&module) {
+            modules.push(module);
+        }
+    }
+    modules
 }
 
 #[cfg(test)]
@@ -148,6 +190,7 @@ interface Options {
   package?: string;
   /**
    * Hand leftovers to an agent.
+   * @default false
    */
   agent?: boolean | string;
   // A required one.
@@ -164,18 +207,21 @@ export default async function main({ params }: WorkflowContext<Options>) {}
                     type_text: "string".into(),
                     optional: true,
                     description: Some("Only migrate this package, e.g. \"api\".".into()),
+                    default: None,
                 },
                 DeclaredParam {
                     name: "agent".into(),
                     type_text: "boolean | string".into(),
                     optional: true,
                     description: Some("Hand leftovers to an agent.".into()),
+                    default: Some(serde_json::json!(false)),
                 },
                 DeclaredParam {
                     name: "level".into(),
                     type_text: "number".into(),
                     optional: false,
                     description: Some("A required one.".into()),
+                    default: None,
                 },
             ]
         );
@@ -189,6 +235,28 @@ export default async function main({ params }: WorkflowContext<Options>) {}
         assert_eq!(params.len(), 1);
         assert_eq!(params[0].name, "name");
         assert_eq!(params[0].description, None);
+    }
+
+    #[test]
+    fn a_default_that_is_not_json_is_text() {
+        let source = "interface Params {\n  /** Where. @see x\n   * @default src/app */\n  dir?: string;\n}\nexport default async function main() {}";
+        let params = declared_params(source);
+        assert_eq!(params[0].description.as_deref(), Some("Where. @see x"));
+        assert_eq!(params[0].default, Some(serde_json::json!("src/app")));
+    }
+
+    #[test]
+    fn imports_are_listed_once_in_source_order() {
+        let source = r#"
+import { step } from "codemod/workflow";
+import type { WorkflowContext } from "codemod/workflow";
+import replace from "./scripts/replace.ts";
+export { x } from "codemod/git";
+"#;
+        assert_eq!(
+            imported_modules(source),
+            ["codemod/workflow", "./scripts/replace.ts", "codemod/git"]
+        );
     }
 
     #[test]
