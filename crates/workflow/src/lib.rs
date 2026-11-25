@@ -33,6 +33,7 @@ mod js;
 pub mod params;
 mod run;
 mod tasks;
+mod write_gate;
 
 pub use build::{
     build, inspect, rewrite_for_node, uses_assess, BuildError, Built, Inspection, InstalledSkill,

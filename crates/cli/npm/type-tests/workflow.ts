@@ -9,6 +9,7 @@ import {
   approval,
   astGrep,
   codemod,
+  fail,
   forEachFile,
   installSkill,
   shard,
@@ -16,6 +17,7 @@ import {
   sleep,
   step,
   waitForEvent,
+  WorkflowFailure,
   type ShardResult,
   type WorkflowContext,
 } from "codemod/workflow";
@@ -357,4 +359,19 @@ export async function reducers() {
   forEachFile("**/*.ts", paths, (count: number) => String(count), 0);
   // @ts-expect-error astGrep(...) returns nothing per file: there is nothing to reduce
   forEachFile("**/*.ts", astGrep(rules), (count: number) => count + 1, 0);
+}
+
+export async function failing() {
+  const report = { checks: [{ id: "a", status: "fail" as const }] };
+  if (report.checks.length) fail("1 check failed", { output: report, exitCode: 3 });
+  fail("no output");
+  // @ts-expect-error the output must be JSON
+  fail("no", { output: new Map() });
+  // @ts-expect-error the exit code is a number
+  fail("no", { exitCode: "2" });
+  const never: never = fail("ends here");
+  void never;
+  const error = new Error() as WorkflowFailure;
+  expectType<Equal<typeof error.exitCode, number>>(true);
+  return report;
 }

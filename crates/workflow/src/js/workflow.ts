@@ -6,7 +6,13 @@
 import { createRuntime } from "codemod-internal:orchestrator";
 import type { Outcome } from "codemod-internal:orchestrator";
 
-export { AwaitingApprovalError, CanceledError, StepError } from "codemod-internal:orchestrator";
+export {
+  AwaitingApprovalError,
+  CanceledError,
+  StepError,
+  WorkflowFailure,
+  fail,
+} from "codemod-internal:orchestrator";
 
 const raw = globalThis.__workflowHost;
 

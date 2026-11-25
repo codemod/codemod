@@ -351,6 +351,28 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 - **`Date`, `Math.random`, `crypto.randomUUID` and `performance.now` are replay-safe.** Random numbers come from a generator seeded by the run, and the clock starts at the run's start time and moves only when a step finishes, to the time recorded for it.
 - **`console.log`** goes to the run's output.
 
+### The return value
+
+What the body returns is the run's output: `run_finished.output` with `--format jsonl` (dry runs too), `Output: …` at the end of the text output, `output` in `workflow status --id <ID> --format json`, and `run.output` from `runWorkflow`. It must be JSON.
+
+### Failing a run with a report
+
+A check that finds problems usually wants both: report what it found, and fail CI. Throwing loses the report (a failed run has no output), and catching the failure ends the run as succeeded. Call `fail()` from the body instead:
+
+```ts
+import { fail, forEachFile, step } from "codemod/workflow";
+
+export default async function main() {
+  const found = await step("Find var", forEachFile("src/**/*.ts", (file) =>
+    file.text.includes("var ") ? file.path : undefined));
+  const report = { checks: [{ id: "no-var", status: found.outputs.length ? "fail" : "pass", files: found.outputs }] };
+  if (found.outputs.length) fail("1 check failed: no-var", { output: report });
+  return report;
+}
+```
+
+`fail(message, { output?, exitCode? })` ends the run as `failed`, with `message` as its error and `output` kept as its output, everywhere the return value goes. The CLI exits with `exitCode`: 2 by default (the code for "finished, with failures"), or any integer from 1 to 125. It throws a `WorkflowFailure`; like `step()`, it cannot be used inside a step or callback. A run that only reads, like this one, is not stopped by uncommitted changes in the target (see `--allow-dirty` in the [CLI reference](/community/cli#codemod-workflow)).
+
 ## Tasks
 
 | Task | What it does |

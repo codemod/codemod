@@ -106,6 +106,7 @@ impl Harness {
                 name: None,
                 dry_run,
                 test: None,
+                check_uncommitted: false,
             })
             .unwrap()
     }
@@ -120,6 +121,7 @@ impl Harness {
                 name: None,
                 dry_run: false,
                 test: Some(plan),
+                check_uncommitted: false,
             })
             .unwrap()
     }

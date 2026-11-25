@@ -56,6 +56,9 @@ jobs:
       - name: Run YAML workflow compatibility tests
         run: cargo test --locked -p codemod-workflow --test compat
 
+      - name: Run run outcome tests (fail(), output, uncommitted changes)
+        run: cargo test --locked -p codemod-workflow --test outcome
+
       - name: Run codemod/assess tests
         run: |
           cargo test --locked -p codemod-workflow --test assess

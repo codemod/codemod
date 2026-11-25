@@ -217,45 +217,49 @@ enum NoCommandAction {
     RunPackage,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct NoCommandPromptOption {
     action: NoCommandAction,
-    label: &'static str,
+    label: String,
 }
 
 impl fmt::Display for NoCommandPromptOption {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.label)
+        formatter.write_str(&self.label)
     }
 }
 
+/// The commands are pinned to this version: a bare `npx codemod` is
+/// the `latest` tag, which is 1.x while 2.x is a prerelease.
 fn no_command_prompt_options() -> Vec<NoCommandPromptOption> {
+    use utils::cli_command::npx_codemod;
     vec![
         NoCommandPromptOption {
             action: NoCommandAction::Ai,
-            label: "Install Master Codemod Skills (npx codemod ai)",
+            label: format!("Install Master Codemod Skills ({})", npx_codemod("ai")),
         },
         NoCommandPromptOption {
             action: NoCommandAction::Init,
-            label: "Create a new codemod package (npx codemod init)",
+            label: format!("Create a new codemod package ({})", npx_codemod("init")),
         },
         NoCommandPromptOption {
             action: NoCommandAction::RunPackage,
-            label: "Run a published package (npx codemod <package>)",
+            label: format!("Run a published package ({})", npx_codemod("<package>")),
         },
     ]
 }
 
 fn no_command_message() -> String {
+    use utils::cli_command::npx_codemod;
     [
-        "No command provided.",
-        "",
-        "Next steps:",
-        "  1. Install Master Codemod Skills: npx codemod ai",
-        "  2. Create a new codemod package: npx codemod init",
-        "  3. Run a published package: npx codemod <package>",
-        "",
-        "Use --help for more usage information.",
+        "No command provided.".to_string(),
+        String::new(),
+        "Next steps:".to_string(),
+        format!("  1. Install Master Codemod Skills: {}", npx_codemod("ai")),
+        format!("  2. Create a new codemod package: {}", npx_codemod("init")),
+        format!("  3. Run a published package: {}", npx_codemod("<package>")),
+        String::new(),
+        "Use --help for more usage information.".to_string(),
     ]
     .join("\n")
 }
@@ -425,6 +429,9 @@ async fn main() {
                 eprintln!("\n{}", console::style(failed).yellow().bold());
             }
             exit_with_code(workflow_exec::EXIT_FAILED_FILES);
+        }
+        if let Some(failed) = error.downcast_ref::<workflow_exec::FailedByWorkflow>() {
+            exit_with_code(failed.exit_code);
         }
         if error
             .downcast_ref::<workflow_exec::WorkflowFailureAlreadyReported>()
@@ -643,13 +650,19 @@ mod tests {
         let message = no_command_message();
 
         let ai_index = message
-            .find("1. Install Master Codemod Skills: npx codemod ai")
+            .find(&format!(
+                "1. Install Master Codemod Skills: npx codemod@{CLI_VERSION} ai"
+            ))
             .expect("expected ai step");
         let init_index = message
-            .find("2. Create a new codemod package: npx codemod init")
+            .find(&format!(
+                "2. Create a new codemod package: npx codemod@{CLI_VERSION} init"
+            ))
             .expect("expected init step");
         let package_index = message
-            .find("3. Run a published package: npx codemod <package>")
+            .find(&format!(
+                "3. Run a published package: npx codemod@{CLI_VERSION} <package>"
+            ))
             .expect("expected package step");
 
         assert!(ai_index < init_index);
@@ -663,12 +676,12 @@ mod tests {
         assert_eq!(options[0].action, NoCommandAction::Ai);
         assert_eq!(
             options[0].label,
-            "Install Master Codemod Skills (npx codemod ai)"
+            format!("Install Master Codemod Skills (npx codemod@{CLI_VERSION} ai)")
         );
         assert_eq!(options[1].action, NoCommandAction::Init);
         assert_eq!(
             options[1].label,
-            "Create a new codemod package (npx codemod init)"
+            format!("Create a new codemod package (npx codemod@{CLI_VERSION} init)")
         );
         assert_eq!(options[2].action, NoCommandAction::RunPackage);
     }

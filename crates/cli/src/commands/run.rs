@@ -334,14 +334,6 @@ pub async fn handler(
 
     let capabilities = flags.capabilities(codemod_config, None, dry_run);
 
-    if !dry_run {
-        crate::dirty_git_check::dirty_check(flags.no_interactive)(
-            &target_path,
-            args.allow_dirty,
-            None,
-        )?;
-    }
-
     let run_telemetry = CodemodRunTelemetry::new(
         canonical_codemod_name.clone(),
         resolved_package.version.clone(),

@@ -192,7 +192,12 @@ pub(crate) fn commit(
 
     match overlay {
         Some(overlay) => overlay.apply(&planned),
-        None if !dry_run => apply(target, &planned)?,
+        None if !dry_run => {
+            if !planned.is_empty() {
+                run.before_write()?;
+            }
+            apply(target, &planned)?
+        }
         None => {}
     }
 

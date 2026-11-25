@@ -1067,6 +1067,7 @@ export default async function main() {
                 name: None,
                 dry_run: false,
                 test: None,
+                check_uncommitted: false,
             })
         })
         .await
@@ -1184,6 +1185,7 @@ export default async function main() {
                 name: None,
                 dry_run: false,
                 test: None,
+                check_uncommitted: false,
             })
         })
         .await
@@ -1707,6 +1709,7 @@ export default async function main() {
                 name: None,
                 dry_run: false,
                 test: None,
+                check_uncommitted: false,
             })
         })
         .await

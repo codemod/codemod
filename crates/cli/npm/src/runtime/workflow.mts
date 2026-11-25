@@ -10,7 +10,13 @@ import { current } from "./context.mts";
 import { createTasks } from "./orchestrator.mts";
 import type { Callback, Duration, Json, Runtime } from "./orchestrator.mts";
 
-export { AwaitingApprovalError, CanceledError, StepError } from "./orchestrator.mts";
+export {
+  AwaitingApprovalError,
+  CanceledError,
+  StepError,
+  WorkflowFailure,
+  fail,
+} from "./orchestrator.mts";
 
 /** Identifies a callback given as a function, for replay checks. */
 export function callbackId(fn: Callback): string {

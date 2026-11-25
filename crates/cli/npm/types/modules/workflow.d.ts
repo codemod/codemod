@@ -971,6 +971,41 @@ declare module "codemod:workflow" {
    */
   export function approval(message: string): Task<{ approved: true }>;
 
+  /** What `fail()` takes besides its message. */
+  export interface FailOptions {
+    /**
+     * What the run reports as its output, as if the workflow had returned it:
+     * in `run_finished.output` (`--format jsonl`), `codemod workflow status`,
+     * and `runWorkflow(...).output`. Must be JSON.
+     */
+    readonly output?: JsonValue;
+    /** The CLI's exit code: an integer from 1 to 125. Default 2, as when files failed. */
+    readonly exitCode?: number;
+  }
+
+  /**
+   * Ends the run as failed, keeping `options.output` as the run's output and
+   * exiting with `options.exitCode` (default 2). For a check that reports what
+   * it found and still fails CI:
+   *
+   * ```ts
+   * if (report.checks.some((check) => check.status === "fail")) {
+   *   fail("2 checks failed", { output: report });
+   * }
+   * return report;
+   * ```
+   *
+   * It throws a {@link WorkflowFailure}. Call it from the workflow body: like
+   * `step()`, it cannot be used inside a step or `forEachFile` callback.
+   */
+  export function fail(message: string, options?: FailOptions): never;
+
+  /** What `fail()` throws: the run ends as failed with this output and exit code. */
+  export class WorkflowFailure extends Error {
+    readonly output: JsonValue | null;
+    readonly exitCode: number;
+  }
+
   /** A step failed. */
   export class StepError extends Error {
     readonly label: string;
