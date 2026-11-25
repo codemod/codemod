@@ -5,6 +5,10 @@
 //! Pipfile.lock) maps into one [`Graph`]: nodes are `name@version` per
 //! ecosystem, edges keep the declared range, the dependency kind and the
 //! workspace. [`Walk`] reads it; [`Registry`] supplies release metadata.
+//!
+//! Without a lockfile, [`project`] reads the repository's own packages from
+//! their manifests (package.json, catalogs, the package manager), and
+//! [`manifest_edits`] changes them in place, keeping their formatting.
 
 pub mod edit;
 pub mod lockfiles;
