@@ -338,6 +338,16 @@ impl PendingFiles {
         errors
     }
 
+    /// A file's text as the step has it so far, without taking it: what a
+    /// transform that holds it has set, else the text before the step.
+    pub fn read(&self, path: &Path) -> std::io::Result<String> {
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if let Some(file) = self.lock().files.get(&key) {
+            return Ok(file.text.clone());
+        }
+        self.read_base(&key)
+    }
+
     /// Every file whose text the step changed: `(path, at the start of the
     /// step, now)`, by path. The first text is the disk's, or in a dry run
     /// what earlier steps left.

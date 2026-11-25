@@ -1,0 +1,9 @@
+{
+  "name": "@demo/web",
+  "version": "1.0.0",
+  "dependencies": {
+    "@demo/shared": "workspace:^",
+    "lodash": "^4.17.21",
+    "react": "catalog:"
+  }
+}

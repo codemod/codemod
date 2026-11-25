@@ -1,0 +1,11 @@
+{
+  "name": "@demo/shared",
+  "version": "1.2.0",
+  "dependencies": {
+    "lodash": "^3.10.0",
+    "moment": "catalog:legacy"
+  },
+  "peerDependencies": {
+    "react": ">=17"
+  }
+}

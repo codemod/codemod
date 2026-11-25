@@ -1,0 +1,9 @@
+packages:
+  - packages/*
+
+catalog:
+  react: ^18.2.0
+
+catalogs:
+  legacy:
+    moment: 2.29.4

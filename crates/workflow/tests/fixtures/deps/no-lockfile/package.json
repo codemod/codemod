@@ -1,0 +1,11 @@
+{
+  "name": "acme",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "devDependencies": {
+    "zod": "^3.22.0"
+  }
+}

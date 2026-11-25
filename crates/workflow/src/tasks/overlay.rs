@@ -3,7 +3,7 @@
 //! A dry run writes nothing, so without this each step would read the files
 //! as they are on disk and miss what earlier steps changed. Instead, commits
 //! in a dry run go here, and the steps that read files (`forEachFile`
-//! callbacks, `astGrep`, `jssgTransform` in function and `dependencyGraph`
+//! callbacks, `astGrep`, `jssgTransform` and `codemod/deps` edits in function
 //! steps, `shard`'s file selection and filter, nested codemods) read
 //! through it: they see the text earlier steps
 //! left, files they renamed under their new paths, and not the files they

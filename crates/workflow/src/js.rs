@@ -44,8 +44,8 @@ javascript! {
     pub(crate) fn workflow_module = include_str!("js/workflow.ts"), "workflow.ts"
 }
 javascript! {
-    /// `codemod/deps` in the workflow body: `dependencyGraph`, and `registry`
-    /// and `semver` outside steps.
+    /// `codemod/deps` in the workflow body: `install`, and `dependencies`,
+    /// `registry` and `semver` outside steps.
     pub(crate) fn deps_module = include_str!("js/deps.ts"), "deps.ts"
 }
 javascript! {
@@ -70,7 +70,7 @@ javascript! {
 }
 javascript! {
     /// `codemod/deps` in isolates, also as `codemod-internal:dependencies`:
-    /// `registry`, `semver` and the graph.
+    /// `dependencies()`, `registry` and `semver`.
     pub(crate) fn dependencies_module = include_str!("js/dependencies.ts"), "dependencies.ts"
 }
 javascript! {

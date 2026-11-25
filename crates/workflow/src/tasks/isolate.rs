@@ -309,7 +309,8 @@ pub(crate) fn module_name(task: &TaskContext<'_>, id: &str) -> String {
 pub(crate) const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Start one isolate, with `__dependencyHost` installed for
-/// `codemod-internal:dependencies`, and `__assessHost` for `codemod/assess`
+/// `codemod-internal:dependencies` (reading and editing manifests through
+/// the worker's files), and `__assessHost` for `codemod/assess`
 /// when the step may assess (`forEachFile` callbacks and function steps).
 pub(crate) async fn start(
     options: WorkerOptions<OxcResolver>,
@@ -317,11 +318,13 @@ pub(crate) async fn start(
     assess: Option<crate::assess::AssessHandle>,
 ) -> Result<Worker, String> {
     let cancel = Arc::clone(&options.cancel);
+    let target = options.target_directory.clone();
     let worker = Worker::new(options)
         .await
         .map_err(|e| format!("could not start the step's runtime: {e}"))?;
+    let pending = worker.pending_files().cloned();
     async_with!(worker.context => |ctx| {
-        deps_host::install(&ctx, registry, cancel).map_err(|e| e.to_string())?;
+        deps_host::install(&ctx, registry, cancel, target, pending).map_err(|e| e.to_string())?;
         match assess {
             Some(handle) => crate::assess::install(&ctx, handle.run, handle.position, handle.cancel)
                 .map_err(|e| e.to_string()),

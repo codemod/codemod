@@ -113,7 +113,7 @@ export default async function main() {}
 }
 
 #[test]
-fn dependency_graph_through_a_namespace_import_asks_for_a_named_import() {
+fn dependency_graph_through_a_namespace_import_says_it_was_removed() {
     let h = Harness::new();
     for module in ["codemod/deps", "codemod:deps"] {
         let error = load_error(
@@ -127,9 +127,7 @@ export default async function main() {{ await step(deps.dependencyGraph((g) => g
             ),
         );
         assert!(
-            error.contains(
-                "import dependencyGraph by name (import { dependencyGraph } from \"codemod/deps\")"
-            ),
+            error.contains("dependencyGraph() was removed: call dependencies()"),
             "{module}: {error}"
         );
     }

@@ -19,10 +19,10 @@ mod ast_grep;
 pub(crate) mod changes;
 mod choose;
 mod codemod;
-mod dependency_graph;
 pub(crate) mod for_each_file;
 mod function;
 mod git;
+mod install;
 mod install_skill;
 pub(crate) mod isolate;
 pub(crate) mod overlay;
@@ -211,16 +211,18 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
     // Steps that change the target outside the file commits `before_write`
     // already guards. Git steps only touch git with `--managed-git`.
     let git_step = matches!(kind.as_str(), "branch" | "commit" | "pullRequest");
-    if matches!(kind.as_str(), "shell" | "agent" | "installSkill")
-        || (git_step && task.run.services.managed_git)
+    if matches!(
+        kind.as_str(),
+        "shell" | "agent" | "installSkill" | "install"
+    ) || (git_step && task.run.services.managed_git)
     {
         task.run.before_write().map_err(TaskError::Failed)?;
     }
     let result = match kind.as_str() {
         "forEachFile" => for_each_file::run(task, content).map_err(TaskError::from),
         "function" => function::run(task, content).map_err(TaskError::from),
-        "dependencyGraph" => dependency_graph::run(task, content).map_err(TaskError::from),
         "shell" => shell::run(task, parse(content)?),
+        "install" => install::run(task, parse(content)?),
         "astGrep" => ast_grep::run(task, parse(content)?),
         "shard" => shard::run(task, content),
         "codemod" => codemod::run(task, parse(content)?),

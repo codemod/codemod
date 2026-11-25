@@ -1,0 +1,30 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "bun-demo",
+      "dependencies": {
+        "react": "catalog:",
+      },
+    },
+    "packages/ui": {
+      "name": "@demo/ui",
+      "version": "0.1.0",
+      "dependencies": {
+        "react": "catalog:",
+      },
+    },
+  },
+  "catalog": {
+    "react": "^18.2.0",
+  },
+  "packages": {
+    "@demo/ui": ["@demo/ui@workspace:packages/ui"],
+
+    "js-tokens": ["js-tokens@4.0.0", "", {}, "sha512-a"],
+
+    "loose-envify": ["loose-envify@1.4.0", "", { "dependencies": { "js-tokens": "^3.0.0 || ^4.0.0" } }, "sha512-b"],
+
+    "react": ["react@18.2.0", "", { "dependencies": { "loose-envify": "^1.1.0" } }, "sha512-c"],
+  }
+}
