@@ -99,12 +99,23 @@ pub struct AgentChoice {
 }
 
 /// Which question the engine asks, and the step asking it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct Ask {
     /// See [`Approval::question_id`]; `agent:<step>` for agent questions.
     pub id: String,
     /// The key of the step asking (`"3"`, `"3/0"`).
     pub step: Option<String>,
+    /// Set when the asking step must stop (the run was canceled from
+    /// elsewhere): a host waiting for an answer gives up then.
+    pub stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl Ask {
+    pub fn stopped(&self) -> bool {
+        self.stop
+            .as_ref()
+            .is_some_and(|stop| stop.load(std::sync::atomic::Ordering::SeqCst))
+    }
 }
 
 pub trait Interaction: Send + Sync {

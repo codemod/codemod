@@ -39,7 +39,11 @@ impl WriteGate {
     /// `Ok` when the run may change the target: it has no uncommitted
     /// changes, or the person said yes. Held while asking, so steps writing
     /// at the same time wait for the one answer.
-    pub(crate) fn check(&self, interaction: &dyn Interaction) -> Result<(), String> {
+    pub(crate) fn check(
+        &self,
+        interaction: &dyn Interaction,
+        stop: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<(), String> {
         let mut answer = self.answer.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(answer) = answer.as_ref() {
             return answer.clone();
@@ -56,6 +60,7 @@ impl WriteGate {
                 let ask = Ask {
                     id: approval.question_id(None),
                     step: None,
+                    stop: Some(std::sync::Arc::clone(stop)),
                 };
                 match interaction.ask(&ask, &approval) {
                     Decision::Approved => Ok(()),

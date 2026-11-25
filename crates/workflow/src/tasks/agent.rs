@@ -101,6 +101,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         let ask = crate::interaction::Ask {
             id: format!("agent:{step}"),
             step: Some(step),
+            stop: Some(std::sync::Arc::clone(&task.cancel)),
         };
         if let Some(choice) = run.interaction.pick_agent(&ask, &choices) {
             let agent = codemod_agents::find(&choice)

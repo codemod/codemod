@@ -307,9 +307,21 @@ impl Control {
             approval,
             choices,
         });
-        let reply = answer
-            .recv()
-            .unwrap_or_else(|_| asked.unanswered(ClosedBy::Stop));
+        // Also stop waiting when the run is stopped from elsewhere
+        // (`workflow cancel` in another terminal).
+        let reply = loop {
+            match answer.recv_timeout(std::time::Duration::from_millis(200)) {
+                Ok(reply) => break reply,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !ask.stopped() => {}
+                Err(_) => {
+                    self.pending
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&ask.id);
+                    break asked.unanswered(ClosedBy::Stop);
+                }
+            }
+        };
         let (answer, by) = match &reply {
             Reply::Decision(decision, by) => (
                 Value::from(match decision {
@@ -368,7 +380,7 @@ impl Interaction for Control {
     fn approve(&self, approval: &Approval) -> Decision {
         let ask = Ask {
             id: approval.question_id(None),
-            step: None,
+            ..Ask::default()
         };
         self.ask(&ask, approval)
     }
@@ -409,7 +421,38 @@ mod tests {
         Ask {
             id: id.into(),
             step: Some("1".into()),
+            stop: None,
         }
+    }
+
+    #[test]
+    fn a_question_stops_waiting_when_its_step_is_stopped() {
+        let (control, events) = control();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let asking = Arc::clone(&control);
+        let flag = Arc::clone(&stop);
+        let answer = std::thread::spawn(move || {
+            asking.ask(
+                &Ask {
+                    stop: Some(flag),
+                    ..ask("approval:1")
+                },
+                &manual(),
+            )
+        });
+        while !control.pending.lock().unwrap().contains_key("approval:1") {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(answer.join().unwrap(), Decision::Deferred);
+        assert!(control.pending.lock().unwrap().is_empty());
+        assert!(matches!(
+            events.take().last(),
+            Some(Event::QuestionClosed {
+                by: ClosedBy::Stop,
+                ..
+            })
+        ));
     }
 
     /// Ask on another thread; answer with `commands` once the question is out.

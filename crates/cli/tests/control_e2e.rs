@@ -318,6 +318,21 @@ fn stopping_over_control_pauses_the_run_and_resume_continues_it() {
 }
 
 #[test]
+fn canceling_from_another_terminal_ends_a_run_waiting_at_a_question() {
+    let fixture = Fixture::new(TWO_APPROVALS);
+    let mut run = fixture.control(&fixture.run_args(&[]));
+    let id = run.event("hello")["run_id"].as_str().unwrap().to_string();
+    run.event("question");
+    let canceled = fixture.codemod(&["workflow", "cancel", "--id", &id]);
+    assert!(canceled.status.success(), "{}", text(&canceled));
+    assert_eq!(run.event("question_closed")["by"], "stop");
+    assert_eq!(run.event("run_finished")["status"], "canceled");
+    let (code, _, stderr) = run.finish();
+    assert_eq!(code, Some(1), "{stderr}");
+    assert_eq!(fixture.status(&id)["status"], "canceled");
+}
+
+#[test]
 fn closing_stdin_pauses_the_run() {
     let fixture = Fixture::new(TWO_APPROVALS);
     let mut run = fixture.control(&fixture.run_args(&[]));

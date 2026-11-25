@@ -389,7 +389,7 @@ impl RunContext {
     /// changes nobody agreed to write over (see `write_gate`).
     pub fn before_write(&self) -> Result<(), String> {
         match &self.write_gate {
-            Some(gate) if !self.dry_run => gate.check(self.interaction.as_ref()),
+            Some(gate) if !self.dry_run => gate.check(self.interaction.as_ref(), &self.cancel),
             _ => Ok(()),
         }
     }
@@ -445,6 +445,13 @@ impl RunContext {
         match (interruption, body) {
             (_, Ending::Rejected(message)) => Ending::Rejected(message),
             (Some(Interruption::Canceled), _) | (_, Ending::Canceled | Ending::Paused) => stopped(),
+            // A question closed because the run was stopped is not one the
+            // run waits for.
+            (Some(Interruption::AwaitingApproval(_)), _) | (_, Ending::AwaitingApproval(_))
+                if self.halt.reason() != StopReason::None =>
+            {
+                stopped()
+            }
             (Some(Interruption::AwaitingApproval(message)), _)
             | (_, Ending::AwaitingApproval(message)) => Ending::AwaitingApproval(message),
             // Stopping a run mid-step surfaces as that step's failure.

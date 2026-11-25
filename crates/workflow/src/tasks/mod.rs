@@ -92,6 +92,7 @@ impl TaskContext<'_> {
         let ask = Ask {
             id: approval.question_id(Some(&step)),
             step: Some(step),
+            stop: Some(Arc::clone(&self.cancel)),
         };
         let decision = self.run.interaction.ask(&ask, approval);
         if decision == Decision::Deferred {

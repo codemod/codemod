@@ -283,7 +283,8 @@ export default async function main() {
     step.since = Some(since - 3_600_000);
     store.put_step(&first.run.id, &step).unwrap();
     let started = Instant::now();
-    let second = h.resume(&first, None);
+    // A canceled run is over unless forced.
+    let second = h.engine.resume_with(&first.run.id, true).unwrap();
     assert_eq!(output(&second).unwrap(), json!("rested"));
     assert!(started.elapsed() < Duration::from_secs(10));
     assert_eq!(second.steps[0].since, Some(since - 3_600_000));
