@@ -74,7 +74,7 @@ fn call_with(
         .ok_or_else(|| format!("unknown function '{callback}'"))?;
     let captures = serde_json::to_string(captures).map_err(|e| e.to_string())?;
     let args = args.map(Value::to_string);
-    let isolates = StepIsolates::new(task)?;
+    let isolates = StepIsolates::new(task, Some(module))?;
     let options = isolates.worker_options(task, None);
     let name = module_name(task, callback);
     let workflow_path = task.run.workflow_path.clone();
@@ -121,7 +121,7 @@ fn call_with(
 
 /// What a step's isolate did besides returning: a failure it reported with
 /// `failStep`, and the files it changed with `jssgTransform`, renames
-/// included. Shared by function steps and `dependencyGraph` callbacks.
+/// included. Shared by function steps and shard functions.
 pub(crate) fn side_effects(sandbox: &Worker) -> (Option<String>, Vec<JssgFileChange>) {
     let effects = sandbox.take_side_effects();
     let failure = effects.failure.map(|failure| failure.message);

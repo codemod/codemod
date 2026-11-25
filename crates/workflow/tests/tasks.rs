@@ -848,10 +848,10 @@ fn callbacks_wrapped_in_type_assertions_are_extracted() {
     let report = h.start(
         r#"
 import { step, forEachFile } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 type Graph = { workspaces(): unknown[] };
 export default async function main() {
-  const roots = await step("Graph", dependencyGraph(((g: Graph) => g.workspaces().length) satisfies (g: Graph) => number));
+  const roots = await step("Graph", () => (((g: Graph) => g.workspaces().length) satisfies (g: Graph) => number)(dependencies()));
   const lengths = await step("Lengths", forEachFile(
     "*.ts",
     ((file: { text: string }) => file.text.length) as (file: { text: string }) => number,
@@ -1521,9 +1521,9 @@ fn who_uses_a_package_follows_workspace_to_workspace_links() {
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph((g) => {
+  return await step(() => ((g) => {
     const installed = g.nodes("moment");
     return {
       installed: installed.map((node) => node.version),
@@ -1533,7 +1533,7 @@ export default async function main() {
         .filter((chain) => chain.length > 2)
         .map((chain) => ({ dir: chain[0].dir, via: chain.slice(1, -1).map((node) => node.name) })),
     };
-  }));
+  })(dependencies()));
 }
 "#,
         Value::Null,
@@ -1558,16 +1558,16 @@ fn a_node_knows_its_directory_and_what_installed_it() {
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph((g) => {
+  return await step(() => ((g) => {
     const shared = g.node("@demo/shared");
     return {
       shared: [shared.dir, shared.local],
       moment: [g.node("moment").dir, g.node("moment").local],
       installedBy: shared.installedBy().map((edge) => edge.from.dir),
     };
-  }));
+  })(dependencies()));
 }
 "#,
         Value::Null,
@@ -1589,9 +1589,9 @@ fn dependents_are_the_repositorys_own_packages_unless_third_party_ones_are_asked
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph((g) => ({
+  return await step(() => ((g) => ({
     shared: g.dependents("@demo/shared").map((e) => e.from.dir),
     undici: g.dependents("undici-types").map((e) => e.from),
     undiciAll: g.dependents("undici-types", { includeThirdParty: true }).map((e) => e.from),
@@ -1604,7 +1604,7 @@ export default async function main() {
     typesNodeProd: g.node("@types/node").installedBy({ kinds: "prod" }).map((e) => e.from),
     binary: g.node("@codemod.com/cli-linux-x64-gnu").installedBy({ includeThirdParty: true }).map((e) => e.kind),
     binaryProd: g.node("@codemod.com/cli-linux-x64-gnu").installedBy({ includeThirdParty: true, kinds: "prod" }).map((e) => e.from),
-  })));
+  }))(dependencies()));
 }
 "#,
         Value::Null,
@@ -1646,8 +1646,8 @@ fn node_by_name_alone_fails_when_several_versions_are_installed() {
         format!(
             r#"
 import {{ step }} from "codemod/workflow";
-import {{ dependencyGraph }} from "codemod/deps";
-export default async function main() {{ return await step("B", dependencyGraph((g) => {body})); }}
+import {{ dependencies }} from "codemod/deps";
+export default async function main() {{ return await step("B", () => ((g) => {body})(dependencies())); }}
 "#
         )
     };
@@ -1658,7 +1658,7 @@ export default async function main() {{ return await step("B", dependencyGraph((
     let report = h.start(&workflow(r#"g.node("b")"#), Value::Null);
     let error = output(&report).unwrap_err();
     assert!(
-        error.contains(r#"g.node("b"): 2 versions are installed (1.5.0, 2.1.0); use g.nodes("b") or pass a version"#),
+        error.contains(r#"node("b"): 2 versions are installed (1.5.0, 2.1.0); use nodes("b") or pass a version"#),
         "{error}"
     );
 }
@@ -1719,9 +1719,9 @@ fn a_dependency_graph_callback_walks_the_targets_lockfiles_through_a_live_handle
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph({}, (g) => g.chains({ to: g.node("dnd") })));
+  return await step(() => ((g) => g.chains({ to: g.node("dnd") }))(dependencies()));
 }
 "#,
         Value::Null,
@@ -1739,12 +1739,12 @@ fn node_releases_keep_newer_versions_whose_ranges_accept_the_asked_version() {
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph({}, async (g) => {
+  return await step(() => (async (g) => {
     const releases = await g.node("dnd").releases({ accepting: { react: "19.0.0" }, newerThanMine: true });
     return releases.map((r) => `${r.version}${r.breaking ? " breaking" : ""}`);
-  }));
+  })(dependencies()));
 }
 "#,
         Value::Null,
@@ -1761,9 +1761,9 @@ fn a_resumed_run_replays_a_dependency_graph_step_without_asking_the_registry_aga
         format!(
             r#"
 import {{ step }} from "codemod/workflow";
-import {{ dependencyGraph, registry }} from "codemod/deps";
+import {{ dependencies, registry }} from "codemod/deps";
 export default async function main() {{
-  const dnd = await step(dependencyGraph({{}}, async () => (await registry.npm("dnd")).versions.length));
+  const dnd = await step(() => (async () => (await registry.npm("dnd")).versions.length)(dependencies()));
   await step("Later", () => {{ {later} }});
   return dnd;
 }}
@@ -1830,9 +1830,9 @@ fn a_dependency_graph_of_a_target_without_lockfiles_is_empty() {
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 export default async function main() {
-  return await step("Deps", dependencyGraph((g) => ({ read: g.lockfiles, skipped: g.skipped, nodes: g.nodes().length })));
+  return await step("Deps", () => ((g) => ({ read: g.lockfiles, skipped: g.skipped, nodes: g.nodes().length }))(dependencies()));
 }
 "#,
         Value::Null,
@@ -1850,8 +1850,8 @@ fn a_dependency_graph_step_fails_when_its_lockfiles_glob_matches_none() {
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
-export default async function main() { await step("Deps", dependencyGraph({ lockfiles: "**/pnpm-lock.yaml" }, (g) => g.workspaces())); }
+import { dependencies } from "codemod/deps";
+export default async function main() { await step("Deps", () => ((g) => g.workspaces())(dependencies({ lockfiles: "**/pnpm-lock.yaml" }))); }
 "#,
         Value::Null,
     );
@@ -1867,9 +1867,9 @@ fn a_dependency_graph_whose_only_lockfile_cannot_be_read_lists_it_as_skipped() {
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph((g) => ({ read: g.lockfiles, skipped: g.skipped.map((s) => s.lockfile) })));
+  return await step(() => ((g) => ({ read: g.lockfiles, skipped: g.skipped.map((s) => s.lockfile) }))(dependencies()));
 }
 "#,
         Value::Null,
@@ -1894,9 +1894,9 @@ fn a_dependency_graph_reads_a_yarn_1_lockfile() {
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph((g) => ({ read: g.lockfiles, leftPad: g.dependents("left-pad").map((e) => [e.from.name, e.range, e.to.version]) })));
+  return await step(() => ((g) => ({ read: g.lockfiles, leftPad: g.dependents("left-pad").map((e) => [e.from.name, e.range, e.to.version]) }))(dependencies()));
 }
 "#,
         Value::Null,
@@ -1915,13 +1915,13 @@ fn a_dependency_graph_callback_commits_what_it_changes_with_jssg_transform() {
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 import { jssgTransform } from "codemod/ast-grep";
 export default async function main({ target }) {
-  await step(dependencyGraph({}, async (g) => {
+  await step(() => (async (g) => {
     const dnd = g.node("dnd").version;
     await jssgTransform((root) => root.root().text().replace("0", JSON.stringify(dnd)), `${target}/a.ts`, "typescript");
-  }));
+  })(dependencies()));
 }
 "#,
         Value::Null,
@@ -1942,9 +1942,9 @@ fn a_dependency_graph_reads_only_root_lockfiles_and_lists_ones_it_could_not_read
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph({}, (g) => ({ read: g.lockfiles, skipped: g.skipped.map((s) => [s.lockfile, typeof s.error === "string" && s.error.length > 0]) })));
+  return await step(() => ((g) => ({ read: g.lockfiles, skipped: g.skipped.map((s) => [s.lockfile, typeof s.error === "string" && s.error.length > 0]) }))(dependencies()));
 }
 "#,
         Value::Null,
@@ -1964,13 +1964,13 @@ fn a_dependency_graph_reads_the_lockfiles_its_options_select() {
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph({ lockfiles: "examples/app/yarn.lock" }, (g) => ({
+  return await step(() => ((g) => ({
     read: g.lockfiles,
     table: g.nodes("table").length > 0,
     moment: g.nodes("moment").length,
-  })));
+  }))(dependencies({ lockfiles: "examples/app/yarn.lock" })));
 }
 "#,
         Value::Null,
@@ -2091,9 +2091,9 @@ fn a_dependency_graph_result_keeps_a_proto_key_as_data() {
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph({}, () => JSON.parse('{"__proto__": {"a": 1}, "b": 2}')));
+  return await step(() => (() => JSON.parse('{"__proto__": {"a": 1}, "b": 2}'))(dependencies()));
 }
 "#,
         Value::Null,
@@ -2651,9 +2651,10 @@ export default async function main() {{
     h.bundle_file("data.txt", "secret\n");
     let report = h.start(&workflow(r#", capabilities: ["fs"]"#), Value::Null);
     assert_eq!(output(&report).unwrap()["outputs"], json!(["secret"]));
-    // A dry run installs no file system, whatever was granted.
+    // A dry run gets a curated fs: it reads the target, keeps writes in
+    // memory, and refuses paths outside the target (the bundle here).
     let error = output(&h.dry_run(&workflow(r#", capabilities: ["fs"]"#))).unwrap_err();
-    assert!(error.contains("fs"), "{error}");
+    assert!(error.contains("EACCES"), "{error}");
 
     let error =
         output(&h.start(&workflow(r#", capabilities: ["disk"]"#), Value::Null)).unwrap_err();
@@ -2957,7 +2958,7 @@ export default async function main() {
     assert_eq!(output(&report).unwrap(), json!([1, 2]));
 }
 
-/// Nor does a `dependencyGraph` callback that leaves an interval running.
+/// Nor does a step that reads the dependency graph and leaves an interval running.
 #[test]
 fn work_a_dependency_graph_callback_leaves_running_does_not_crash_the_run() {
     let h = Harness::new();
@@ -2965,9 +2966,9 @@ fn work_a_dependency_graph_callback_leaves_running_does_not_crash_the_run() {
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { dependencyGraph } from "codemod/deps";
+import { dependencies } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph({}, (g) => { setInterval(() => {}, 10); setTimeout(() => {}, 10_000); return g.node("dnd").name; }));
+  return await step(() => ((g) => { setInterval(() => {}, 10); setTimeout(() => {}, 10_000); return g.node("dnd").name; })(dependencies()));
 }
 "#,
         Value::Null,

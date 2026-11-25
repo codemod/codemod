@@ -1,0 +1,113 @@
+---
+title: "Dependencies"
+sidebarTitle: "Dependencies"
+description: "Check which packages use a dependency, bump or replace it where it is declared, and refresh the lockfile, from a workflow."
+---
+
+Most migrations start and end with dependencies: run only if the repository uses a library, then move it to the new version (or swap it for another) in every `package.json` that declares it, and refresh the lockfile. `codemod/deps` does each of these in a line, in monorepos too, with pnpm, Yarn and bun catalogs. The full API is in the [reference](/community/workflows/reference#dependencies).
+
+## Skip repositories that don't use the library
+
+`dependencies()` runs inside a step. It reads the `package.json` files, so it works without a lockfile:
+
+```ts workflow.ts
+import { step } from "codemod/workflow";
+import { dependencies, semver } from "codemod/deps";
+
+export default async function main() {
+  const react = await step("React versions", () =>
+    dependencies()
+      .declarations("react", { kinds: ["prod", "dev"] })
+      .map((d) => ({ dir: d.package.dir, range: d.resolved, major: semver.major(d.resolved ?? "") })),
+  );
+  if (!react.some((d) => d.major === 18)) return { skipped: "no package is on React 18" };
+  // ...
+}
+```
+
+The repository's packages are the root `package.json` and the workspaces it declares. Without a workspace declaration that's the root alone, so a fixture's or an example's `package.json` doesn't make the repository "use" something; `dependencies().packages({ all: true })` lists every `package.json` when you want them.
+
+`resolved` is the range a declaration means: for `"react": "catalog:"` it is the catalog's entry, for `"@acme/ui": "workspace:^"` the local package's version. A range `semver` can't read (a git URL, `latest`) has `readable: false` and `semver.major` gives `null`.
+
+To scope a `forEachFile` callback to files whose package uses something, ask for the file's package:
+
+```ts
+await step(forEachFile("**/*.tsx", (file) => {
+  if (!dependencies().packageOf(file.path)?.uses("next", { kinds: "prod" })) return;
+  // ...
+}));
+```
+
+## Bump, add, remove and rename
+
+Edits change the `package.json` files where the dependency is declared, and nothing else in them:
+
+```ts
+await step("Update dependencies", () => {
+  const deps = dependencies();
+  return [
+    ...deps.bump("react", "^19.0.0"),
+    ...deps.rename("react-router-dom", "react-router", { range: "^7.0.0" }),
+    ...deps.remove("@types/react-router-dom"),
+    // Next to express, in the same section.
+    ...deps.declarations("express").flatMap((d) => d.package.add("mime-types", "^3.0.0", { kind: d.kind })),
+  ];
+});
+```
+
+Each edit returns what it changed, `{ file, package, name, kind, from, to }`, and what it left alone as `skipped`.
+
+- A `catalog:` declaration is bumped in its catalog (`pnpm-workspace.yaml`, bun's `package.json`, or Yarn's `.yarnrc.yml`), once for every package that uses it.
+- Peer dependencies are left alone unless `kinds` names `"peer"`: a library's `"react": ">=17"` peer range stays when you bump React. They're listed in `skipped` with `reason: "peer"`.
+- A `workspace:` declaration points at one of your packages and is left alone (`reason: "workspace"`).
+- `bump` takes a function to decide per declaration: `deps.bump("lodash", (d) => semver.major(d.resolved ?? "") === 3 ? "^4.17.21" : undefined)`.
+- `{ kinds, in }` limit an edit to sections and packages: `deps.bump("react", "^19.0.0", { kinds: ["prod", "dev"], in: "apps/web" })`.
+
+With `--dry-run`, the edits show in the diff and later steps see them, and nothing is written.
+
+## Python projects
+
+The same calls read and edit Python manifests: `pyproject.toml` (PEP 621 `[project]`, `[dependency-groups]`, uv's `[tool.uv] dev-dependencies` and Poetry's `[tool.poetry.*dependencies]`) and `requirements*.txt`. Their packages have `ecosystem: "pypi"`, names match as PyPI normalizes them (`"Django"` is `"django"`), and `group` names the optional-dependency, dependency or Poetry group.
+
+```ts
+await step("Django 5", () => dependencies().bump("django", ">=5.0,<6"));
+```
+
+`bump` and `add` take PEP 440 specifiers; `^4.2`, `~4.2` and a bare version are turned into one in PEP 508 strings, and Poetry tables keep them as given. Edits keep extras, markers and comments. `[project] dependencies`, Poetry's main group and a plain requirements file are `prod`; dependency groups, Poetry groups, uv dev dependencies, optional groups named like dev, test, lint or docs, and requirements files named like dev or test are `dev`; other extras are `optional`.
+
+## Refresh the lockfile
+
+Edits change the `package.json` files, not the lockfile. `install()` is a step that runs the repository's package manager (npm, pnpm, Yarn or bun, from `packageManager` or the lockfile; in a Python repository without a `package.json`, uv, Poetry or pip):
+
+```ts
+import { dependencies, install } from "codemod/deps";
+
+const behind = await step(() => {
+  const deps = dependencies();
+  deps.bump("react", "^19.0.0");
+  return deps.needsInstall();
+});
+if (behind) await step(install());
+```
+
+Ask `needsInstall()` in the step that edits: `yarn.lock` keeps no ranges for your own packages, so on Yarn a later step can't see a changed range.
+
+It only refreshes the lockfile by default; pass `install({ lockfileOnly: false })` to install. A dry run doesn't run it. It fails with a message, instead of hanging, when the package manager isn't installed or the registry can't be reached. In Codemod's cloud runs, which reach only `registry.npmjs.org` and GitHub unless your organization allows more hosts, the error names the registry the install needed, such as Yarn's `registry.yarnpkg.com`.
+
+## Ask the lockfile
+
+Installed versions and the dependency graph come from the lockfile, read the first time you ask:
+
+```ts
+await step("Who pulls in moment", () => {
+  const deps = dependencies();
+  return {
+    installed: deps.installed("moment"),
+    chains: deps.chains({ to: "moment" }).map((chain) => chain.join(" > ")),
+  };
+});
+// { installed: ["2.29.4"],
+//   chains: ["@demo/api@1.0.0 > moment@2.29.4", "@demo/web@1.0.0 > @demo/shared@1.0.0 > moment@2.29.4", ...] }
+```
+
+A step that edits and then asks the lockfile sees the lockfile as it was: the edit changes what is declared, not what is installed, until `install()` runs.

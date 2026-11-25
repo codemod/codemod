@@ -47,8 +47,8 @@ pub fn is_flow_module(specifier: &str) -> bool {
     codemod_module(specifier) == Some("workflow")
 }
 
-/// Specifier of the dependency module: `dependencyGraph`, `registry` and
-/// `semver`.
+/// Specifier of the dependency module: `dependencies`, `install`,
+/// `registry` and `semver`.
 pub const DEPS_MODULE: &str = "codemod/deps";
 
 /// Whether a specifier names the dependency module (`codemod/deps`, or
@@ -258,7 +258,6 @@ struct CallbackParts {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Isolated {
     Callback,
-    GraphCallback,
     FunctionStep,
     ShardFunction,
     ShardFilter,
@@ -269,7 +268,6 @@ impl Isolated {
     fn noun(self) -> &'static str {
         match self {
             Isolated::Callback => "forEachFile callback",
-            Isolated::GraphCallback => "dependencyGraph callback",
             Isolated::FunctionStep => "function step",
             Isolated::ShardFunction => "shard function",
             Isolated::ShardFilter => "shard filter",
@@ -290,7 +288,10 @@ const REMOVED_STATE_API: &[&str] = &[
 ];
 
 /// Exports that moved from `codemod/workflow` to `codemod/deps`.
-const MOVED_TO_DEPS: &[&str] = &["dependencyGraph", "registry", "semver"];
+const MOVED_TO_DEPS: &[&str] = &["registry", "semver"];
+
+/// What replaced `dependencyGraph`, imported from either module.
+pub(crate) const DEPENDENCY_GRAPH_REMOVED: &str = "dependencyGraph() was removed: call dependencies() from \"codemod/deps\" inside a step, as step(() => { const deps = dependencies(); ... }); `codemod workflow upgrade` rewrites it";
 
 /// Exports that moved from `codemod/workflow` to `codemod/git`.
 const MOVED_TO_GIT: &[&str] = &["branch", "commit", "pullRequest"];
@@ -350,6 +351,12 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                 continue;
                             }
                             let imported = s.imported.name().to_string();
+                            if imported == "dependencyGraph"
+                                && (module == FLOW_MODULE || module == DEPS_MODULE)
+                            {
+                                return Err(analysis
+                                    .error(s.span.start, DEPENDENCY_GRAPH_REMOVED.to_string()));
+                            }
                             if module == "codemod/workflow"
                                 && REMOVED_STATE_API.contains(&imported.as_str())
                             {
@@ -442,6 +449,10 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                         continue;
                     }
                     let name = specifier.local.name().to_string();
+                    if name == "dependencyGraph" {
+                        return Err(analysis
+                            .error(specifier.span.start, DEPENDENCY_GRAPH_REMOVED.to_string()));
+                    }
                     let moved_to = if MOVED_TO_GIT.contains(&name.as_str()) {
                         GIT_MODULE
                     } else if MOVED_TO_DEPS.contains(&name.as_str()) {
@@ -515,8 +526,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                     }
                 }
             }
-            // `deps.dependencyGraph` through a namespace import: the build
-            // finds graph callbacks by the imported name only.
+            // `deps.dependencyGraph` through a namespace import.
             AstKind::StaticMemberExpression(member)
                 if member.property.name == "dependencyGraph" =>
             {
@@ -530,14 +540,10 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                     .filter(|import| {
                         is_deps_module(&import.source) && import.line.starts_with("import * as ")
                     });
-                if let Some(import) = namespace {
-                    return Err(analysis.error(
-                        member.span.start,
-                        format!(
-                            "import dependencyGraph by name (import {{ dependencyGraph }} from \"{}\"): the build finds its callbacks by that name",
-                            import.source
-                        ),
-                    ));
+                if namespace.is_some() {
+                    return Err(
+                        analysis.error(member.span.start, DEPENDENCY_GRAPH_REMOVED.to_string())
+                    );
                 }
             }
             AstKind::CallExpression(call) => {
@@ -549,19 +555,13 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                 };
                 let workflow_function = analysis.imports.get(&symbol).and_then(|import| {
                     let imported = import.imported.as_deref()?;
-                    (is_flow_module(&import.source)
-                        || is_deps_module(&import.source) && imported == "dependencyGraph")
-                        .then(|| imported.to_string())
+                    is_flow_module(&import.source).then(|| imported.to_string())
                 });
                 match workflow_function.as_deref() {
-                    Some(task @ ("forEachFile" | "dependencyGraph")) => {
-                        let kind = if task == "forEachFile" {
-                            Isolated::Callback
-                        } else {
-                            Isolated::GraphCallback
-                        };
+                    Some(task @ "forEachFile") => {
+                        let kind = Isolated::Callback;
                         // `forEachFile(selector, callback, reducer, initial)`.
-                        let reducing = task == "forEachFile" && call.arguments.len() > 2;
+                        let reducing = call.arguments.len() > 2;
                         if reducing {
                             sites.extend(
                                 reducer_site(&analysis, &imported, call)
@@ -585,17 +585,17 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                 sites.push((f.span, kind))
                             }
                             // `astGrep(...)`, a variable holding it, or an imported callback.
-                            (_, Some(Expression::CallExpression(_))) if task == "forEachFile" => {}
+                            (_, Some(Expression::CallExpression(_))) => {}
                             (_, Some(Expression::Identifier(id)))
-                                if task == "forEachFile"
-                                    && !scoping
-                                        .get_reference(id.reference_id())
-                                        .symbol_id()
-                                        .is_some_and(|symbol| {
-                                            scoping.symbol_flags(symbol).intersects(
-                                                SymbolFlags::Function | SymbolFlags::Class,
-                                            ) || analysis.function_valued.contains(&symbol)
-                                        }) => {}
+                                if !scoping
+                                    .get_reference(id.reference_id())
+                                    .symbol_id()
+                                    .is_some_and(|symbol| {
+                                        scoping
+                                            .symbol_flags(symbol)
+                                            .intersects(SymbolFlags::Function | SymbolFlags::Class)
+                                            || analysis.function_valued.contains(&symbol)
+                                    }) => {}
                             (Some(other), _) => {
                                 return Err(analysis.error(
                                     other.span().start,
@@ -605,12 +605,8 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                             (None, _) => {
                                 return Err(analysis.error(
                                     call.span.start,
-                                    if task == "forEachFile" {
-                                        "forEachFile takes a callback, written inline or imported from its file, or astGrep(...), optionally after a selector"
-                                    } else {
-                                        "dependencyGraph takes a callback, optionally after options"
-                                    }
-                                    .to_string(),
+                                    "forEachFile takes a callback, written inline or imported from its file, or astGrep(...), optionally after a selector"
+                                        .to_string(),
                                 ));
                             }
                         }
@@ -1129,10 +1125,11 @@ impl Analysis<'_> {
         if let Some(import) = self.imports.get(&symbol) {
             let imported = import.imported.as_deref().unwrap_or_default();
             // Other imports are copied as written: in an isolate,
-            // `codemod/deps` gives `registry` and `semver` that run there.
+            // `codemod/deps` gives `dependencies`, `registry` and `semver`
+            // that run there; `install` starts a step.
             if is_flow_module(&import.source)
                 || is_git_module(&import.source)
-                || is_deps_module(&import.source) && imported == "dependencyGraph"
+                || is_deps_module(&import.source) && imported == "install"
             {
                 return Err(self.error(
                     at.start,
@@ -1349,6 +1346,9 @@ fn moved_import(path: &Path, text: &str) -> Option<String> {
     let source_type = SourceType::from_path(path).unwrap_or_else(|_| SourceType::mjs());
     let parsed = Parser::new(&allocator, text, source_type).parse();
     let hint = |name: &str| {
+        if name == "dependencyGraph" {
+            return Some(DEPENDENCY_GRAPH_REMOVED.to_string());
+        }
         let moved_to = if MOVED_TO_GIT.contains(&name) {
             GIT_MODULE
         } else if MOVED_TO_DEPS.contains(&name) {

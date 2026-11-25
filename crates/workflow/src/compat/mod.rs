@@ -30,6 +30,7 @@
 //! - `trigger: manual` becomes an `approval` step; `branch_name`,
 //!   `pull_request` and step `commit` become git steps.
 
+mod deps_upgrade;
 pub mod expr;
 mod print;
 mod transform_module;
@@ -46,6 +47,7 @@ use butterflow_models::trigger::TriggerType;
 use butterflow_models::{Node, Step, Workflow};
 use serde_json::Value;
 
+pub use deps_upgrade::upgrade_dependency_graph;
 use expr::{condition, js_string, string_list, template};
 use transform_module::{Analysis, TransformModule};
 

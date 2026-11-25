@@ -3,9 +3,9 @@
 //! report) never stops at it.
 //!
 //! What counts as changing the target: a step committing files (a
-//! `forEachFile`, function, `dependencyGraph` or `astGrep` step that wrote,
+//! `forEachFile`, function or `astGrep` step that wrote,
 //! renamed or deleted something; nested codemods' steps too), a `shell`,
-//! `agent`, `installSkill` or git step, and any step whose code may use `fs`
+//! `install`, `agent`, `installSkill` or git step, and any step whose code may use `fs`
 //! or `child_process`. Dry runs, tests and resumed runs are not checked.
 
 use std::path::{Path, PathBuf};

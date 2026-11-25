@@ -10,22 +10,11 @@ use crate::model::Ecosystem;
 /// (`workspace:`, `git:`, `file:` and other non-registry ranges).
 pub fn satisfies(ecosystem: Ecosystem, range: &str, version: &str) -> Option<bool> {
     match ecosystem {
+        // Any protocol but `npm:` (`file:`, `link:`, `git+https:` ...)
+        // names no registry range, even when it ends in `@^1`; an alias
+        // ("npm:other@^1") carries its range after the last '@'.
         Ecosystem::Npm => {
-            // Any protocol but `npm:` (`file:`, `link:`, `git+https:` ...)
-            // names no registry range, even when it ends in `@^1`.
-            if range.contains(':') && !range.starts_with("npm:") {
-                return None;
-            }
-            let range = range.strip_prefix("npm:").unwrap_or(range);
-            // An alias ("npm:other@^1") carries its range after the last '@'.
-            let range = match range.rfind('@') {
-                Some(at) if at > 0 => &range[at + 1..],
-                _ => range,
-            };
-            if range.contains(':') {
-                return None;
-            }
-            let range = node_semver::Range::parse(range).ok()?;
+            let range = npm_range(range)?;
             Some(range.satisfies(&node_semver::Version::parse(version).ok()?))
         }
         Ecosystem::Cargo => {
@@ -79,6 +68,137 @@ pub fn is_breaking(ecosystem: Ecosystem, from: &str, to: &str) -> bool {
         }
     }
     breaking_part(from) != breaking_part(to)
+}
+
+/// Whether `range` is a range the ecosystem's rules can read: not a git,
+/// file, link or url spec, nor a tag such as "latest".
+pub fn valid_range(ecosystem: Ecosystem, range: &str) -> bool {
+    match ecosystem {
+        Ecosystem::Npm => npm_range(range).is_some(),
+        Ecosystem::Cargo => semver::VersionReq::parse(range).is_ok(),
+        Ecosystem::Pypi => pypi::satisfies(range, "0").is_some(),
+    }
+}
+
+/// An npm range without its `npm:` alias; none for other protocols and tags.
+fn npm_range(range: &str) -> Option<node_semver::Range> {
+    if range.contains(':') && !range.starts_with("npm:") {
+        return None;
+    }
+    let range = range.strip_prefix("npm:").unwrap_or(range);
+    let range = match range.rfind('@') {
+        Some(at) if at > 0 => &range[at + 1..],
+        _ => range,
+    };
+    if range.contains(':') {
+        return None;
+    }
+    // node-semver reads a bare word as no range; npm reads it as a dist-tag.
+    if range
+        .trim()
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic())
+        && !range.trim().starts_with(['x', 'X', 'v', 'V'])
+    {
+        return None;
+    }
+    node_semver::Range::parse(range).ok()
+}
+
+/// The lowest version `range` accepts.
+pub fn min_version(ecosystem: Ecosystem, range: &str) -> Option<String> {
+    match ecosystem {
+        Ecosystem::Npm => npm_range(range)?.min_version().map(|v| v.to_string()),
+        Ecosystem::Cargo => {
+            let req = semver::VersionReq::parse(range).ok()?;
+            let mut lowest = semver::Version::new(0, 0, 0);
+            for comparator in &req.comparators {
+                let at = semver::Version {
+                    major: comparator.major,
+                    minor: comparator.minor.unwrap_or(0),
+                    patch: comparator.patch.unwrap_or(0),
+                    pre: comparator.pre.clone(),
+                    build: semver::BuildMetadata::EMPTY,
+                };
+                let bound = match comparator.op {
+                    semver::Op::Greater => semver::Version::new(at.major, at.minor, at.patch + 1),
+                    semver::Op::Less | semver::Op::LessEq => continue,
+                    _ => at,
+                };
+                if bound > lowest {
+                    lowest = bound;
+                }
+            }
+            Some(lowest.to_string())
+        }
+        Ecosystem::Pypi => {
+            let candidates: Vec<String> = range
+                .split([',', '|'])
+                .filter_map(|clause| {
+                    let clause = clause.trim();
+                    let version = clause
+                        .strip_prefix(">=")
+                        .or_else(|| clause.strip_prefix("=="))
+                        .or_else(|| clause.strip_prefix("~="))
+                        .or_else(|| clause.strip_prefix('^'))
+                        .or_else(|| clause.strip_prefix('~'))?;
+                    pypi::version(version.trim()).map(|_| version.trim().to_string())
+                })
+                .collect();
+            candidates
+                .into_iter()
+                .min_by(|a, b| compare(Ecosystem::Pypi, a, b))
+        }
+    }
+}
+
+/// The major version of a version, or of a range's lowest version.
+pub fn major(ecosystem: Ecosystem, text: &str) -> Option<u64> {
+    let version = match ecosystem {
+        Ecosystem::Npm if node_semver::Version::parse(text).is_ok() => text.to_string(),
+        Ecosystem::Cargo if semver::Version::parse(text).is_ok() => text.to_string(),
+        Ecosystem::Pypi if pypi::version(text).is_some() => text.to_string(),
+        _ => min_version(ecosystem, text)?,
+    };
+    match ecosystem {
+        Ecosystem::Npm => node_semver::Version::parse(&version).ok().map(|v| v.major),
+        Ecosystem::Cargo => semver::Version::parse(&version).ok().map(|v| v.major),
+        Ecosystem::Pypi => pypi::version(&version).and_then(|v| v.release().first().copied()),
+    }
+}
+
+/// The first version-looking run in `text`, padded to three parts:
+/// "v1.2" is "1.2.0", "pnpm@10.1.3+sha" is "10.1.3".
+pub fn coerce(text: &str) -> Option<String> {
+    let start = text.find(|c: char| c.is_ascii_digit())?;
+    let mut parts: Vec<String> = Vec::new();
+    for part in text[start..].split('.') {
+        let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
+        if digits.is_empty() {
+            break;
+        }
+        parts.push(digits.trim_start_matches('0').to_string());
+        if parts.len() == 3 || digits.len() != part.len() {
+            break;
+        }
+    }
+    let parts: Vec<String> = parts
+        .into_iter()
+        .map(|p| if p.is_empty() { "0".into() } else { p })
+        .collect();
+    let mut parts = parts;
+    parts.resize(3, "0".into());
+    Some(parts.join("."))
+}
+
+/// The highest of `versions` that `range` accepts.
+pub fn max_satisfying(ecosystem: Ecosystem, versions: &[String], range: &str) -> Option<String> {
+    versions
+        .iter()
+        .filter(|version| satisfies(ecosystem, range, version) == Some(true))
+        .max_by(|a, b| compare(ecosystem, a, b))
+        .cloned()
 }
 
 mod pypi {
@@ -158,5 +278,46 @@ mod pypi {
         upper.push(parts[at].checked_add(1)?);
         let upper = Version::new(upper).with_epoch(lower.epoch());
         Some(vec![format!(">={lower}"), format!("<{upper}")])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_helpers_people_hand_roll() {
+        let npm = Ecosystem::Npm;
+        assert_eq!(min_version(npm, "^18.2.0").as_deref(), Some("18.2.0"));
+        assert_eq!(min_version(npm, ">=1 <2").as_deref(), Some("1.0.0"));
+        assert_eq!(
+            min_version(npm, "npm:other@~4.1.0").as_deref(),
+            Some("4.1.0")
+        );
+        assert_eq!(min_version(npm, "workspace:*"), None);
+        assert_eq!(
+            min_version(Ecosystem::Cargo, "0.29").as_deref(),
+            Some("0.29.0")
+        );
+        assert_eq!(
+            min_version(Ecosystem::Pypi, ">=2.1,<3").as_deref(),
+            Some("2.1")
+        );
+        assert_eq!(major(npm, "^18.2.0"), Some(18));
+        assert_eq!(major(npm, "19.1.0"), Some(19));
+        assert_eq!(major(npm, "latest"), None);
+        assert_eq!(coerce("v1.2").as_deref(), Some("1.2.0"));
+        assert_eq!(coerce("pnpm@10.1.3+sha512.abc").as_deref(), Some("10.1.3"));
+        assert_eq!(coerce("none"), None);
+        let versions = ["1.0.0", "1.5.0", "2.0.0"].map(String::from);
+        assert_eq!(
+            max_satisfying(npm, &versions, "^1.0.0").as_deref(),
+            Some("1.5.0")
+        );
+        assert!(valid_range(npm, "^1 || ^2"));
+        assert!(valid_range(npm, "*"));
+        assert!(!valid_range(npm, "latest"));
+        assert!(!valid_range(npm, "github:a/b"));
+        assert!(!valid_range(npm, "catalog:"));
     }
 }

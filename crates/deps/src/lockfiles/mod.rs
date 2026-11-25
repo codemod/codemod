@@ -121,6 +121,39 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
     Ok(graph)
 }
 
+/// Every file [`load`] with `only` may read under `root`: the lockfiles it
+/// would pick and every manifest beside them (package.json, Cargo.toml,
+/// pyproject.toml, Pipfile), relative with `/`, sorted. A hash of their
+/// texts is a key for the parse: it changes when any input does.
+pub fn inputs(root: &Path, only: &[String]) -> Vec<String> {
+    const MANIFESTS: [&str; 4] = ["package.json", "Cargo.toml", "pyproject.toml", "Pipfile"];
+    let mut found: Vec<String> = ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .filter_entry(|entry| {
+            !matches!(
+                entry.file_name().to_str(),
+                Some("node_modules" | "target" | ".git")
+            )
+        })
+        .build()
+        .flatten()
+        .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?;
+            let relative = entry.path().strip_prefix(root).ok()?;
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            let lockfile = LOCKFILES.contains(&name)
+                && match only {
+                    [] => !relative.contains('/'),
+                    globs => globs.iter().any(|glob| glob_match(glob, &relative)),
+                };
+            (lockfile || MANIFESTS.contains(&name)).then_some(relative)
+        })
+        .collect();
+    found.sort();
+    found
+}
+
 /// The directories of a Yarn 1 project's workspaces other than the root,
 /// relative to `base`: those with a package.json that the root
 /// package.json's `workspaces` globs (or `workspaces.packages`) match and

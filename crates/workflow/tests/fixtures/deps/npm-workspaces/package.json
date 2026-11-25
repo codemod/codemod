@@ -1,0 +1,13 @@
+{
+  "name": "workflow-v2-demo",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.16.0",
+    "codemod": "2.0.0-alpha.5",
+    "typescript": "^5.9.0"
+  }
+}

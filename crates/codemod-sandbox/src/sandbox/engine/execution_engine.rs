@@ -277,8 +277,8 @@ pub struct JssgExecutionOptions<'a, R> {
     pub pending_files: Option<super::PendingFiles>,
 }
 
-struct DryRunDiskFetcher {
-    target_directory: PathBuf,
+pub(crate) struct DryRunDiskFetcher {
+    pub(crate) target_directory: PathBuf,
 }
 
 impl FileFetcher for DryRunDiskFetcher {
