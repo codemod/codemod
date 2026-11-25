@@ -8,6 +8,6 @@
     "validate": "codemod workflow validate -w workflows/health.ts"
   },
   "devDependencies": {
-    "codemod": "2.0.0-alpha.7"
+    "codemod": "2.0.0-alpha.8"
   }
 }

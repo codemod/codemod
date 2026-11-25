@@ -11,13 +11,85 @@ Workflow v2 is the 2.0 Codemod CLI: workflows are TypeScript (`workflow.ts`), an
 
 ```bash
 npx codemod@alpha workflow run -w workflow.ts --target .
-npx codemod@2.0.0-alpha.7 workflow run -w workflow.ts --target .
+npx codemod@2.0.0-alpha.8 workflow run -w workflow.ts --target .
 ```
 
 To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha workflow upgrade ./my-package --dry-run`. See [Migrate from workflow.yaml](/community/workflows/migrate).
 </Note>
 
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
+
+<Update label="2.0.0-alpha.8" description="November 25, 2026">
+```bash
+npx codemod@2.0.0-alpha.8 --version   # codemod 2.0.0-alpha.8
+```
+
+**Highlights**
+
+- `run_finished` carries the workflow's return value and each step's result, dry runs too.
+- `fail()` ends a run as failed and keeps its report as the output (exit code `2`).
+- A run that only reads is no longer stopped by uncommitted changes.
+- `workflow status` and `workflow list` print JSON with `--format json`.
+
+**Breaking changes**
+
+- **The uncommitted-changes check happens at the first write** ([#2521](https://github.com/codemod/codemod/pull/2521), [#2523](https://github.com/codemod/codemod/pull/2523)). Before, `workflow run` and `codemod <package>` refused to start on a target with uncommitted changes (or outside a git repository) without `--allow-dirty`. Now the run starts and checks just before it first changes the target: a step that writes, renames or deletes a file, a `shell`, `agent` or `installSkill` step, a git step with `--managed-git`, or a step whose code gets `fs` or `child_process`. A run that only reads (a check, a report) never stops at it.
+
+  ```
+  # before: a check that only reads, on a dirty tree
+  $ npx codemod@2.0.0-alpha.7 workflow run -w check.ts --target . --no-interactive
+    × You have uncommitted changes in /repo. Use --allow-dirty to proceed anyway.   # exit 1, nothing ran
+
+  # after
+  $ npx codemod@2.0.0-alpha.8 workflow run -w check.ts --target . --no-interactive
+  ✓ Find var (0.0s)
+  Done
+  ```
+
+  A run that writes still stops before it writes: an interactive run asks (in the launcher too), and an unattended run fails that step, writes nothing and exits `1`. `--approve` doesn't answer it; `--allow-dirty` still skips it. `workflow resume` checks again only a run that stopped before it first wrote; `workflow resume --allow-dirty` skips that.
+
+- **`run_finished` has `output` and `steps`** ([#2521](https://github.com/codemod/codemod/pull/2521)). With `--format jsonl`, `run_finished` adds the workflow's return value and every recorded step with its result, also for dry runs. An `output` over 1 MiB as JSON is `null` with `output_omitted: { bytes, limit }`; step results share another 1 MiB. In text format, a run that returned something ends with `Output: <JSON>`, cut at 200 characters.
+
+  ```json
+  {"event":"run_finished","run_id":"…","status":"succeeded","error":null,"failed_files":0,"partial_steps":[],
+   "output":{"checks":[{"id":"count","n":2}]},
+   "steps":[{"position":0,"label":"Count","status":"succeeded","result":2}],"seq":7,"ts":"…"}
+  ```
+
+**New**
+
+- **`fail(message, { output?, exitCode? })`** ([#2521](https://github.com/codemod/codemod/pull/2521)) from `codemod/workflow`: end the run as `failed` and keep a report. Before, throwing lost the output and catching the failure exited `0`. The run's error is `message`, its output is `output` (in `run_finished.output`, `workflow status --format json` and `runWorkflow(...).output`), and the CLI exits `2`, or `exitCode` (1 to 125). A plain `throw` still exits `1`. Call it from the workflow body.
+
+  ```ts
+  import { fail, forEachFile, step } from "codemod/workflow";
+
+  export default async function main() {
+    const found = await step("Find var", forEachFile("src/**/*.ts", (file) =>
+      file.text.includes("var ") ? file.path : undefined));
+    const report = { checks: [{ id: "no-var", status: found.outputs.length ? "fail" : "pass", files: found.outputs }] };
+    if (found.outputs.length) fail("1 check failed: no-var", { output: report });
+    return report;
+  }
+  ```
+
+- **`workflow status --format json`** and **`workflow list --format json`** ([#2521](https://github.com/codemod/codemod/pull/2521)): a run's status, params, timings, error, `output`, `exitCode` and steps with their results and durations.
+- **A repo health workflow in CI** ([#2522](https://github.com/codemod/codemod/pull/2522)): the codemod repo checks itself with `.codemod/workflows/health.ts` (one crossterm in the binary, no `@latest` pins in docs and CLI messages), which reports with `fail()`.
+
+**Fixes**
+
+- The no-command next steps (`npx codemod ai`, `init`, `<package>`) and `codemod ai`'s "no coding agent detected" warning pin the version you are running instead of `codemod@latest`, which is 1.x.
+- The MCP setup, troubleshooting, publish-from-CI and Codemod Studio docs no longer point at the `latest` tag, which is 1.x.
+- The test that guards CLI messages against `@latest` pins read only up to a file's first `#[cfg(test)]`; it now skips only test code.
+
+**Known gaps**
+
+- With `--allow-fs` or `--allow-child-process`, every `forEachFile`, function and `dependencyGraph` step counts as a write.
+- Dry runs are not saved, so `workflow status` can't show them; their output is in `run_finished` and the text output.
+- A `--dry-run` that reaches `approval()` without `--approve` exits `0` at "Waiting for approval" with no diff, and can't be resumed. Use `--dry-run --approve`.
+- The skill files `codemod ai` installs still say `npx codemod ai ...` unpinned.
+- `codemod/assess` has no free-text question type.
+- Values interpolated into shell commands (`${{ }}` in a translated `run:`, or `${x}` in `shell(...)`) are not shell-quoted. Quote them yourself, or use the `` shell`...` `` tagged template, which does.
+</Update>
 
 <Update label="2.0.0-alpha.7" description="November 25, 2026">
 ```bash
