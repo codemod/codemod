@@ -21,7 +21,9 @@ function readNames(pattern, source) {
 
 function readExportListNames(source) {
   const names = new Set();
-  for (const match of source.matchAll(exportListPattern)) {
+  // Comments can show `export { … } from` as an example; they export nothing.
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  for (const match of code.matchAll(exportListPattern)) {
     for (const part of match[1].split(",")) {
       const trimmed = part.trim();
       if (!trimmed) continue;

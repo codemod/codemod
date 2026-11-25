@@ -495,6 +495,8 @@ import {
   importedBindings,
   retargetImport,
   importFromDeclarations,
+  declarationTargets,
+  retargetMock,
 } from "@jssg/utils/javascript/modules";
 ```
 
@@ -515,16 +517,26 @@ const edit = retargetImport(statement, (binding) =>
 // import Modal from "@/ui/modal";
 ```
 
-Bindings that stay come first. Bindings moved to one module share a statement; a default export becomes a default import, and a second one for the same module `{ default as X }`. Local names, `import type`, inline `type` modifiers, quotes and the semicolon are kept.
+Bindings that stay come first. Bindings moved to one module share a statement; a default export becomes a default import, and a second one for the same module `{ default as X }`. Local names, `import type`, inline `type` modifiers, quotes and the semicolon are kept; a moved group of type-only bindings is written `import type { … }`.
+
+`export { … } from` statements work the same way (`binding.local` is the exported name): `export { Checkbox } from "./checkbox"` can become `export { Checkbox } from "./checkbox/Checkbox"`, and a default is re-exported as `export { default as Modal } from "./modal"`. `export * from` is left alone.
 
 ## `importFromDeclarations`
 
-Import every binding of a statement straight from the module that declares it instead of through a barrel. Needs `semanticAnalysis: "workspace"`. It uses `root.resolveExport()` to follow the re-exports and `root.specifierFor()` to write a specifier in the original's style (relative or alias, with or without `.js`). A binding stays when it does not resolve, is declared in the barrel itself, or no specifier reaches its file.
+Import (or re-export) every binding of an `import` or `export { … } from` statement straight from the module that declares it instead of through a barrel. Needs `semanticAnalysis: "workspace"`. It uses `root.resolveExport()` to follow the re-exports and `root.specifierFor()` to write a specifier in the original's style (relative or alias, with or without `.js`). A binding stays when it does not resolve, is declared in the barrel itself, or no specifier reaches its file.
 
 ```typescript
 export default function transform(root) {
   const edits = [];
-  for (const statement of root.root().findAll({ rule: { kind: "import_statement" } })) {
+  const statements = root.root().findAll({
+    rule: {
+      any: [
+        { kind: "import_statement" },
+        { kind: "export_statement", has: { field: "source", kind: "string" } },
+      ],
+    },
+  });
+  for (const statement of statements) {
     const edit = importFromDeclarations(root, statement);
     if (edit) edits.push(edit);
   }
@@ -535,6 +547,34 @@ export default function transform(root) {
 // import { VERSION } from "./ui";
 // import { Button } from "./ui/button";
 // import Modal from "./ui/modal";
+```
+
+## `declarationTargets`
+
+The moves `importFromDeclarations` would make, without making them: a `Map` from each binding's local name to `{ from, name }`, for the bindings that move. Use it to know where a barrel's bindings went, for example to update mocks.
+
+```typescript
+const targets = declarationTargets(root, statement);
+const edit = retargetImport(statement, (binding) => targets.get(binding.local) ?? null);
+const modules = [...new Set([...targets.values()].map((target) => target.from))];
+```
+
+## `retargetMock`
+
+Point a test-framework mock at the modules a barrel's bindings moved to. `call` is a `jest.mock` / `vi.mock` / `jest.doMock` / `vi.doMock` / `jest.unmock` / `vi.unmock` / `jest.requireActual` / `jest.requireMock` / `vi.importActual` / `vi.importMock` call; `to` the new specifiers. Returns one edit, or `null`.
+
+- An automatic mock (`jest.mock("./components")`, no factory) stays, and a `jest.mock("<module>")` is added after it for each module.
+- A factory mock or `requireActual`: with one module, its specifier is replaced; with several it is left alone (`null`), because the factory's object would have to be split. Flag it for review.
+
+```typescript
+// Mocks of the barrel in this file, found with root.importers()
+for (const mock of root.importers(barrel)) {
+  if (mock.kind !== "mock" || !mock.root.root().equals(root.root())) continue;
+  const edit = retargetMock(mock.node, modules);
+  if (edit) edits.push(edit);
+}
+// jest.mock("./components");
+// jest.mock("./components/Button");
 ```
 
 ---

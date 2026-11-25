@@ -1,6 +1,10 @@
 import { ok as assert } from "assert";
 import { parse } from "codemod:ast-grep";
-import { importedBindings, retargetImport } from "../src/javascript/exports/modules.ts";
+import {
+  importedBindings,
+  retargetImport,
+  retargetMock,
+} from "../src/javascript/exports/modules.ts";
 
 function retarget(src: string, moves: Record<string, { from: string; name: string }>) {
   const root = parse("typescript", src);
@@ -63,6 +67,41 @@ equal(
   "import type",
 );
 
+// export ... from: re-exports move the same way; defaults stay named.
+function retargetExport(src: string, moves: Record<string, { from: string; name: string }>) {
+  const root = parse("typescript", src);
+  const statement = root.root().find({ rule: { kind: "export_statement" } })!;
+  const edit = retargetImport(statement, (binding) => moves[binding.local] ?? null);
+  return edit ? root.root().commitEdits([edit]) : null;
+}
+equal(
+  retargetExport('export { Checkbox, Radio as Choice } from "./checkbox";', {
+    Checkbox: { from: "./checkbox/Checkbox", name: "Checkbox" },
+    Choice: { from: "./checkbox/Radio", name: "default" },
+  }),
+  'export { Checkbox } from "./checkbox/Checkbox";\nexport { default as Choice } from "./checkbox/Radio";',
+  "re-exports",
+);
+equal(
+  retargetExport('export type { Props, Size } from "./types";', {
+    Props: { from: "./types/props", name: "Props" },
+  }),
+  'export type { Size } from "./types";\nexport type { Props } from "./types/props";',
+  "export type",
+);
+equal(
+  retargetExport('export * from "./lib";', { x: { from: "./x", name: "x" } }),
+  null,
+  "export *",
+);
+
+// CRLF files get CRLF between the new statements.
+equal(
+  retarget('import { A, B } from "./lib";\r\nA(B);\r\n', { B: { from: "./b", name: "B" } }),
+  'import { A } from "./lib";\r\nimport { B } from "./b";\r\nA(B);\r\n',
+  "crlf",
+);
+
 // Nothing moves; namespace imports are left alone.
 equal(retarget('import { A } from "./lib";', {}), null, "nothing moves");
 equal(
@@ -84,4 +123,40 @@ equal(
     ["T", "T", true],
   ]),
   "importedBindings",
+);
+
+// retargetMock: one module replaces the path; several add automatic mocks;
+// a factory over several modules is left alone.
+function mock(src: string, to: string[]) {
+  const root = parse("typescript", src);
+  const call = root
+    .root()
+    .find({ rule: { kind: "call_expression", has: { field: "function", regex: "mock|Actual" } } })!;
+  const edit = retargetMock(call, to);
+  return edit ? root.root().commitEdits([edit]) : null;
+}
+equal(
+  mock('vi.mock("./lib", () => ({ getService: vi.fn() }));', ["./lib/service"]),
+  'vi.mock("./lib/service", () => ({ getService: vi.fn() }));',
+  "one module",
+);
+equal(
+  mock('jest.mock("./components");\n', ["./components/Button"]),
+  'jest.mock("./components");\njest.mock("./components/Button");\n',
+  "auto mock, one module",
+);
+equal(
+  mock('jest.mock("./components");\n', ["./components/Button", "./components/Modal"]),
+  'jest.mock("./components");\njest.mock("./components/Button");\njest.mock("./components/Modal");\n',
+  "auto mock, two modules",
+);
+equal(
+  mock('jest.mock("./components", () => ({ A: 1, B: 2 }));', ["./a", "./b"]),
+  null,
+  "factory over two modules",
+);
+equal(
+  mock('jest.requireActual("./lib");', ["./lib/x"]),
+  'jest.requireActual("./lib/x");',
+  "requireActual",
 );
