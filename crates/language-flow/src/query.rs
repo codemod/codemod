@@ -1711,7 +1711,7 @@ struct WalkFile {
 const MAX_CALL_STACK: usize = 4;
 /// Times a walk may leave a function it did not enter through a call
 /// (a parameter to every caller, a return to every call site).
-const MAX_ASCENTS: u8 = 3;
+const MAX_ASCENTS: u8 = 4;
 /// (node, call context) pairs one interprocedural walk may visit. The
 /// contexts multiply the nodes, so without this a walk over a large
 /// workspace can run for a very long time; past it the answer is cut and
