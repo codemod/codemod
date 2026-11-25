@@ -1,4 +1,6 @@
-//! `codemod workflow upgrade`: convert workflow.yaml files to workflow.ts.
+//! `codemod workflow upgrade`: convert workflow.yaml files to workflow.ts,
+//! and rewrite workflow.ts files that still call the removed
+//! `dependencyGraph()` to call `dependencies()`.
 //!
 //! PATH may be a package (a directory with codemod.yaml or workflow.yaml), a
 //! workflow file, or a directory of packages such as a monorepo: then every
@@ -8,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use codemod_workflow::compat::upgrade_file;
+use codemod_workflow::compat::{upgrade_dependency_graph, upgrade_file};
 use console::style;
 
 use crate::utils::manifest::CodemodManifest;
@@ -41,6 +43,7 @@ pub fn handler(args: &Command) -> Result<()> {
         Some(path) => path.clone(),
         None => std::env::current_dir()?,
     };
+    let rewritten = rewrite_dependency_graph(&path, args.dry_run)?;
     let (package_dir, conversions) = plan(&path)?;
     if !conversions.is_empty() {
         upgrade_package(&package_dir, &conversions, args)?;
@@ -70,7 +73,7 @@ pub fn handler(args: &Command) -> Result<()> {
         upgrade_package(&package_dir, &conversions, args)?;
         upgraded += 1;
     }
-    if upgraded == 0 {
+    if upgraded == 0 && rewritten == 0 {
         println!(
             "Nothing to upgrade: no workflow.yaml found in {}",
             path.display()
@@ -155,6 +158,60 @@ fn relative_to(path: &Path, base: &Path) -> Option<PathBuf> {
     let mut relative: PathBuf = (0..up).map(|_| "..").collect();
     relative.push(path.strip_prefix(ancestor).ok()?);
     Some(relative)
+}
+
+/// TypeScript and JavaScript files at or under `path` that still call
+/// `dependencyGraph()`, rewritten to `dependencies()` (printed instead with
+/// `--dry-run`). Returns how many.
+fn rewrite_dependency_graph(path: &Path, dry_run: bool) -> Result<usize> {
+    let script = |path: &Path| {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e, "ts" | "mts" | "cts" | "js" | "mjs"))
+    };
+    let files: Vec<PathBuf> = if path.is_file() {
+        vec![path.to_path_buf()]
+    } else {
+        walkdir::WalkDir::new(path)
+            .sort_by_file_name()
+            .into_iter()
+            .filter_entry(|entry| {
+                let name = entry.file_name().to_string_lossy();
+                !(entry.file_type().is_dir()
+                    && entry.depth() > 0
+                    && (name.starts_with('.')
+                        || matches!(name.as_ref(), "node_modules" | "target" | "dist")))
+            })
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().is_file())
+            .map(|entry| entry.into_path())
+            .collect()
+    };
+    let mut rewritten = 0;
+    for file in files.into_iter().filter(|file| script(file)) {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        if !text.contains("dependencyGraph") {
+            continue;
+        }
+        let Some(upgraded) = upgrade_dependency_graph(&text) else {
+            continue;
+        };
+        if dry_run {
+            println!("{}", style(format!("// {}", file.display())).dim());
+            println!("{upgraded}");
+        } else {
+            std::fs::write(&file, upgraded)
+                .with_context(|| format!("cannot write {}", file.display()))?;
+            println!(
+                "Rewrote dependencyGraph() as dependencies() in {}",
+                shown(&file).display()
+            );
+        }
+        rewritten += 1;
+    }
+    Ok(rewritten)
 }
 
 fn is_package(dir: &Path) -> bool {
@@ -435,6 +492,31 @@ mod tests {
             point_manifest_at("workflow: \"flows/a.yaml\"\n", "flows/a.yaml", "a.ts"),
             "workflow: \"flows/a.ts\"\n"
         );
+    }
+
+    #[test]
+    fn a_workflow_ts_that_calls_dependency_graph_is_rewritten() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("workflow.ts");
+        std::fs::write(
+            &path,
+            "import { step } from \"codemod/workflow\";\nimport { dependencyGraph } from \"codemod/deps\";\nexport default async function main() {\n  return await step(dependencyGraph((g) => g.workspaces().length));\n}\n",
+        )
+        .unwrap();
+        handler(&Command {
+            path: Some(dir.path().to_path_buf()),
+            keep_yaml: false,
+            dry_run: false,
+        })
+        .unwrap();
+        let source = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            source.contains(
+                "return await step(() => ((g) => g.workspaces().length)(dependencies()));"
+            ),
+            "{source}"
+        );
+        assert!(codemod_workflow::load_workflow(&path).is_ok());
     }
 
     #[test]

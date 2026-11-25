@@ -1063,11 +1063,12 @@ test(
       scratch({
         "workflow.ts": `
 import { step } from "codemod/workflow";
-import { dependencyGraph, registry, semver } from "codemod/deps";
+import { dependencies, install, registry, semver } from "codemod/deps";
 export default async function main() {
   void registry;
   void semver;
-  await step("Graph", dependencyGraph({}, (g) => g.workspaces().length));
+  void install;
+  await step("Graph", () => dependencies().packages().length);
 }
 `,
       }),
@@ -1077,7 +1078,7 @@ export default async function main() {
     const result = await run(path, { target: {} });
 
     assert.equal(result.status, "failed");
-    assert.match(result.error ?? "", /dependencyGraph\(\) is not available on the Node\.js host/);
+    assert.match(result.error ?? "", /dependencies\(\) is not available on the Node\.js host/);
   },
 );
 

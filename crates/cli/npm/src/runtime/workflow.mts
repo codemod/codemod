@@ -27,6 +27,8 @@ export const {
   __callback,
   __importedCallback,
   forEachFile,
+  // `codemod/deps` exports it as `install`.
+  install: __install,
   shell,
   astGrep,
   shard,

@@ -49,6 +49,7 @@
                   "community/workflows/migrate",
                   "community/workflows/ai-harness-rig",
                   "community/workflows/sharding",
+                  "community/workflows/dependencies",
                   "community/workflows/yaml",
                   "community/workflows/changelog"
                 ]
