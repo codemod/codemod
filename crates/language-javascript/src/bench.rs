@@ -313,6 +313,76 @@ fn cold() {
     );
 }
 
+/// Heap bytes held by facts, by part, estimated from capacities (allocator
+/// overhead not counted). `(name, bytes)`.
+fn flow_bytes(flow: &crate::dataflow::FileFlow) -> Vec<(&'static str, usize)> {
+    use std::mem::size_of_val;
+    let string = |s: &Option<String>| s.as_ref().map_or(0, String::capacity);
+    let vec_bytes = |len: usize, item: usize| len * item;
+    let nodes = vec_bytes(
+        flow.nodes.capacity(),
+        std::mem::size_of::<crate::dataflow::FlowNode>(),
+    );
+    let names: usize = flow.nodes.iter().map(|n| string(&n.name)).sum();
+    let edges = flow.out_edges.heap_bytes() + flow.in_edges.heap_bytes();
+    let calls = vec_bytes(
+        flow.calls.capacity(),
+        std::mem::size_of::<crate::dataflow::CallFact>(),
+    ) + flow
+        .calls
+        .iter()
+        .map(|c| {
+            c.callee_text.capacity()
+                + c.args.capacity() * 4
+                + match &c.callee {
+                    crate::dataflow::CalleeFact::Member { property, .. } => property.capacity(),
+                    _ => 0,
+                }
+        })
+        .sum::<usize>();
+    let functions = vec_bytes(
+        flow.functions.capacity(),
+        std::mem::size_of::<crate::dataflow::FunctionFact>(),
+    ) + flow
+        .functions
+        .iter()
+        .map(|f| string(&f.name))
+        .sum::<usize>();
+    let mutations = vec_bytes(
+        flow.mutations.capacity(),
+        std::mem::size_of::<crate::dataflow::MutationFact>(),
+    ) + flow
+        .mutations
+        .iter()
+        .map(|m| string(&m.name))
+        .sum::<usize>();
+    let map = |cap: usize, entry: usize| cap * (entry + 1);
+    let lookup = flow.span_index_bytes()
+        + map(flow.fn_by_node.capacity(), 8)
+        + map(flow.call_by_node.capacity(), 8);
+    let members = map(flow.object_members.capacity(), 32)
+        + flow
+            .object_members
+            .values()
+            .chain(flow.class_methods.values())
+            .chain(flow.class_fields.values())
+            .map(|v| v.capacity() * 32 + v.iter().map(|(s, _)| s.capacity()).sum::<usize>())
+            .sum::<usize>()
+        + map(flow.class_methods.capacity(), 32)
+        + map(flow.class_fields.capacity(), 32);
+    let _ = size_of_val(flow);
+    vec![
+        ("nodes", nodes),
+        ("node names", names),
+        ("edges", edges),
+        ("span index + id maps", lookup),
+        ("calls", calls),
+        ("functions", functions),
+        ("mutations", mutations),
+        ("members", members),
+    ]
+}
+
 #[test]
 #[ignore]
 fn workspace() {
@@ -333,10 +403,17 @@ fn workspace() {
     // 2. Facts for every file.
     let started = Instant::now();
     let mut stats = (0usize, 0usize, 0usize, 0usize);
+    let mut parts: Vec<(&'static str, usize)> = Vec::new();
     for path in &files {
         if let Some(flow) = analyzer.flow(path) {
+            for (index, (name, bytes)) in flow_bytes(&flow).into_iter().enumerate() {
+                match parts.get_mut(index) {
+                    Some(part) => part.1 += bytes,
+                    None => parts.push((name, bytes)),
+                }
+            }
             stats.0 += flow.nodes.len();
-            stats.1 += flow.out_edges.iter().map(Vec::len).sum::<usize>();
+            stats.1 += flow.out_edges.edge_count();
             stats.2 += flow.functions.len();
             stats.3 += flow.calls.len();
         }
@@ -449,6 +526,16 @@ fn workspace() {
     println!(
         "BENCH rss_mb start={rss_start:.0} after_index={rss_index:.0} after_facts={rss_facts:.0} after_table={rss_table:.0} end={rss_end:.0} peak={:.0}",
         peak_rss_mb()
+    );
+    let total: usize = parts.iter().map(|(_, bytes)| bytes).sum();
+    let parts: Vec<String> = parts
+        .iter()
+        .map(|(name, bytes)| format!("{name}={:.1}", *bytes as f64 / 1e6))
+        .collect();
+    println!(
+        "BENCH facts_mb total={:.1} {}",
+        total as f64 / 1e6,
+        parts.join(" ")
     );
     println!("BENCH digest {:016x}", hasher.finish());
 }

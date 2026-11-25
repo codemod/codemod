@@ -162,10 +162,11 @@ pub struct ImportFact {
 pub struct FileFlow {
     pub nodes: Vec<FlowNode>,
     /// `out_edges[n]`: nodes the value of `n` flows to.
-    pub out_edges: Vec<Vec<(u32, FlowEdgeKind)>>,
+    pub out_edges: Adjacency,
     /// `in_edges[n]`: nodes whose value flows into `n`.
-    pub in_edges: Vec<Vec<(u32, FlowEdgeKind)>>,
-    by_span: FxHashMap<(u32, u32), u32>,
+    pub in_edges: Adjacency,
+    /// Node ids sorted by range, for [`FileFlow::exact`].
+    by_span: Vec<u32>,
     pub functions: Vec<FunctionFact>,
     pub fn_by_node: FxHashMap<u32, u32>,
     pub calls: Vec<CallFact>,
@@ -203,7 +204,14 @@ pub struct FileFlow {
 impl FileFlow {
     /// The node with exactly this range.
     pub fn exact(&self, range: ByteRange) -> Option<u32> {
-        self.by_span.get(&(range.start, range.end)).copied()
+        let key = (range.start, range.end);
+        self.by_span
+            .binary_search_by_key(&key, |id| {
+                let range = self.nodes[*id as usize].range;
+                (range.start, range.end)
+            })
+            .ok()
+            .map(|position| self.by_span[position])
     }
 
     /// The node for a syntax range: the exact one, else the tightest node
@@ -229,6 +237,12 @@ impl FileFlow {
             .map(|(index, _)| index as u32)
     }
 
+    /// Heap bytes of the range index.
+    #[cfg(test)]
+    pub(crate) fn span_index_bytes(&self) -> usize {
+        self.by_span.capacity() * 4
+    }
+
     /// The innermost function around a range.
     pub fn function_at(&self, range: ByteRange) -> Option<u32> {
         self.functions
@@ -251,6 +265,47 @@ impl FileFlow {
             current = fact.parent;
         }
         None
+    }
+}
+
+/// Edges by node, in one array: node `n`'s are
+/// `edges[offsets[n]..offsets[n + 1]]`, in the order they were added.
+#[derive(Debug, Default, Clone)]
+pub struct Adjacency {
+    offsets: Vec<u32>,
+    edges: Vec<(u32, FlowEdgeKind)>,
+}
+
+impl Adjacency {
+    fn from_lists(lists: Vec<Vec<(u32, FlowEdgeKind)>>) -> Self {
+        let total = lists.iter().map(Vec::len).sum();
+        let mut offsets = Vec::with_capacity(lists.len() + 1);
+        let mut edges = Vec::with_capacity(total);
+        offsets.push(0);
+        for list in lists {
+            edges.extend(list);
+            offsets.push(edges.len() as u32);
+        }
+        Adjacency { offsets, edges }
+    }
+
+    /// Number of edges.
+    pub fn edge_count(&self) -> usize {
+        self.edges.len()
+    }
+
+    /// Heap bytes held.
+    #[cfg(test)]
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.offsets.capacity() * 4 + self.edges.capacity() * 8
+    }
+}
+
+impl std::ops::Index<usize> for Adjacency {
+    type Output = [(u32, FlowEdgeKind)];
+
+    fn index(&self, node: usize) -> &Self::Output {
+        &self.edges[self.offsets[node] as usize..self.offsets[node + 1] as usize]
     }
 }
 
@@ -338,12 +393,15 @@ pub(crate) fn facts_from_semantic(semantic: &Semantic<'_>, content: &str) -> Fil
         binding_by_symbol: vec![NONE; semantic.scoping().symbols_len()],
         modelling: false,
         callback_returns: Vec::new(),
+        out_edges: Vec::new(),
+        in_edges: Vec::new(),
+        by_span: FxHashMap::default(),
     };
     builder.collect_functions();
     builder.collect_bindings();
     builder.collect_expressions();
     builder.link_callback_returns();
-    builder.flow
+    builder.finish()
 }
 
 /// What a builtin method does with the callbacks it is given, as data.
@@ -444,6 +502,11 @@ struct Builder<'s, 'a> {
     /// (callback function node, target, edge): link the callback's return
     /// values to target once every return is known.
     callback_returns: Vec<(u32, u32, FlowEdgeKind)>,
+    /// Edges while building; frozen into [`Adjacency`] at the end.
+    out_edges: Vec<Vec<(u32, FlowEdgeKind)>>,
+    in_edges: Vec<Vec<(u32, FlowEdgeKind)>>,
+    /// Node by range while building.
+    by_span: FxHashMap<(u32, u32), u32>,
 }
 
 /// A class member's name: `m`, or `#m` for a private member.
@@ -459,8 +522,30 @@ fn range_of(span: Span) -> ByteRange {
 }
 
 impl<'s, 'a> Builder<'s, 'a> {
+    /// The facts, in their compact form: edges in one array per direction,
+    /// the range index as a sorted array, no spare capacity.
+    fn finish(mut self) -> FileFlow {
+        let mut flow = self.flow;
+        flow.out_edges = Adjacency::from_lists(std::mem::take(&mut self.out_edges));
+        flow.in_edges = Adjacency::from_lists(std::mem::take(&mut self.in_edges));
+        let mut by_span: Vec<u32> = (0..flow.nodes.len() as u32).collect();
+        by_span.sort_unstable_by_key(|id| {
+            let range = flow.nodes[*id as usize].range;
+            (range.start, range.end)
+        });
+        flow.by_span = by_span;
+        flow.nodes.shrink_to_fit();
+        flow.functions.shrink_to_fit();
+        flow.calls.shrink_to_fit();
+        flow.mutations.shrink_to_fit();
+        flow.loops.shrink_to_fit();
+        flow.fn_by_node.shrink_to_fit();
+        flow.call_by_node.shrink_to_fit();
+        flow
+    }
+
     fn node(&mut self, span: Span) -> u32 {
-        if let Some(found) = self.flow.by_span.get(&(span.start, span.end)) {
+        if let Some(found) = self.by_span.get(&(span.start, span.end)) {
             return *found;
         }
         let index = self.flow.nodes.len() as u32;
@@ -472,9 +557,9 @@ impl<'s, 'a> Builder<'s, 'a> {
             function: None,
             binding: false,
         });
-        self.flow.out_edges.push(Vec::new());
-        self.flow.in_edges.push(Vec::new());
-        self.flow.by_span.insert((span.start, span.end), index);
+        self.out_edges.push(Vec::new());
+        self.in_edges.push(Vec::new());
+        self.by_span.insert((span.start, span.end), index);
         index
     }
 
@@ -512,11 +597,11 @@ impl<'s, 'a> Builder<'s, 'a> {
     }
 
     fn edge(&mut self, from: u32, to: u32, kind: FlowEdgeKind) {
-        if from == to || self.flow.out_edges[from as usize].contains(&(to, kind)) {
+        if from == to || self.out_edges[from as usize].contains(&(to, kind)) {
             return;
         }
-        self.flow.out_edges[from as usize].push((to, kind));
-        self.flow.in_edges[to as usize].push((from, kind));
+        self.out_edges[from as usize].push((to, kind));
+        self.in_edges[to as usize].push((from, kind));
         if self.modelling {
             self.flow.model_edges.insert((from, to));
         }
@@ -578,7 +663,7 @@ impl<'s, 'a> Builder<'s, 'a> {
     fn link_callback_returns(&mut self) {
         self.modelling = true;
         for (function, target, kind) in std::mem::take(&mut self.callback_returns) {
-            let returns: Vec<u32> = self.flow.in_edges[function as usize]
+            let returns: Vec<u32> = self.in_edges[function as usize]
                 .iter()
                 .filter(|(_, edge)| *edge == FlowEdgeKind::Return)
                 .map(|(value, _)| *value)
@@ -1850,7 +1935,7 @@ mod tests {
             if let Ok(flow) = build_file_flow(path, content) {
                 parsed += 1;
                 nodes += flow.nodes.len();
-                edges += flow.out_edges.iter().map(Vec::len).sum::<usize>();
+                edges += flow.out_edges.edge_count();
                 functions += flow.functions.len();
                 calls += flow.calls.len();
             }
