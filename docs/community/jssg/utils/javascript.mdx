@@ -523,7 +523,7 @@ Bindings that stay come first. Bindings moved to one module share a statement; a
 
 ## `importFromDeclarations`
 
-Import (or re-export) every binding of an `import` or `export { … } from` statement straight from the module that declares it instead of through a barrel. Needs `semanticAnalysis: "workspace"`. It uses `root.resolveExport()` to follow the re-exports and `root.specifierFor()` to write a specifier in the original's style (relative or alias, with or without `.js`). A binding stays when it does not resolve, is declared in the barrel itself, or no specifier reaches its file.
+Import (or re-export) every binding of an `import` or `export { … } from` statement straight from the module that declares it instead of through a barrel. Needs `semanticAnalysis: "workspace"`. It uses `root.resolveExport()` to follow the re-exports and `root.specifierFor()` to write a specifier in the original's style (relative or alias, with or without `.js`). A binding stays when it does not resolve, is declared in the barrel itself, or no specifier reaches its file. Imports of installed packages (in `node_modules`) are never rewritten.
 
 ```typescript
 export default function transform(root) {

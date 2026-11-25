@@ -197,7 +197,9 @@ export function declarationTargets<T extends Language>(
   if (!source) return targets;
   const from = source.text().slice(1, -1);
   const barrel = root.resolveModule(from);
-  if (!barrel) return targets;
+  // Installed packages are not debarrelled: their internals are not theirs to
+  // import (vitest's `vi` lives in `dist/vendor/vi.<hash>`).
+  if (!barrel || barrel.includes("/node_modules/")) return targets;
   for (const binding of importedBindings(statement)) {
     const declaration = root.resolveExport(barrel, binding.imported);
     if (!declaration?.exportName || declaration.root.filename() === barrel) continue;
@@ -217,7 +219,8 @@ export function declarationTargets<T extends Language>(
  * declaration and `root.specifierFor()` writes a specifier for its file in
  * the style of the original (relative or alias, with or without `.js`).
  * A binding stays when it does not resolve, when it is declared in the
- * barrel itself, or when no specifier reaches its file.
+ * barrel itself, when no specifier reaches its file, or when the module is
+ * an installed package (in `node_modules`): those are never rewritten.
  *
  * @example
  * ```ts
