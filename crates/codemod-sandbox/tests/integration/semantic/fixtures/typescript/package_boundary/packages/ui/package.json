@@ -1,0 +1,11 @@
+{
+  "name": "@acme/ui",
+  "exports": {
+    ".": "./src/index.ts",
+    "./button": {
+      "types": "./src/Button.ts",
+      "default": "./src/Button.ts"
+    },
+    "./icons/*": "./src/icons/*.ts"
+  }
+}

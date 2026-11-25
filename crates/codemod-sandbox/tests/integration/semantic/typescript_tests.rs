@@ -191,3 +191,12 @@ jssg_test! {
     target: "src/pages/home.ts",
     scope: workspace,
 }
+
+jssg_test! {
+    name: test_specifier_for_respects_package_exports,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_specifier_package_boundary.js",
+    fixture_dir: "typescript/package_boundary",
+    target: "packages/app/src/App.ts",
+    scope: workspace,
+}

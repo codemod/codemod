@@ -998,6 +998,36 @@ impl AccurateAnalyzer {
         self.target_definition(target, DefinitionKind::External)
     }
 
+    /// The workspace package a file belongs to: the nearest `package.json`
+    /// at or below the workspace root, read through the analyzer's
+    /// filesystem. None outside any package.
+    fn package_of(&self, file: &Path) -> Option<PackageInfo> {
+        // Paths here are canonical; compare with the canonical root.
+        let root = self.canonical_path(&self.workspace_root);
+        let mut dir = file.parent();
+        while let Some(current) = dir {
+            if !current.starts_with(&root) {
+                return None;
+            }
+            if let Ok(text) = self.read_file(&current.join("package.json")) {
+                let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+                return Some(PackageInfo {
+                    dir: current.to_path_buf(),
+                    name: json
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .map(str::to_string),
+                    exports: json.get("exports").cloned(),
+                });
+            }
+            if current == root.as_path() {
+                return None;
+            }
+            dir = current.parent();
+        }
+        None
+    }
+
     /// A specifier an import in `from_file` can use to reach `target`.
     ///
     /// Candidates are the relative path and every tsconfig `paths` alias
@@ -1044,6 +1074,9 @@ impl AccurateAnalyzer {
         for form in &forms {
             candidates.push((relative_specifier(&from_dir, Path::new(form)), false));
         }
+        // Paths here are canonical (`/private/var/...` for `/var/...` on
+        // macOS); compare with the canonical root.
+        let root = self.canonical_path(&self.workspace_root);
         let mut dir = Some(from_dir.as_path());
         while let Some(current) = dir {
             if let Some((base, paths)) =
@@ -1051,7 +1084,7 @@ impl AccurateAnalyzer {
             {
                 for (key, targets) in &paths {
                     for pattern in targets {
-                        let pattern_path = base.join(pattern);
+                        let pattern_path = normalize_lexically(&base.join(pattern));
                         let pattern_str = pattern_path.to_string_lossy().replace('\\', "/");
                         match (key.split_once('*'), pattern_str.split_once('*')) {
                             (Some((key_head, key_tail)), Some((head, tail))) => {
@@ -1071,12 +1104,26 @@ impl AccurateAnalyzer {
                     }
                 }
             }
-            if current == self.workspace_root.as_path() {
+            if current == root.as_path() {
                 break;
             }
-            dir = current
-                .parent()
-                .filter(|p| p.starts_with(&self.workspace_root));
+            dir = current.parent().filter(|p| p.starts_with(&root));
+        }
+
+        // Another workspace package: only what it makes public. A relative
+        // path or alias into its files would cross its export boundary.
+        if let Some(package) = self.package_of(&target) {
+            let same_package = self
+                .package_of(&from)
+                .is_some_and(|own| own.dir == package.dir);
+            if !same_package {
+                if let Some(name) = &package.name {
+                    candidates = public_specifiers(name, &package, &forms)
+                        .into_iter()
+                        .map(|specifier| (specifier, true))
+                        .collect();
+                }
+            }
         }
 
         let mut seen = HashSet::new();
@@ -1663,6 +1710,83 @@ fn walk_vfs_tree(start: &VfsPath, prefix: &str, on_file: &mut dyn FnMut(&Path)) 
         }
     }
     recurse(start, prefix, on_file);
+}
+
+/// `a/./b/../c` as `a/c`, without touching the filesystem (a `paths` or
+/// `exports` pattern holds a `*` and does not exist on disk).
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// A workspace package: its directory, `name` and `exports`.
+struct PackageInfo {
+    dir: PathBuf,
+    name: Option<String>,
+    exports: Option<serde_json::Value>,
+}
+
+/// The specifiers a package makes public that could name one of `forms` (the
+/// target with and without extension): the bare name, and each `exports`
+/// subpath, with `*` patterns matched against the target. Without `exports`
+/// only the bare name (its `main`) is public. Candidates are checked by
+/// resolving them afterwards.
+fn public_specifiers(name: &str, package: &PackageInfo, forms: &[String]) -> Vec<String> {
+    let mut out = vec![name.to_string()];
+    let Some(exports @ serde_json::Value::Object(map)) = &package.exports else {
+        return out;
+    };
+    // Conditions (`{ "import": ..., "types": ... }`) at the top: one "." entry.
+    let entries: Vec<(&str, &serde_json::Value)> = if map.keys().any(|k| k.starts_with('.')) {
+        map.iter().map(|(k, v)| (k.as_str(), v)).collect()
+    } else {
+        vec![(".", exports)]
+    };
+    for (key, value) in entries {
+        let Some(subpath) = key.strip_prefix('.') else {
+            continue;
+        };
+        let mut targets = Vec::new();
+        string_leaves(value, &mut targets);
+        for target in targets {
+            let pattern = normalize_lexically(&package.dir.join(target));
+            let pattern = pattern.to_string_lossy().replace('\\', "/");
+            match (subpath.split_once('*'), pattern.split_once('*')) {
+                (Some((key_head, key_tail)), Some((head, tail))) => {
+                    for form in forms {
+                        if let Some(middle) = form
+                            .strip_prefix(head)
+                            .and_then(|rest| rest.strip_suffix(tail))
+                        {
+                            out.push(format!("{name}{key_head}{middle}{key_tail}"));
+                        }
+                    }
+                }
+                (None, None) => out.push(format!("{name}{subpath}")),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Every string in an `exports` value (conditions and fallbacks included).
+fn string_leaves<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a str>) {
+    match value {
+        serde_json::Value::String(s) => out.push(s),
+        serde_json::Value::Array(items) => items.iter().for_each(|v| string_leaves(v, out)),
+        serde_json::Value::Object(map) => map.values().for_each(|v| string_leaves(v, out)),
+        _ => {}
+    }
 }
 
 /// The path without a JavaScript or TypeScript extension, if it has one.
