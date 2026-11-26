@@ -362,3 +362,30 @@ export default async function main() {
         json!(["import { helper } from \"./lib\"; -> lib.ts"])
     );
 }
+
+#[test]
+fn an_analysis_imported_by_a_helper_file_counts_for_the_step() {
+    let h = harness();
+    h.bundle_file(
+        "lib/callers.ts",
+        r#"import { parse, callGraph } from "codemod/ast-grep";
+export function callersOf(file: string): string[] {
+  const { callers } = callGraph("typescript");
+  const helper = parse(file).root().find("function helper() {}");
+  return callers.get(helper).map((edge) => edge.site.text());
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { callersOf } from "./lib/callers.ts";
+export default async function main() {
+  const found = await step(forEachFile({ include: "src/lib.ts" }, (file) => callersOf(file)));
+  return found.outputs.flat();
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(["helper()"]));
+}

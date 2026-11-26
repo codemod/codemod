@@ -173,17 +173,17 @@ fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<Stri
         None => Files::default(),
     };
     let mut selector = Selector {
-        include: files.include,
+        include: (!files.include.is_empty()).then_some(files.include),
         exclude: files.exclude,
         language: files.language,
         ..Selector::default()
     };
-    let default_languages = if selector.include.is_empty() && selector.language.is_none() {
+    let default_languages = if selector.include.is_none() && selector.language.is_none() {
         for_each_file::package_languages(&run.package_dir)?
     } else {
         Vec::new()
     };
-    if selector.include.is_empty() && selector.language.is_none() && default_languages.is_empty() {
+    if selector.include.is_none() && selector.language.is_none() && default_languages.is_empty() {
         return Err(TaskError::Failed(
             "shard needs to know which files to choose from: give it `files` (a glob or { include, language }), or list the package's languages under `targets.languages` in codemod.yaml".into(),
         ));

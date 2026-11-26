@@ -233,7 +233,8 @@ const TASK = Symbol.for("codemod.workflow.task");
 
 /** The files a `forEachFile` step visits, as the engine receives it. */
 export interface Selector {
-  include: string[];
+  /** Absent: the language's files. An empty list picks none. */
+  include?: string[];
   exclude: string[];
   language?: string;
   containing?: string;
@@ -444,7 +445,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     return hostTask("astGrep", {
       rules: handler.rules,
       repeat: handler.repeat,
-      include: include.length ? include : undefined,
+      include: include?.length ? include : undefined,
       exclude: exclude.length ? exclude : undefined,
       containing,
     });
@@ -1297,9 +1298,9 @@ function normalizeSelector(selector: unknown): Selector {
     if (!known.has(key)) throw new TypeError(`forEachFile: unknown selector field '${key}'`);
   }
   const normalized: Selector = {
-    include: globs(selector.include, "include"),
     exclude: globs(selector.exclude, "exclude"),
   };
+  if (selector.include !== undefined) normalized.include = globs(selector.include, "include");
   for (const field of ["language", "containing"] as const) {
     const value = selector[field];
     if (value === undefined) continue;
@@ -1357,7 +1358,7 @@ function defaultLabel(position: number, content: TaskContent): string {
   switch (content.kind) {
     case "forEachFile": {
       const { include, language } = content.selector as Selector;
-      return `forEachFile ${include.length ? include.join(", ") : (language ?? "")}`.trimEnd();
+      return `forEachFile ${include?.length ? include.join(", ") : (language ?? "")}`.trimEnd();
     }
     case "function":
       return `step #${position}`;

@@ -37,8 +37,10 @@ use crate::run::RunContext;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Selector {
+    /// The globs to pick files by. `None`: the language's files; an empty
+    /// list picks none.
     #[serde(default)]
-    pub include: Vec<String>,
+    pub include: Option<Vec<String>>,
     #[serde(default)]
     pub exclude: Vec<String>,
     pub language: Option<String>,
@@ -459,7 +461,12 @@ pub(crate) fn select_paths(
     run: &RunContext,
     mut selector: Selector,
 ) -> Result<(Selector, Vec<Selected>), String> {
-    let default_languages = if selector.include.is_empty() && selector.language.is_none() {
+    // `include: []` (often a list an earlier step worked out, and empty)
+    // picks no file, not every file of the language.
+    if selector.include.as_ref().is_some_and(Vec::is_empty) {
+        return Ok((selector, Vec::new()));
+    }
+    let default_languages = if selector.include.is_none() && selector.language.is_none() {
         let languages = package_languages(&run.package_dir)?;
         if languages.is_empty() {
             return Err("forEachFile needs a selector here: give it one (a glob, or { language }), or list the package's languages under `targets.languages` in codemod.yaml".to_string());
@@ -605,8 +612,12 @@ pub(crate) fn include_globs(
     selector: &Selector,
     default_languages: &[String],
 ) -> Result<Vec<String>, String> {
-    if !selector.include.is_empty() {
-        return Ok(selector.include.clone());
+    if let Some(include) = selector
+        .include
+        .as_ref()
+        .filter(|include| !include.is_empty())
+    {
+        return Ok(include.clone());
     }
     let languages: Vec<&str> = match selector.language.as_deref() {
         Some(language) => vec![language],

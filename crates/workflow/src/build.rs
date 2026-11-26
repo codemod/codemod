@@ -684,9 +684,16 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
             &strip_types(file, &module, false)
                 .map_err(|message| analysis.error(span.start, message))?,
         );
+        let helpers = helper_analyses(
+            Path::new(file).parent().unwrap_or(Path::new(".")),
+            &module,
+            None,
+        );
         module.push_str(crate::js::CALLBACK_PRELUDE_TS);
+        // After stripping types, which drops an import nothing uses.
         let module = strip_types(file, &module, true)
-            .map_err(|message| analysis.error(span.start, message))?;
+            .map_err(|message| analysis.error(span.start, message))?
+            + helpers.as_str();
         let reference = format!("__flowCallback({id:?}, () => ({{ {destructure} }}))");
         if matches!(kind, Isolated::ShardFunction | Isolated::ShardFilter) {
             node_splices.push((span, reference.clone()));
@@ -711,12 +718,14 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
         let stripped = strip_types(file, &module, false)
             .map_err(|message| analysis.error(callback.argument.start, message))?;
         let id = content_id(&format!("{stripped}\0{files}"));
+        let helpers = helper_analyses(base, &module, Some(&files));
         let module = strip_types(
             file,
             &format!("{module}{}", crate::js::CALLBACK_PRELUDE_TS),
             true,
         )
-        .map_err(|message| analysis.error(callback.argument.start, message))?;
+        .map_err(|message| analysis.error(callback.argument.start, message))?
+            + helpers.as_str();
         callbacks.insert(id.clone(), module);
         let keyed = |text: String| match callback.shorthand {
             Some(key) => format!("{key}: {text}"),
@@ -1493,6 +1502,39 @@ fn callback_call(path: &Path, text: &str) -> Option<&'static str> {
 
 /// Every module a JavaScript or TypeScript file imports, re-exports,
 /// imports dynamically (with a string) or `require`s.
+/// The analyses a callback reaches only through the relative files it
+/// imports (`files`, or read here from the module's relative imports), as
+/// an import line for the module. The step's scope and the TypeScript
+/// checker follow the analyses a callback's module imports, so a helper
+/// file that imports `types` turns types on for the step that calls it.
+/// Added after the callback's id is taken: the id already covers what the
+/// author wrote.
+fn helper_analyses(base: &Path, module: &str, files: Option<&str>) -> String {
+    let text = match files {
+        Some(files) => files.to_string(),
+        None => module_specifiers(Path::new("callback.ts"), module)
+            .into_iter()
+            .filter(|specifier| specifier.starts_with("./") || specifier.starts_with("../"))
+            .filter_map(|specifier| crate::imported::imported_text(base, &specifier).ok())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    let own = crate::tasks::isolate::imported_analyses(module);
+    let names: Vec<String> = crate::tasks::isolate::imported_analyses(&text)
+        .into_iter()
+        .filter(|analysis| !own.contains(analysis))
+        .map(|analysis| format!("{analysis} as __helper_{analysis}"))
+        .collect();
+    if names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "import {{ {} }} from \"codemod:ast-grep\";\n",
+            names.join(", ")
+        )
+    }
+}
+
 pub(crate) fn module_specifiers(path: &Path, text: &str) -> Vec<String> {
     use oxc::ast::ast::ModuleDeclaration;
 

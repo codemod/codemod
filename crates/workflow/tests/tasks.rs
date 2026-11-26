@@ -3201,3 +3201,23 @@ export default async function main() { await step(forEachFile("a.txt", (file) =>
         .iter()
         .any(|event| matches!(event, Event::RunDiff { .. })));
 }
+
+#[test]
+fn an_empty_include_picks_no_file() {
+    let h = Harness::new();
+    h.write("src/a.ts", "export const a = 1;\n");
+    h.write("src/b.ts", "export const b = 2;\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  const approved: string[] = [];
+  const none = await step(forEachFile({ include: approved, language: "typescript" }, () => 1));
+  const all = await step(forEachFile({ language: "typescript" }, () => 1));
+  return [none.outputs, all.outputs.length];
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([[], 2]));
+}
