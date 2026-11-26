@@ -1048,7 +1048,9 @@ declare module "codemod:ast-grep" {
     /**
      * The file `specifier` resolves to from `file`, or null. Follows
      * tsconfig/jsconfig `paths` (with `extends`), package `exports`, and
-     * index files.
+     * index files. For Python, relative imports and absolute ones from the
+     * workspace root, `src/`, the importing package's root and pytest's
+     * `pythonpath`.
      *
      * @throws when semantic analysis is off for the step, or `file` has no path.
      * @example
