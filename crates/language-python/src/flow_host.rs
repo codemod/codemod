@@ -63,6 +63,8 @@ pub struct PyFlow {
     /// ty, for types and member calls the values leave unresolved.
     /// Workspace scope on a real file system only.
     ty: Option<TySession>,
+    /// The importers table of the module queries.
+    pub(crate) modules: crate::modules::PyModules,
 }
 
 impl std::fmt::Debug for PyFlow {
@@ -83,6 +85,7 @@ impl PyFlow {
             entry_point_rules: RwLock::default(),
             snapshot: None,
             ty: None,
+            modules: Default::default(),
         }
     }
 
@@ -111,6 +114,7 @@ impl PyFlow {
     pub fn clear(&self) {
         self.files.write().clear();
         self.callers.clear();
+        self.modules.clear();
     }
 
     /// Use `content` for `path` from now on (the file as the codemod sees it).
@@ -419,6 +423,11 @@ impl PyFlow {
         })
     }
 
+    /// The workspace root; None in file scope.
+    pub(crate) fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+
     /// Places an absolute module name is looked up from.
     fn search_roots(&self, from: &Path) -> Vec<PathBuf> {
         let mut roots = Vec::new();
@@ -444,7 +453,7 @@ impl PyFlow {
         roots
     }
 
-    fn module_file(base: &Path, parts: &[&str]) -> Option<PathBuf> {
+    pub(crate) fn module_file(base: &Path, parts: &[&str]) -> Option<PathBuf> {
         let mut path = base.to_path_buf();
         for part in parts {
             path.push(part);
