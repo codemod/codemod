@@ -822,6 +822,8 @@ A step's result is saved with the step, so it comes back when the step is replay
 
 The default export receives `{ params, target, dryRun }`. Pass parameters with `--param key=value`.
 
+Declare them in a `Params` interface, with `WorkflowContext<Params>`, and each value arrives as its declared type: a `string` parameter stays a string (`--param version=19` gives `"19"`), while other parameters use JSON parsing when possible (`--param max=5` gives `5`). `codemod workflow inspect` lists the declared parameters. Up to alpha.9, every value that parsed as JSON arrived parsed, whatever its declared type.
+
 ```ts
 export default async function main({ params }: { params: { team?: string } }) {
   const team = params.team ?? "all";
@@ -888,6 +890,10 @@ npx codemod workflow send <event> --id <run-id>
 ```
 
 Runs are stored under your data directory (`~/Library/Application Support/codemod/runs` on macOS). Set `CODEMOD_RUN_STORE_DIR` to store them elsewhere, or `CODEMOD_RUN_STORE=memory` to keep nothing. A dry run is never saved.
+
+- **One run per repository at a time.** A run can't start on a target another run is working on.
+- **Each run records the CLI version that started it.** Resume with the same version when you can: a newer CLI can build a callback differently, and resume refuses if those finished steps no longer match. Use `--force` to run them again.
+- **A paused run keeps its question.** `workflow status` shows the approval it stopped at, also after Ctrl-C or a closed control channel.
 
 When a run ends early, the steps still running finish first and are recorded, so a resume does not repeat them:
 

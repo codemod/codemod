@@ -414,7 +414,7 @@ A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>
 
 **The launcher (experimental, opt-in).** By default a run in a terminal prints plain lines and asks with plain prompts. With `CODEMOD_LAUNCHER=1`, `workflow run`, `codemod <package>` and `workflow resume` open a full-screen terminal UI instead. A new run starts on a setup screen (target, dry run, params, coding agent, decision model; your agent and model are saved for next time); then the screen shows the run's steps, logs and diffs, with approvals answered in place (`y` approves, `n` rejects, which ends the run, and `l` stops it there to resume later). After a dry run, `a` runs it for real. Even with `CODEMOD_LAUNCHER=1` it does not open with `--no-interactive`, `--format jsonl`, in CI, or when input or output is piped; those runs print the plain output.
 
-A run is unattended when you pass `--no-interactive`, when there is no terminal to ask on (input piped in), and when the `CI` environment variable is set (to anything but empty, `0` or `false`). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something.
+A run is unattended when you pass `--no-interactive`, when there is no terminal to ask on (input piped in), and when the `CI` environment variable is set (to anything but empty, `0` or `false`). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something. See [Running in CI and from agents](/community/workflows/ci-and-agents).
 
 <ResponseField name="--managed-git" type="boolean">
   Let `branch`, `commit` and `pullRequest` steps (or `branch_name`, `commit` and `pull_request` in `workflow.yaml`) change the repository. Without it, those steps are recorded as skipped.
@@ -457,7 +457,7 @@ A run is unattended when you pass `--no-interactive`, when there is no terminal 
 </ResponseField>
 
 <ResponseField name="--param <KEY=VALUE>" type="string">
-  Pass key=value pairs to your workflow. Parameters reach the workflow as `params` (and the jssg transforms of a `workflow.yaml` as `options.params`).
+  Pass key=value pairs to your workflow. Parameters reach the workflow as `params` (and the jssg transforms of a `workflow.yaml` as `options.params`). See [Parameters](/community/workflows/reference#parameters).
 
   A value that parses as JSON arrives as that value (`strict=true` is `true`, `level=4` is `4`), and anything else as text. A parameter your workflow's `Params` type declares as `string` (or as string literals) always arrives as text: `version=4` is `"4"`.
 
@@ -519,6 +519,8 @@ A run is unattended when you pass `--no-interactive`, when there is no terminal 
 | `2` | The run finished, but some files failed. The other files' changes were written (in a dry run, nothing was), and the output ends with how many failed. A resumed run counts the files that failed in steps it reused. Also: the workflow called [`fail()`](/community/workflows/reference#failing-a-run-with-a-report) (the run is `failed`, and keeps its output). |
 | `3` | The run is waiting for input: it stopped at an approval nobody could answer (`--no-interactive`, CI, or answered "later"). It is saved; the last line names the command that continues it, `codemod workflow resume --id <ID> --approve <QUESTION_ID>`. |
 | other | The workflow called `fail(message, { exitCode })` with that code (1 to 125). A workflow that passes `3` exits like a waiting run: check `workflow status` to tell them apart. |
+
+See [Exit codes](/community/workflows/exit-codes) for how to read them in a script.
 
 **`workflow resume`**
 

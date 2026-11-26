@@ -710,7 +710,7 @@ npx codemod workflow resume -i <run-id> --approve
 npx codemod workflow resume -i <run-id> --approve <question-id>
 ```
 
-The 1.x `resume` flags `--tasks_ids` and `--dry-run` are gone: `--approve <question-id>` replaces `--tasks_ids`, and a dry run is not saved, so it can't be resumed.
+The 1.x `resume` flags `--tasks_ids` and `--dry-run` are gone: `--approve <question-id>` replaces `--tasks_ids`, and a dry run is not saved, so it can't be resumed. See [Upgrade from 1.x](/community/workflows/upgrade-from-1x#commands-and-flags-that-changed).
 
 ---
 
@@ -920,19 +920,6 @@ templates:
       - name: Format
         run: npx prettier --write .
 ```
-
----
-
-## Roadmap
-
-<Steps>
-  <Step title="Container runtime support" icon="flag-pennant">
-    Support for `runtime: docker` and other container runtimes.
-  </Step>
-  <Step title="Nested matrix strategies" icon="flag-pennant">
-    Matrix strategies within matrix strategies for complex fan-out.
-  </Step>
-</Steps>
 
 ---
 

@@ -1,0 +1,186 @@
+---
+title: "Rename a function across a barrel"
+sidebarTitle: "Semantic rename"
+description: "Use definition() in a forEachFile callback to rename one exported function everywhere it is used, through a barrel file and a tsconfig path alias, without touching a look-alike."
+---
+
+A text search for a function's name also finds other functions with the same name. With semantic analysis, each use of a name can tell you where it was declared, through imports, barrel files (`index.ts` files that re-export) and tsconfig path aliases. You'll rename the shared `toMoment` to `toDayjs` everywhere it is used, and leave a different `toMoment` alone. You need Node.js 22.18 or later and Git.
+
+## 1. The project
+
+A small monorepo. `toMoment` is declared in `packages/shared/src/dates.ts` and re-exported by the barrel `packages/shared/src/index.ts`. `api` imports it through a relative path to the barrel, `web` through the `@shared` alias. `web/src/legacy.ts` has its own `toMoment`, which must stay.
+
+```ts packages/shared/src/dates.ts
+import moment from "moment";
+
+export function toMoment(value: string) {
+  return moment(value);
+}
+```
+
+```ts packages/shared/src/index.ts
+export { toMoment } from "./dates";
+export * from "./format";
+```
+
+```ts packages/shared/src/format.ts
+export const formatDay = (d: { format(f: string): string }) => d.format("YYYY-MM-DD");
+```
+
+```ts packages/api/src/orders.ts
+// Through a relative import of the barrel.
+import { toMoment } from "../../shared/src";
+
+export const created = (order: { createdAt: string }) => toMoment(order.createdAt);
+```
+
+```ts packages/web/src/app.ts
+// Through the tsconfig path alias "@shared" → packages/shared/src/index.ts (a barrel).
+import { toMoment, formatDay } from "@shared";
+
+export const today = formatDay(toMoment("2026-11-24"));
+```
+
+```ts packages/web/src/legacy.ts
+// A look-alike: its own toMoment, not the shared one. Must not be renamed.
+function toMoment(value: string) {
+  return new Date(value);
+}
+
+export const legacy = toMoment("2020-01-01");
+```
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@shared": ["packages/shared/src/index.ts"] }
+  }
+}
+```
+
+## 2. The workflow
+
+```ts workflow.ts
+import { parse } from "codemod/ast-grep";
+import { forEachFile, step } from "codemod/workflow";
+
+const DECLARED_IN = "packages/shared/src/dates.ts";
+
+export default async function main() {
+  const renamed = await step(
+    "Rename toMoment to toDayjs",
+    forEachFile(
+      { include: "packages/*/src/**/*.ts", containing: "toMoment", semanticAnalysis: "workspace" },
+      (file) => {
+        const root = parse(file).root();
+        const edits = [];
+        for (const node of root.findAll({ rule: { kind: "identifier", regex: "^toMoment$" } })) {
+          let def = node.definition();
+          // A use resolves to its import first: follow the import to the export.
+          if (def?.kind === "local" && def.node.kind() === "import_specifier") def = def.node.definition();
+          const where = def ? `${def.root.relativeFilename()}:${def.node.range().start.line + 1}` : "none";
+          console.log(`${file.path}:${node.range().start.line + 1} -> ${where}`);
+          if (def?.root.relativeFilename().endsWith(DECLARED_IN)) edits.push(node.replace("toDayjs"));
+        }
+        if (edits.length === 0) return;
+        file.write(root.commitEdits(edits));
+        return edits.length;
+      },
+    ),
+  );
+  return { renamed: renamed.outputs.reduce((sum, n) => sum + n, 0) };
+}
+```
+
+- `semanticAnalysis: "workspace"` lets `definition()` look into other files of the project. The default, `"file"`, only sees the file itself.
+- `containing: "toMoment"` skips files that don't mention the name, so only those files are parsed.
+- `node.definition()` returns where a name is declared: `def.root` is that file and `def.node` the declaration. It follows re-exports, `export *` and path aliases to any depth.
+- A use of an imported name resolves to its import first (`kind: "local"`, an `import_specifier`); calling `definition()` on that follows the import to the exported function.
+- The callback renames a name only when it leads to `dates.ts`, and logs where each one leads.
+
+## 3. Dry run
+
+Commit the project, then preview:
+
+```bash
+git init && git add . && git commit -m "Before the rename"
+npx codemod@alpha workflow run -w workflow.ts --dry-run
+```
+
+```
+▸ Rename toMoment to toDayjs
+  packages/web/src/legacy.ts:2 -> packages/web/src/legacy.ts:2
+  packages/shared/src/dates.ts:3 -> packages/shared/src/dates.ts:3
+  packages/web/src/legacy.ts:6 -> packages/web/src/legacy.ts:2
+  packages/shared/src/index.ts:1 -> packages/shared/src/dates.ts:3
+  packages/api/src/orders.ts:2 -> packages/shared/src/dates.ts:3
+  packages/web/src/app.ts:2 -> packages/shared/src/dates.ts:3
+  packages/api/src/orders.ts:4 -> packages/shared/src/dates.ts:3
+  packages/web/src/app.ts:4 -> packages/shared/src/dates.ts:3
+✓ Rename toMoment to toDayjs (0.0s)
+
+Dry run: these changes were not written
+--- [before] packages/api/src/orders.ts
++++ [after]  packages/api/src/orders.ts
+@@ -1,4 +1,4 @@
+ // Through a relative import of the barrel.
+-import { toMoment } from "../../shared/src";
++import { toDayjs } from "../../shared/src";
+
+-export const created = (order: { createdAt: string }) => toMoment(order.createdAt);
++export const created = (order: { createdAt: string }) => toDayjs(order.createdAt);
+--- [before] packages/shared/src/dates.ts
++++ [after]  packages/shared/src/dates.ts
+@@ -1,5 +1,5 @@
+ import moment from "moment";
+
+-export function toMoment(value: string) {
++export function toDayjs(value: string) {
+   return moment(value);
+ }
+--- [before] packages/shared/src/index.ts
++++ [after]  packages/shared/src/index.ts
+@@ -1,2 +1,2 @@
+-export { toMoment } from "./dates";
++export { toDayjs } from "./dates";
+ export * from "./format";
+--- [before] packages/web/src/app.ts
++++ [after]  packages/web/src/app.ts
+@@ -1,4 +1,4 @@
+ // Through the tsconfig path alias "@shared" → packages/shared/src/index.ts (a barrel).
+-import { toMoment, formatDay } from "@shared";
++import { toDayjs, formatDay } from "@shared";
+
+-export const today = formatDay(toMoment("2026-11-24"));
++export const today = formatDay(toDayjs("2026-11-24"));
+Done
+Output: {"renamed":6}
+```
+
+Every use of the shared function leads to `dates.ts:3`, through the barrel and the alias. Both names in `legacy.ts` lead to `legacy.ts:2`, so they stay. Files run in parallel, so the log lines can come in another order.
+
+## 4. Apply it
+
+```bash
+npx codemod@alpha workflow run -w workflow.ts --no-interactive
+git diff --stat
+```
+
+```
+Done
+Output: {"renamed":6}
+```
+
+```
+ packages/api/src/orders.ts   | 4 ++--
+ packages/shared/src/dates.ts | 2 +-
+ packages/shared/src/index.ts | 2 +-
+ packages/web/src/app.ts      | 4 ++--
+ 4 files changed, 6 insertions(+), 6 deletions(-)
+```
+
+## Next
+
+- [Semantic analysis](/community/jssg/semantic-analysis): `definition()`, `references()` and the analysis modes.
+- To find every use from the declaration instead, call `references()` on the declared name.

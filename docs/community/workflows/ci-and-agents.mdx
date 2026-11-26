@@ -1,0 +1,104 @@
+---
+title: "Running in CI and from agents"
+sidebarTitle: "CI and agents"
+description: "Run codemod workflows with no person at the terminal: no prompts, plain or JSON output, approvals given up front or over --control stdio, and exit codes."
+---
+
+The CLI has two ways to run:
+
+- **For people**, in a terminal: it prints progress lines and asks before it does something you should approve (an `approval(...)` step, a shell command, writing to a repository with uncommitted changes).
+- **For programs**, in CI, scripts and coding agents: it never asks. It prints plain text or JSON lines, and its exit code says how the run ended.
+
+This page is about the second. Pass `--no-interactive`, or run where there is no terminal: the CLI also turns prompts off when `CI` is set, when input or output is piped, and with `--format jsonl`.
+
+## Run in CI
+
+```bash
+npx codemod@alpha workflow run -w ./workflow.ts --target . --no-interactive
+```
+
+Or a registry package:
+
+```bash
+npx codemod@alpha @org/my-package --target . --no-interactive
+```
+
+What changes without a person:
+
+- **Approvals don't block.** A run that reaches an `approval(...)` step stops there, saves itself and exits. The exit code is `3`. Pass `--approve` to give every approval up front.
+- **Shell commands run without asking.**
+- **A target with uncommitted changes fails the run at its first write**, before anything is written. Commit first, or pass `--allow-dirty`. A run that only reads isn't stopped.
+- **Capabilities are not granted.** A step that needs one the run wasn't given fails. Grant them with `--allow-fs` or `--allow-child-process`, or in the package's `codemod.yaml`.
+
+Check the result with the [exit code](/community/workflows/exit-codes): `0` finished, `1` failed or stopped, `2` finished with failed files or `fail()`, `3` waiting at an approval.
+
+### A GitHub Actions job
+
+```yaml .github/workflows/codemod.yml
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npx codemod@2.0.0-alpha.9 workflow run -w ./codemods/migrate --target . --no-interactive --approve
+      - run: git diff --stat
+```
+
+Pin the CLI version in CI, so a new release doesn't change the job.
+
+### Turn off telemetry
+
+Set `DISABLE_ANALYTICS=1`, or `DO_NOT_TRACK=1`, in the job's environment.
+
+## Read the output
+
+Plain text is meant for logs. For a program, use `--format jsonl`: one JSON object per line on stdout.
+
+```bash
+npx codemod@alpha workflow run -w workflow.ts --target . --no-interactive --format jsonl
+```
+
+The last line is `run_finished`, with `status`, `output` (what the workflow returned), `error` and `question`. After the run, read it again any time:
+
+```bash
+npx codemod@alpha workflow status --id <id> --format json
+npx codemod@alpha workflow list --format json
+```
+
+`workflow status` has the run's `status`, `output`, `exitCode`, `question` and each step's result. See [Build a report that fails CI](/community/workflows/tutorials/reports).
+
+## Continue a run that waits
+
+A run stopped at an approval is saved. Approve it from the next CI job, a person's terminal, or a script:
+
+```bash
+npx codemod@alpha workflow status --id <id> --format json   # "question": "approval:1"
+npx codemod@alpha workflow resume --id <id> --approve approval:1 --no-interactive
+```
+
+`--approve approval:1` gives that approval only; the run stops at the next one. `--approve` alone gives every approval left. Finished steps are not run again.
+
+## Drive a run from a program
+
+A coding agent or a wrapper that wants to answer questions as they come, in the same process, uses `--control stdio` with `--format jsonl`. The run prints events on stdout, reads commands on stdin, and waits at each question for an answer:
+
+```json
+{"event":"question","id":"approval:1","kind":"approval","message":"Also turn 2 let declarations into const?", ...}
+```
+
+```json
+{"command":"approve","question_id":"approval:1"}
+```
+
+Closing stdin pauses the run. [Approvals and CI](/community/workflows/tutorials/approvals-and-ci) has a 20-line Node.js driver, and [Drive codemod from a program](/community/workflows/control) has the full protocol.
+
+## Tips for agents
+
+- Always pass `--no-interactive` (or `--control stdio`). A run that asks with nobody to answer would wait.
+- Start with `--dry-run`: it changes nothing and prints the diff it would apply. A dry run that reaches an approval exits `1`; add `--approve` to see past it.
+- Use `workflow inspect -w <workflow> --format json` to see a workflow's parameters, their types and defaults before you run it.
+- Pass parameters with `--param key=value`. A parameter declared as `string` stays a string.
+- Read results from `workflow status --format json`, not from the text output.

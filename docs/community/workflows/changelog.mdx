@@ -11,7 +11,7 @@ Workflow v2 is the 2.0 Codemod CLI: workflows are TypeScript (`workflow.ts`), an
 
 ```bash
 npx codemod@alpha workflow run -w workflow.ts --target .
-npx codemod@2.0.0-alpha.8 workflow run -w workflow.ts --target .
+npx codemod@2.0.0-alpha.9 workflow run -w workflow.ts --target .
 ```
 
 To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha workflow upgrade ./my-package --dry-run`. See [Migrate from workflow.yaml](/community/workflows/migrate).
@@ -43,6 +43,9 @@ Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://
 - **`--allow-fs`, `--allow-fetch` and `--allow-child-process` do nothing** for workflow runs. They are accepted with a warning; `capabilities` in `codemod.yaml` and in a `forEachFile` selector are ignored (the step's log says so). The launcher no longer shows capability toggles.
 - **`codemod jssg run` and `codemod jssg test`: `fs` writes need `--allow-fs`.** Without it a transform's `fs` reads the target but `writeFileSync`, `mkdirSync` and `unlinkSync` fail with `EROFS` and a message naming the flag, as `child_process` needs `--allow-child-process`. Before, writes inside the target worked with no flag. See [Security & Capabilities](/community/jssg/security).
 - **The Node.js host enforces the same rules** (`codemod/host`, `codemod/testing`), and replays the body's clock and random numbers as the CLI does, so a test that passes does not fail under the CLI. See [the Node.js host](/community/workflows/node#how-it-differs-from-the-cli).
+- **Declared `string` params stay strings.** `--param version=19` gives `"19"` for a parameter declared `string`; earlier alphas parsed it as `19`.
+- **YAML with `runtime: docker` or `runtime: podman` is refused before any steps run.** Earlier alphas silently ran those steps on the host.
+- **The experimental launcher is opt-in** (`CODEMOD_LAUNCHER=1`). Plain terminal output is the default. `CI=1` never prompts, even with a terminal.
 
 **New**
 
@@ -52,10 +55,17 @@ Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://
 
 - **`http(url, options)`** in `codemod/workflow`: an HTTP request as a step. Its response is recorded and replayed on resume, not sent again. Header values can come from the environment (`{ env: "GITHUB_TOKEN" }`) so tokens stay out of the run's records. A dry run skips it unless it sets `dryRun: "perform"`. See [HTTP requests](/community/workflows/reference#http-requests).
 - `workflow inspect` lists `http` in `uses`, and shows which declared steps reach outside the target.
+- **1.x YAML packages run without conversion.** Legacy transform metrics and workflow state still work when running `workflow.yaml`, and transforms can read the target with `fs` without a flag. The compatibility path never rewrites the package. See [Upgrade from 1.x](/community/workflows/upgrade-from-1x).
+- **`DO_NOT_TRACK=1` turns off telemetry.** Use `unpublish --yes` for unattended unpublishing.
 
 **Fixes**
 
 - **A run paused at an approval keeps its question.** Before, closing a control channel's stdin or sending `stop` while an approval was open left a `paused` run with `question: null`, and the approval step `canceled`. Now `run_finished` and `workflow status` keep `question` (`approval:1`) and `awaiting`, the step stays `awaiting-approval`, and `workflow resume --approve approval:1` gives it.
+- Local runs identify the package they use, dry runs omit unsaved run IDs, standalone `jssg run` reports errors for each failed file, and errors on non-terminal stderr omit color. Non-interactive `init` uses defaults.
+
+**Docs**
+
+- Added [Upgrade from 1.x](/community/workflows/upgrade-from-1x), [Running in CI and from agents](/community/workflows/ci-and-agents), [Exit codes](/community/workflows/exit-codes), and five tutorials, starting with [Your first workflow](/community/workflows/tutorials/first-workflow).
 </Update>
 
 <Update label="2.0.0-alpha.9" description="November 25, 2026">

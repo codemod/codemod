@@ -250,7 +250,6 @@ YAML workflows always run with the CLI.
 | `changes` | Files the run wrote or created, with their text; `null` for files it removed |
 | `steps`, `step(label)` | Each step's label, status (`"succeeded"`, `"partial"` when some of its files failed, or `"failed"`), result and error, and whether it was `given` |
 | `logs` | Console output, with the label of the step that wrote it (or `null` for the workflow body) |
-| `metrics` | Metrics the transforms recorded |
 | `diff()` | A unified diff of the changes |
 
 `assertTree(run, expected)` fails with the run's error and logs when the run did not succeed. `expected` is a directory, a single file, or files by path. Line endings are compared as `\n`. Pass `{ ignoreWhitespace: true }` to ignore whitespace at the ends of lines and files.
