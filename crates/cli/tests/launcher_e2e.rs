@@ -199,6 +199,47 @@ const UP: &str = "\x1b[A";
 const RIGHT: &str = "\x1b[C";
 
 #[test]
+fn telemetry_notice_is_only_shown_once_on_an_interactive_terminal() {
+    let root = TempDir::new().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let store = root.path().join("runs");
+    write(
+        root.path(),
+        "workflow.ts",
+        "export default function main() {}\n",
+    );
+    let start = |args: &[&str], env: &[(&str, &str)]| {
+        Session::start_env(&home, &store, root.path(), args, None, env).finish()
+    };
+    let notice = "Codemod collects CLI usage";
+    let validate = ["workflow", "validate", "-w", "workflow.ts"];
+    let (code, output) = start(&validate, &[("CI", "1")]);
+    assert_eq!(code, 0, "{output}");
+    assert!(!output.contains(notice), "{output}");
+
+    for flags in [
+        &["--no-interactive"][..],
+        &["--format", "jsonl"],
+        &["--control", "stdio", "--format", "jsonl"],
+    ] {
+        let mut args = vec!["workflow", "run", "-w", "workflow.ts", "--dry-run"];
+        args.extend_from_slice(flags);
+        let (code, output) = start(&args, &[]);
+        assert_eq!(code, 0, "{args:?}: {output}");
+        assert!(!output.contains(notice), "{output}");
+    }
+
+    let (code, output) = start(&validate, &[]);
+    assert_eq!(code, 0, "{output}");
+    assert_eq!(output.matches(notice).count(), 1, "{output}");
+    assert!(output.contains("DO_NOT_TRACK=1"), "{output}");
+    assert!(output.contains("codemod telemetry off"), "{output}");
+    let (_, output) = start(&validate, &[]);
+    assert!(!output.contains(notice), "{output}");
+}
+
+#[test]
 fn a_dry_run_is_reviewed_applied_and_approved_in_the_launcher() {
     let package = TempDir::new().unwrap();
     let target = TempDir::new().unwrap();

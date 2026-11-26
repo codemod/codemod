@@ -234,6 +234,40 @@ impl TokenStorage {
         self.load_auth(registry)
     }
 
+    pub fn telemetry_disabled(&self) -> Result<bool> {
+        Ok(self.config_dir.join("telemetry_disabled").try_exists()?)
+    }
+
+    pub fn set_telemetry_enabled(&self, enabled: bool) -> Result<()> {
+        if enabled {
+            match fs::remove_file(self.config_dir.join("telemetry_disabled")) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                result => Ok(result?),
+            }
+        } else {
+            self.create_marker("telemetry_disabled")?;
+            Ok(())
+        }
+    }
+
+    /// Claim the notice once, even if several interactive invocations start at once.
+    pub fn claim_telemetry_notice(&self) -> Result<bool> {
+        self.create_marker("telemetry_notice_shown")
+    }
+
+    fn create_marker(&self, name: &str) -> Result<bool> {
+        let path = self.config_dir.join(name);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(error).with_context(|| format!("Failed to create {path:?}")),
+        }
+    }
+
     pub fn get_or_create_anonymous_telemetry_id(&self) -> Result<String> {
         let telemetry_id_path = self.config_dir.join("telemetry_id");
         match fs::read_to_string(&telemetry_id_path) {

@@ -64,9 +64,17 @@ For logged-in sessions only, the CLI may also send a separate PostHog `$set` wit
 **email** so dashboards can show people instead of raw UUIDs. That update is PostHog-only (not
 Scarf), deduped locally, and skipped when you opt out.
 
+The first interactive run shows a one-line notice about telemetry. The CLI remembers that
+it showed the notice. It does not show the notice in CI, without a terminal, with
+`--no-interactive`, or in JSONL and `--control` mode.
+
+Use `codemod telemetry off` to opt out on this installation. Check your effective setting
+with `codemod telemetry status`, or restore the default with `codemod telemetry on`.
+
 Disable all of this for a single invocation with `--disable-analytics`, or by setting
 `DISABLE_ANALYTICS=true` / `DISABLE_ANALYTICS=1` in the environment. `DO_NOT_TRACK=1` (any value but empty, `0` or `false`) does the same. The flag works on explicit
 commands and on implicit package runs such as `npx codemod @org/package --disable-analytics`.
+These overrides still apply after `codemod telemetry on`.
 
 More detail: [Telemetry compliance](https://codemod.com/telemetry-compliance).
 
@@ -1092,12 +1100,15 @@ Both workflows use [trusted publishers](/community/publishing#trusted-publishers
 Login to a registry.
 
 ```bash
-npx codemod login [--api-key <API_KEY>] [--registry <REGISTRY>] [--scope <SCOPE>]
+npx codemod login [--api-key <API_KEY>] [--registry <REGISTRY>] [--scope <SCOPE>] [--format json]
 ```
 
 <ResponseField name="--api-key <API_KEY>" type="string">
   Authenticate using an API key. Skips the browser login & is ideal for CI.
 </ResponseField>
+
+In CI or without an interactive terminal, `login` uses existing valid credentials or requires
+`--api-key`. If neither is available, it exits `1` without opening a browser.
 
 <ResponseField name="--registry <REGISTRY>" type="string">
   Registry URL.
@@ -1105,6 +1116,11 @@ npx codemod login [--api-key <API_KEY>] [--registry <REGISTRY>] [--scope <SCOPE>
 
 <ResponseField name="--scope <SCOPE>" type="string">
   Organization or user scope for publishing.
+</ResponseField>
+
+<ResponseField name="--format json" type="string">
+  Print one JSON object with `registry`, `logged_in`, and `user` to stdout. If you need an API
+  key to proceed, `logged_in` is `false` and `user` is `null`. Credentials are not printed.
 </ResponseField>
 
 <Tip>
@@ -1132,7 +1148,7 @@ npx codemod logout [--registry <REGISTRY>] [--all]
 Show current authentication status.
 
 ```bash
-npx codemod whoami [--registry <REGISTRY>] [--detailed]
+npx codemod whoami [--registry <REGISTRY>] [--detailed] [--format json]
 ```
 
 <ResponseField name="--registry <REGISTRY>" type="string">
@@ -1143,18 +1159,29 @@ npx codemod whoami [--registry <REGISTRY>] [--detailed]
   Show detailed information including token scopes.
 </ResponseField>
 
+<ResponseField name="--format json" type="string">
+  Print `registry`, `logged_in`, and `user`. When signed out, `logged_in` is `false`, `user`
+  is `null`, and the exit code is `1`. With `--detailed`, a signed-in result also includes
+  `token` metadata, never access or refresh token values.
+</ResponseField>
+
 ### `codemod publish`
 
 Publish a Codemod package to a registry.
 
 ```bash
-npx codemod publish [PATH]
+npx codemod publish [PATH] [--format json]
 ```
 
 What `.gitignore` files in the package ignore is not published, nested ones included, and neither are `node_modules` and `.git` directories at any depth. A `workflow.ts`, and each callback and shard function it imports from its own file, is bundled with what it imports from npm packages; the modules the CLI provides (`codemod/workflow`, `codemod/ast-grep`, `fs`, ...) stay imports, and so do the workflow's imports of its callbacks, which the modules the build extracts import. YAML files it imports (ast-grep rules) are published as they are, and stay imports. A workflow that names a file by path where a callback or rules go does not build, so it does not publish: see [Imported callbacks](/community/workflows/reference#imported-callbacks).
 
 <ResponseField name="[PATH]" type="string">
   Path to codemod directory (defaults to current directory).
+</ResponseField>
+
+<ResponseField name="--format json" type="string">
+  Print one JSON object with `success`, `registry`, `tag`, and `package` after a successful
+  upload. On failure, read stderr and check the nonzero exit code.
 </ResponseField>
 
 <Info>

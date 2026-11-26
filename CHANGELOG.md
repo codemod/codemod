@@ -10,6 +10,8 @@ The 2.0 alphas are tagged `cli-2.0.0-alpha.N` and published to npm under the `al
 - *(workflow)* Ask before repeating interrupted side effects on resume and harden run-store writes. Use `--rerun-step` or `--skip-step` to continue a non-interactive run.
 - *(api)* Mark experimental APIs in types, docs, and CLI help, and notify users on first use.
 - *(jssg)* Report parse and module-load errors as failures instead of silently skipping them.
+- *(cli)* A one-time interactive telemetry notice explains what is collected and how to opt out; `codemod telemetry on|off|status` manages the saved setting.
+- *(cli)* `login`, `whoami`, and `publish` support `--format json`. In CI, browser login is disabled; use `login --api-key`. All stable commands are checked with stdin closed.
 
 ## [cli-2.0.0-alpha.10] - 2026-11-26
 
