@@ -105,11 +105,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let (workflow_path, workflow_dir) =
         resolve_workflow_source_with_name(&args.workflow, args.workflow_name.as_deref())?;
     let params = parse_workflow_params(&workflow_path, &args.params)?;
-    let target_path = normalize_target_path(
-        args.target_path
-            .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap()),
-    )?;
+    let target_path = normalize_target_path(match &args.target_path {
+        Some(path) => path.clone(),
+        None => std::env::current_dir()
+            .context("Cannot determine the target: the current directory is unavailable")?,
+    })?;
     let workflow_label = workflow_path
         .file_name()
         .and_then(|value| value.to_str())

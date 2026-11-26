@@ -1107,3 +1107,27 @@ export default async function main() {
     let output = run_strict(&fixture, &[]);
     assert!(output.status.success(), "{}", text(&output));
 }
+
+#[cfg(unix)]
+#[test]
+fn missing_current_directory_is_reported_without_panicking() {
+    let fixture = Fixture::new();
+    fixture.package_file("workflow.ts", "export default function main() {}");
+    let cwd = TempDir::new().unwrap();
+    let output = Command::new("sh")
+        .args([
+            "-c",
+            "cd \"$1\" && rmdir \"$1\" && shift && exec \"$@\"",
+            "sh",
+        ])
+        .arg(cwd.path())
+        .arg(env!("CARGO_BIN_EXE_codemod"))
+        .args(["workflow", "run", "--no-interactive", "-w"])
+        .arg(fixture.package.path().join("workflow.ts"))
+        .env("DISABLE_ANALYTICS", "true")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(text(&output).contains("the current directory is unavailable"));
+    assert!(!text(&output).contains("panicked"));
+}
