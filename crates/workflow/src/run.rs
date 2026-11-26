@@ -724,6 +724,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
         .map_err(|e| RunError::Runtime(format!("cannot resolve imports: {e}")))?;
     runtime.set_loader(
         (
+            codemod_sandbox::sandbox::engine::target_files::WorkflowFsResolver(false),
             // The body's codemod modules: `codemod/<name>`, or `codemod:<name>`.
             CodemodModuleResolver::new(&["ast-grep", "workflow", "deps", "git", "assess"]),
             BodyPathResolver,
@@ -760,6 +761,10 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
     let ending = context.with(|ctx| {
         let started = (|| -> rquickjs::Result<Value<'_>> {
             llrt_globals.attach(&ctx)?;
+            ctx.store_userdata(codemod_sandbox::sandbox::engine::target_files::WorkflowBody)
+                .map_err(|e| {
+                    rquickjs::Error::new_from_js_message("userdata", "workflow", format!("{e:?}"))
+                })?;
             install_host(&ctx, &run, &recorded, &in_flight, &sender)?;
             ctx.eval::<(), _>(crate::js::body_globals())?;
             // Load the runtime even when the workflow never imports it.

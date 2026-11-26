@@ -20,6 +20,7 @@ use crate::events::Event;
 use crate::run::{run_host_task, Ending, RunContext, TestPlan};
 use crate::tasks::for_each_file::{self, FileEffects, Selector};
 use crate::tasks::TaskContext;
+use codemod_sandbox::sandbox::engine::target_files::TargetFiles;
 
 /// The language a `forEachFile` step's files are in, when known, and the
 /// files as `(path, text)` pairs.
@@ -244,6 +245,18 @@ impl HostedRun {
         Ok((selector.language, files))
     }
 
+    /// The target view for one hosted callback. Its creates are staged.
+    pub fn target_files(&self) -> TargetFiles {
+        TargetFiles::new(
+            self.context.target.clone(),
+            self.context
+                .overlay
+                .as_ref()
+                .map(crate::tasks::overlay::Overlay::pending_files)
+                .unwrap_or_default(),
+        )
+    }
+
     /// Commit what a `forEachFile` step's callbacks did to its files:
     /// `[{ path, original, effects: [{ op: "write", text } | { op: "rename", to } | { op: "delete" }] }]`.
     /// Returns `{ changes, failures }`; files whose effects are invalid are
@@ -253,6 +266,7 @@ impl HostedRun {
         position: u64,
         label: String,
         files: Value,
+        created: Vec<(String, String)>,
     ) -> Result<Value, String> {
         self.open().map_err(|e| e.to_string())?;
         let files: Vec<FileEffects> =
@@ -265,7 +279,7 @@ impl HostedRun {
             since: None,
             alongside: false,
         };
-        let (changes, failures) = for_each_file::commit_effects(&task, files)?;
+        let (changes, failures) = for_each_file::commit_effects(&task, files, created)?;
         let mut committed = json!({ "changes": changes, "failures": failures });
         // What the step's `assess()` calls used, as the CLI reports it.
         if let Some(usage) = self.context.assess.take(position) {

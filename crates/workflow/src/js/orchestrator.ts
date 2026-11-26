@@ -1592,7 +1592,7 @@ export function unavailable(name: string, site: CodeSite): string {
     return `process.env cannot be changed in ${where}: give a step its variables, shell(command, { env })`;
   }
   if (name.startsWith("fs.") || name.startsWith("fs/promises.")) {
-    return `${name} is not available in ${where}: change the current file with file.write(), file.rename() or file.delete(), and anything else with a step such as shell() or agent()`;
+    return `${name} is not available in ${where}: use import { files } from "codemod/files" inside a callback`;
   }
   return `${name} is not available in ${where}`;
 }

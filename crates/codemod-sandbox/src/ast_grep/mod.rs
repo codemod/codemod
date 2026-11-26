@@ -323,8 +323,27 @@ fn parse_async_rjs<'js>(
 
 #[cfg(feature = "native")]
 fn parse_file_rjs(ctx: Ctx<'_>, lang: String, file_path: String) -> Result<SgRootRjs<'_>> {
-    let file_content = std::fs::read_to_string(file_path.clone())
-        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to read file: {e}")))?;
+    use crate::sandbox::engine::{
+        target_files::{TargetFiles, WorkflowBody},
+        CallbackIsolate,
+    };
+
+    if ctx.userdata::<WorkflowBody>().is_some() {
+        return Err(Exception::throw_message(
+            &ctx,
+            "parseFile() is not available in the workflow body; use files.read() inside a callback",
+        ));
+    }
+
+    let file_content = if ctx.userdata::<CallbackIsolate>().is_some() {
+        ctx.userdata::<TargetFiles>()
+            .ok_or_else(|| Exception::throw_message(&ctx, "target files are unavailable"))?
+            .read(&file_path)
+            .map_err(|e| Exception::throw_message(&ctx, &e))?
+    } else {
+        std::fs::read_to_string(&file_path)
+            .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to read file: {e}")))?
+    };
     SgRootRjs::try_new(lang, file_content, Some(file_path), None)
         .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
 }

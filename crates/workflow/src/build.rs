@@ -177,6 +177,10 @@ pub fn unavailable(name: &str, site: CodeSite) -> String {
 
 /// The class of an import specifier, without looking at the file system.
 pub fn module_class(specifier: &str) -> Result<ModuleClass, String> {
+    use codemod_sandbox::sandbox::engine::target_files::{is_fs, FS_REPLACEMENT};
+    if is_fs(specifier) {
+        return Err(FS_REPLACEMENT.into());
+    }
     match codemod_module(specifier) {
         Some("workflow") => return Ok(ModuleClass::Workflow),
         // `codemod/git` only describes steps, as `codemod/workflow` does.
@@ -222,8 +226,7 @@ pub fn module_class(specifier: &str) -> Result<ModuleClass, String> {
 fn is_effectful_builtin(name: &str) -> bool {
     matches!(
         name,
-        "fs" | "fs/promises"
-            | "child_process"
+        "child_process"
             | "os"
             | "process"
             | "crypto"
@@ -1376,6 +1379,12 @@ impl<R: codemod_sandbox::sandbox::resolvers::ModuleResolver> ImportWalk<'_, R> {
             return Err(format!("{shown}: {hint}"));
         }
         for specifier in module_specifiers(path, &text) {
+            if codemod_sandbox::sandbox::engine::target_files::is_fs(&specifier) {
+                return Err(format!(
+                    "{shown} imports '{specifier}': {}",
+                    codemod_sandbox::sandbox::engine::target_files::FS_REPLACEMENT
+                ));
+            }
             match module_class(&specifier) {
                 Ok(ModuleClass::StepsOnly) => return Ok(Some(vec![shown, specifier])),
                 Ok(ModuleClass::Pure | ModuleClass::Workflow) | Err(_) => continue,

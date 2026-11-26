@@ -19,6 +19,10 @@ To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha wor
 
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
 
+<Update label="2.0.0-alpha.11" description="Unreleased">
+- **`codemod/files` replaces `fs` in 2.0 workflows.** Callbacks and JSSG transforms can read, list, and create target files; new files are recorded and previewed with other edits. YAML packages retain compatibility for supported target-local `fs` calls.
+</Update>
+
 <Update label="2.0.0-alpha.10" description="Unreleased">
 **Breaking changes**
 

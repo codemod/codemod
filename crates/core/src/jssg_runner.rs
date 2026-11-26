@@ -83,7 +83,7 @@ pub type JssgDataCallback = Arc<dyn Fn(&str, Value) + Send + Sync>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JssgFileChange {
     pub path: PathBuf,
-    pub original: String,
+    pub original: Option<String>,
     pub content: String,
     pub rename_to: Option<PathBuf>,
 }
@@ -335,7 +335,7 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
         outcome.changes.push(JssgFileChange {
             rename_to: renames.remove(&path),
             path,
-            original,
+            original: Some(original),
             content,
         });
     }
@@ -346,11 +346,22 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
         };
         outcome.changes.push(JssgFileChange {
             path,
-            original: text.clone(),
+            original: Some(text.clone()),
             content: text,
             rename_to: Some(to),
         });
     }
+    outcome.changes.extend(
+        pending
+            .created()
+            .into_iter()
+            .map(|(path, content)| JssgFileChange {
+                path,
+                original: None,
+                content,
+                rename_to: None,
+            }),
+    );
     outcome.changes.sort_by(|a, b| a.path.cmp(&b.path));
     outcome.failures = failures.into_inner().unwrap();
     outcome.failures.sort();

@@ -96,7 +96,7 @@ Durations are milliseconds or a number with a unit: `"500ms"`, `"30s"`, `"10m"`,
 A function step runs once, in its own isolate, and records what it returns. It may be async.
 
 ```ts
-import { readFile } from "fs/promises";
+import { files } from "codemod/files";
 
 const plan = await step("Plan batches", () =>
   usages.outputs.reduce((batches, path, index) => {
@@ -104,11 +104,11 @@ const plan = await step("Plan batches", () =>
     return batches;
   }, [] as string[][]),
 );
-const config = await step("Read config", async () => JSON.parse(await readFile("codemod.config.json", "utf8")));
+const config = await step("Read config", () => JSON.parse(files.read("codemod.config.json")));
 ```
 
 - Write the function inline, so the build can extract it. Outside variables arrive as frozen copies, with the same rules as [forEachFile callbacks](#using-outside-variables).
-- Inside, `Date` and `Math.random` are real, and `fs` reads the target. The function is [pure](#callbacks-are-pure): no network, commands or other writes.
+- Inside, `Date` and `Math.random` are real, and [`files`](#target-files) reads the target and stages new files. The function is [pure](#callbacks-are-pure): no network, commands or unrecorded writes.
 - The result must be JSON. On resume, a finished function step is replayed from its record; if you changed it, it runs again.
 
 ## `forEachFile(selector?, callback)`
@@ -231,7 +231,7 @@ reduced; // { "app": 12, "ui": 3 }
 Function steps, `forEachFile` callbacks and reducers, `dependencyGraph` callbacks and the jssg transforms they run change the world only through what the run records. Inside them you get:
 
 - the `file` object: `file.write()`, `file.rename()` and `file.delete()` for the current file, and `jssgTransform` for others;
-- `fs`, read-only and limited to the target (`readFileSync`, `existsSync`, `readdirSync`, `statSync` and their promise forms);
+- [`codemod/files`](#target-files), for reading and creating files in the target;
 - parsing and analysis (`codemod/ast-grep`, `codemod/assess`, `registry` and `semver` from `codemod/deps`).
 
 Everything else that reaches outside fails with the step to use instead:
@@ -240,11 +240,40 @@ Everything else that reaches outside fails with the step to use instead:
 |---|---|---|
 | `fetch`, `XMLHttpRequest`, `WebSocket` | `fetch is not available in workflow callbacks …` | [`http()`](#http-requests) |
 | `child_process` (`exec`, `spawn`, …) | `child_process.execSync is not available …` | [`shell()`](#shell-commands) |
-| `fs` writes (`writeFileSync`, `mkdirSync`, `unlinkSync`, …), reads outside the target | `fs.writeFileSync is not available …`, `EACCES` | `file.write()`, or a `shell()` or `agent()` step |
+| `fs`, `node:fs`, or their `/promises` variants | `fs is not available in 2.0 workflows …` | [`files`](#target-files), `file.write()`, or a `shell()` step |
 | setting `process.env` | `process.env cannot be changed …` | `shell(command, { env })` |
 | `setTimeout`, `setInterval`, `setImmediate` | `setTimeout is not available …` | [`sleep()`](#sleepduration) between steps |
 
 `fetch` and timers written in a workflow file are build errors, in the body and in callbacks, so the workflow fails before a run starts. `--allow-fs`, `--allow-fetch`, `--allow-child-process` and `capabilities` in `codemod.yaml` no longer give callbacks anything: the flags print a deprecation warning, and `codemod.yaml` capabilities are noted when the run starts. `codemod jssg run` and `codemod jssg test` on their own (outside a workflow) still take `--allow-*`.
+
+### Target files
+
+Import `files` from `codemod/files` to read the target or stage a new file. Use it inside a function step, `forEachFile` callback, reducer or JSSG transform, not in the workflow body.
+
+| Method | Returns |
+|---|---|
+| `files.read(path)` | The file's UTF-8 text. Throws if the file is missing or isn't a UTF-8 file. |
+| `files.exists(path)` | `true` if the path exists, otherwise `false`. |
+| `files.list(glob)` | A sorted array of target-relative file paths matching the glob, for example `src/**/*.ts`. |
+| `files.create(path, text)` | Nothing. Stages a new UTF-8 file and creates its parent directories if needed. Throws if the path already exists. |
+
+Paths are relative to the target, or absolute inside it. Paths that leave the target or traverse symlinks throw. Reads see pending changes, including edits and creations from earlier steps in a dry run. New files commit with the step's other edits, appear in the diff, and survive resume without rerunning a finished step.
+
+```ts workflow.ts
+import { files } from "codemod/files";
+import { step } from "codemod/workflow";
+
+export default async function main() {
+  await step("Write source inventory", () => {
+    if (!files.exists("source-files.txt")) {
+      files.create("source-files.txt", files.list("src/**/*.ts").join("\n") + "\n");
+    }
+  });
+  return step("Read source inventory", () => files.read("source-files.txt"));
+}
+```
+
+Standalone `jssg run` and `jssg test` also support `codemod/files` without `--allow-fs`. They keep the flag for transforms that explicitly import `fs`.
 
 ### Using outside variables
 
@@ -252,7 +281,7 @@ A callback (or function step) runs in its own isolate, so the build copies in wh
 
 - **Module-level constants, functions and classes** it uses are copied in.
 - **Local variables of the surrounding function** are passed in as frozen copies when the step starts. They must be JSON values.
-- **Imports** it uses are available: `codemod/ast-grep`, `codemod/runtime`, `codemod/assess`, Node-style modules (`path`, `fs` to read the target, ...), npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
+- **Imports** it uses are available: `codemod/ast-grep`, `codemod/runtime`, `codemod/assess`, `codemod/files`, Node-style modules such as `path`, npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
 
 These are build errors, reported with the file, line and column:
 
@@ -367,7 +396,7 @@ parse("tsx", text);                 // the original JSSG form
 The body is the code outside steps and callbacks. It runs again on every resume, and a step's saved result is reused only when the body calls that same step again, so the body has to come out the same each time:
 
 - **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, `codemod/git`, `codemod/assess` (its question builders; `assess()` itself rejects in the body), and npm packages or local files whose imports only reach these. In the QuickJS workflow body, you can import `sep` and `delimiter` by name from `node:path` (or `path`); Node's `path.posix` and `path.win32` are not available there.
-- **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use them inside a step or callback instead.
+- **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use `codemod/files` in a callback instead of importing `fs`.
 - **`Date`, `Math.random`, `crypto.randomUUID` and `performance.now` are replay-safe.** Random numbers come from a generator seeded by the run, and the clock starts at the run's start time and moves only when a step finishes, to the time recorded for it.
 - **`console.log`** goes to the run's output.
 

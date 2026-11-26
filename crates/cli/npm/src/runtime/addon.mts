@@ -83,6 +83,14 @@ export interface FileEffects {
   effects: import("./orchestrator.mts").FileEffect[];
 }
 
+export interface NativeFiles {
+  read(path: string): string;
+  exists(path: string): boolean;
+  list(glob: string): string[];
+  create(path: string, text: string): void;
+  created(): [path: string, text: string][];
+}
+
 /** One run in the engine: `Run` in crates/node/src/run.rs. */
 export interface NativeRun {
   readonly target: string;
@@ -121,7 +129,9 @@ export interface NativeRun {
     position: number,
     label: string,
     files: string,
+    created: string,
   ): Promise<{ changes: Json; failures: { path: string; error: string }[]; assessed?: Json }>;
+  targetFiles(): NativeFiles;
   /** Answer an `assess()` call of the step at `position`: `{ ok, value | error }` as JSON. */
   assess(position: number, request: string): Promise<string>;
   /** Events since the last call. */

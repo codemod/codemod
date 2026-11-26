@@ -21,7 +21,7 @@ npx codemod@alpha @org/my-1x-package --target .
 npx codemod@alpha workflow run -w ./my-1x-package --target .
 ```
 
-The CLI translates the workflow in memory and runs it with 1.x compatibility for transform metrics, workflow state and read-only `fs` inside the target. It does not rewrite the package. Use `workflow upgrade` only when you want to convert the source to `workflow.ts`.
+The CLI translates the workflow in memory and runs it with 1.x compatibility for transform metrics, workflow state and target-local `fs` reads and file creation. It does not rewrite the package. Use `workflow upgrade` only when you want to convert the source to `workflow.ts`.
 
 A few 1.x features run differently. The full list is in [What behaves differently](/community/workflows/migrate#what-behaves-differently). The ones you are most likely to notice:
 

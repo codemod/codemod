@@ -891,7 +891,7 @@ export default async function main() {
 }
 
 #[test]
-fn transforms_that_take_options_get_them_and_capabilities_stay_on_the_selector() {
+fn upgraded_transforms_get_options_but_not_capabilities() {
     let yaml = format!(
         r#"version: "1"
 nodes:
@@ -986,7 +986,6 @@ async function removeDependenciesNode(params: Params, target: string) {
         include: ["**/package.json"],
         exclude: ["**/node_modules/**"],
         language: "typescript",
-        capabilities: ["child_process", "fs"],
       },
       async (file) => {
         const out = await removeDependenciesTransform(parse(file), {

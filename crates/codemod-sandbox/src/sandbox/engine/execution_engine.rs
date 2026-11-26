@@ -512,6 +512,18 @@ where
             pending: options.pending_files.clone(),
             ..JssgFileChanges::default()
         };
+        let files_pending = options.pending_files.clone().unwrap_or_else(|| {
+            let file = dunce::canonicalize(options.file_path).unwrap_or_else(|_| options.file_path.to_path_buf());
+            let content = options.content.to_string();
+            super::PendingFiles::with_base(move |path| (path == file).then(|| Ok(content.clone())))
+        });
+        ctx.store_userdata(super::target_files::TargetFiles::new(
+            options.target_directory.to_path_buf(), files_pending,
+        )).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store target files: {e:?}"),
+            },
+        })?;
         ctx.store_userdata(jssg_file_changes.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store JssgFileChanges: {:?}", e),

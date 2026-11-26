@@ -281,12 +281,28 @@ impl Run {
 
     /// Commit what a step's callbacks did to its files. Resolves to `{ changes, failures }`.
     #[napi]
-    pub async fn commit_files(&self, position: u32, label: String, files: String) -> Result<Value> {
+    pub async fn commit_files(
+        &self,
+        position: u32,
+        label: String,
+        files: String,
+        created: String,
+    ) -> Result<Value> {
         let inner = Arc::clone(&self.inner);
         let files: Value = serde_json::from_str(&files).map_err(to_napi)?;
-        off_thread(move || inner.run.commit_files(position.into(), label, files))
-            .await?
-            .map_err(Error::from_reason)
+        let created = serde_json::from_str(&created).map_err(to_napi)?;
+        off_thread(move || {
+            inner
+                .run
+                .commit_files(position.into(), label, files, created)
+        })
+        .await?
+        .map_err(Error::from_reason)
+    }
+
+    #[napi]
+    pub fn target_files(&self) -> NativeFiles {
+        NativeFiles(self.inner.run.target_files())
     }
 
     /// Events since the last call, as the engine reports them.
@@ -315,6 +331,41 @@ impl Run {
             "filesWithErrors": count(&stats.files_with_errors),
         });
         Ok(report)
+    }
+}
+
+#[napi]
+pub struct NativeFiles(codemod_sandbox::sandbox::engine::target_files::TargetFiles);
+
+#[napi]
+impl NativeFiles {
+    #[napi]
+    pub fn read(&self, path: String) -> Result<String> {
+        self.0.read(&path).map_err(Error::from_reason)
+    }
+
+    #[napi]
+    pub fn exists(&self, path: String) -> Result<bool> {
+        self.0.exists(&path).map_err(Error::from_reason)
+    }
+
+    #[napi]
+    pub fn list(&self, glob: String) -> Result<Vec<String>> {
+        self.0.list(&glob).map_err(Error::from_reason)
+    }
+
+    #[napi]
+    pub fn create(&self, path: String, text: String) -> Result<()> {
+        self.0.create(&path, text).map_err(Error::from_reason)
+    }
+
+    #[napi]
+    pub fn created(&self) -> Vec<Vec<String>> {
+        self.0
+            .created()
+            .into_iter()
+            .map(|(path, text)| vec![path, text])
+            .collect()
     }
 }
 

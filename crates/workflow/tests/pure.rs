@@ -100,8 +100,8 @@ fn callbacks_cannot_reach_the_network_processes_or_other_files() {
         ),
         (
             "(await import(\"fs\")).writeFileSync(\"other.txt\", \"x\")",
-            "fs.writeFileSync is not available in workflow callbacks",
-            "file.write()",
+            "fs is not available in 2.0 workflows",
+            "codemod/files",
         ),
         (
             "{ process.env.FOO = \"bar\"; }",
@@ -153,25 +153,27 @@ export default async function main() {
     assert_eq!(h.read("a.txt"), "a\n");
 }
 
-/// Callbacks read the target through a read-only `fs`, without any
-/// capability; outside the target is refused.
+/// Callbacks can read and create target files without a capability.
 #[test]
-fn callbacks_read_the_target_through_a_read_only_fs() {
+fn callbacks_read_and_create_target_files() {
     let h = Harness::new();
     h.write("a.txt", "a\n");
     h.write("data.txt", "data\n");
     let report = h.start(
         r#"
 import { step } from "codemod/workflow";
-import { readFileSync, existsSync } from "fs";
+import { files } from "codemod/files";
 export default async function main({ target }) {
   return step("Read", () => {
     let outside;
-    try { readFileSync("/etc/hosts", "utf8"); outside = "read"; } catch (error) { outside = error.code; }
+    try { files.read("../outside.txt"); } catch (error) { outside = error.message.includes("inside the target"); }
+    files.create("dir/new.txt", "new\n");
     return {
-      data: readFileSync(`${target}/data.txt`, "utf8").trim(),
-      relative: readFileSync("data.txt", "utf8").trim(),
-      exists: existsSync("a.txt"),
+      data: files.read(`${target}/data.txt`).trim(),
+      relative: files.read("data.txt").trim(),
+      exists: files.exists("a.txt"),
+      listed: files.list("**/*.txt"),
+      created: files.read("dir/new.txt").trim(),
       outside,
     };
   });
@@ -181,8 +183,10 @@ export default async function main({ target }) {
     );
     assert_eq!(
         output(&report).unwrap(),
-        json!({ "data": "data", "relative": "data", "exists": true, "outside": "EACCES" })
+        json!({ "data": "data", "relative": "data", "exists": true, "outside": true,
+            "created": "new", "listed": ["a.txt", "data.txt", "dir/new.txt"] })
     );
+    assert_eq!(h.read("dir/new.txt"), "new\n");
 }
 
 /// Capabilities a selector asks for are not given: the step's log says so,
@@ -211,10 +215,7 @@ export default async function main({ target }) {
         Value::Null,
     );
     let error = output(&report).unwrap_err();
-    assert!(
-        error.contains("fs.writeFileSync is not available"),
-        "{error}"
-    );
+    assert!(error.contains("codemod/files"), "{error}");
     assert!(!h.exists("b.txt"));
     let logged = h.events.take().into_iter().any(|event| {
         matches!(event, Event::StepLog { line, .. } if line.contains("capabilities (fs, fetch) are no longer given to callbacks"))

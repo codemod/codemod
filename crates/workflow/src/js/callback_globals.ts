@@ -2,8 +2,8 @@
 //
 // Callbacks are pure: what they do to the world goes through declared steps,
 // which the run records and replays. So the network, timers and changes to
-// the environment fail here with the step to use instead. `fs` is read-only
-// and limited to the target (the engine installs it that way), and
+// the environment fail here with the step to use instead. `codemod/files`
+// is limited to the target, and
 // `child_process` is a module of such errors (`child_process.ts`).
 
 import { unavailable } from "codemod-internal:orchestrator";

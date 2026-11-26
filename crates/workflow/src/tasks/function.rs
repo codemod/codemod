@@ -142,7 +142,7 @@ pub(crate) fn side_effects(sandbox: &Worker) -> (Option<String>, Vec<JssgFileCha
         .map(|(path, original, content)| JssgFileChange {
             rename_to: renames.remove(&path),
             path,
-            original,
+            original: Some(original),
             content,
         })
         .collect();
@@ -156,12 +156,27 @@ pub(crate) fn side_effects(sandbox: &Worker) -> (Option<String>, Vec<JssgFileCha
         if let Some(text) = text {
             changes.push(JssgFileChange {
                 path,
-                original: text.clone(),
+                original: Some(text.clone()),
                 content: text,
                 rename_to: Some(to),
             });
         }
     }
+    changes.extend(created_files(sandbox));
     changes.sort_by(|a, b| a.path.cmp(&b.path));
     (failure, changes)
+}
+
+pub(crate) fn created_files(sandbox: &Worker) -> Vec<JssgFileChange> {
+    sandbox
+        .pending_files()
+        .into_iter()
+        .flat_map(|pending| pending.created())
+        .map(|(path, content)| JssgFileChange {
+            path,
+            original: None,
+            content,
+            rename_to: None,
+        })
+        .collect()
 }

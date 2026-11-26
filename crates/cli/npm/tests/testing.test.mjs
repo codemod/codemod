@@ -1037,6 +1037,38 @@ test("node: runWorkflow takes the workflow module itself", HOSTS.node, async () 
   assertTree(result, { "a.mts": "new\n" });
 });
 
+for (const host of ["node", "quickjs"]) {
+  test(`${host}: target files can be created in callbacks and reducers`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { files } from "codemod/files";
+import { forEachFile, step } from "codemod/workflow";
+export default async function main() {
+  await step("Copy", forEachFile("source.txt", (file) => {
+    files.create("generated/copy.txt", files.read(file.path));
+    return file.path;
+  }, (_, path) => {
+    files.create("generated/source.txt", path);
+    return path;
+  }, ""));
+  return step("List", () => files.list("generated/*.txt").map((path) => files.read(path)));
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await run(path, { target: { "source.txt": "hello" }, host });
+    assert.equal(result.status, "succeeded", result.error);
+    assert.deepEqual(result.output, ["hello", "source.txt"]);
+    assertTree(result, {
+      "source.txt": "hello",
+      "generated/copy.txt": "hello",
+      "generated/source.txt": "source.txt",
+    });
+  });
+}
+
 test(
   "node: this package and the addon were built from the same orchestrator",
   HOSTS.node,
@@ -1196,17 +1228,14 @@ test("node: workers stay within the reducer's window", HOSTS.node, async () => {
     scratch({
       "workflow.ts": `
 import { step, forEachFile } from "codemod/workflow";
-import { readFile } from "node:fs/promises";
-export default async function main({ target }: { target: string }) {
+export default async function main() {
   // On Node.js, callbacks and the reducer share globalThis.
   const { gap } = await step("Fold", forEachFile("*.txt", () => {
     const shared = globalThis as { started?: number };
     shared.started = (shared.started ?? 0) + 1;
     return 1;
   }, async (acc: { folded: number; gap: number }) => {
-    // Waits a turn of the event loop, so workers get ahead. (Callbacks have
-    // no timers; reading a file is allowed.)
-    await readFile(target + "/f0000.txt");
+    await Promise.resolve();
     const started = (globalThis as { started?: number }).started ?? 0;
     return { folded: acc.folded + 1, gap: Math.max(acc.gap, started - acc.folded - 1) };
   }, { folded: 0, gap: 0 })).then((result) => result.reduced);
@@ -1252,7 +1281,7 @@ export default async function main() {
 });
 
 test(
-  "node: child_process and fs writes in a forEachFile callback fail the file",
+  "node: child_process and dynamic fs imports in a forEachFile callback fail the file",
   HOSTS.node,
   async () => {
     const path = join(
@@ -1260,13 +1289,12 @@ test(
         "workflow.ts": `
 import { step, forEachFile } from "codemod/workflow";
 import { execSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
-export default async function main({ target }: { target: string }) {
-  return await step("Files", forEachFile("*.ts", (file) => {
-    // Reading stays allowed.
-    readFileSync(target + "/" + file.path, "utf8");
+import { files } from "codemod/files";
+export default async function main() {
+  return await step("Files", forEachFile("*.ts", async (file) => {
+    files.read(file.path);
     if (file.path === "exec.ts") execSync("echo hi");
-    if (file.path === "write.ts") writeFileSync(target + "/side.txt", "x");
+    if (file.path === "write.ts") await import("node:fs");
     file.write("changed\\n");
   }));
 }
@@ -1286,7 +1314,7 @@ export default async function main({ target }: { target: string }) {
       /child_process\.execSync is not available in workflow callbacks/,
     );
     assert.match(failures[0].error, /shell\("command"\)/);
-    assert.match(failures[1].error, /fs\.writeFileSync is not available in workflow callbacks/);
+    assert.match(failures[1].error, /codemod\/files/);
     assert.deepEqual(result.files, { "exec.ts": "a\n", "write.ts": "b\n", "ok.ts": "changed\n" });
   },
 );

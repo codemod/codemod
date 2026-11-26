@@ -120,13 +120,13 @@ impl Overlay {
         // Files that move away first, so a file moved onto the path another
         // one left keeps its new text.
         for plan in planned {
-            if !matches!(plan.change, Change::Edit(_)) {
+            if matches!(plan.change, Change::Delete | Change::Move { .. }) {
                 files.insert(plan.path.clone(), None);
             }
         }
         for plan in planned {
             match &plan.change {
-                Change::Edit(text) => {
+                Change::Edit(text) | Change::Create(text) => {
                     files.insert(plan.path.clone(), Some(text.clone()));
                 }
                 Change::Move { to, text } => {
@@ -219,12 +219,23 @@ impl Overlay {
     /// changed starts from their text.
     pub fn pending_files(self: &std::sync::Arc<Self>) -> PendingFiles {
         let overlay = std::sync::Arc::clone(self);
+        let paths = std::sync::Arc::clone(self);
         PendingFiles::with_base(move |path| {
             let relative = overlay.relative(path)?;
             match overlay.get(&relative)? {
                 Some(text) => Some(Ok(text)),
                 None => Some(Err(gone(&relative))),
             }
+        })
+        .with_base_paths(move || {
+            paths
+                .files()
+                .iter()
+                .filter_map(|(path, text)| {
+                    let full = under(&paths.root, path);
+                    (text.is_some() && !full.exists()).then_some(full)
+                })
+                .collect()
         })
     }
 

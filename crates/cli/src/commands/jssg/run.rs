@@ -411,26 +411,38 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     // Every file is done: apply what is left (everything, in a dry run).
     let mut renames = renames.into_inner().unwrap();
-    let mut changes: Vec<(PathBuf, String, String, Option<PathBuf>)> = pending
+    type Change = (PathBuf, Option<String>, String, Option<PathBuf>);
+    let mut changes: Vec<Change> = pending
         .changed()
         .into_iter()
         .map(|(path, original, content)| match renames.remove(&path) {
-            Some((given, to)) => (given, original, content, Some(to)),
-            None => (path, original, content, None),
+            Some((given, to)) => (given, Some(original), content, Some(to)),
+            None => (path, Some(original), content, None),
         })
         .collect();
     // Files whose new text is written already, or that were only renamed.
     for (given, to) in renames.into_values() {
         if let Ok(text) = std::fs::read_to_string(&given) {
-            changes.push((given, text.clone(), text, Some(to)));
+            changes.push((given, Some(text.clone()), text, Some(to)));
         }
     }
+    changes.extend(
+        pending
+            .created()
+            .into_iter()
+            .map(|(path, content)| (path, None, content, None)),
+    );
     changes.sort();
 
     for (change_path, original, content, rename_to) in &changes {
         let write_path = rename_to.as_deref().unwrap_or(change_path);
         if !config.dry_run {
-            if let Err(e) = std::fs::write(write_path, content) {
+            let written = if original.is_none() {
+                target_file_create(write_path, content)
+            } else {
+                std::fs::write(write_path, content)
+            };
+            if let Err(e) = written {
                 execution_errors.lock().unwrap().push(format!(
                     "Failed to write modified file {}: {}",
                     write_path.display(),
@@ -471,7 +483,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             }
             let diff = generate_unified_diff(
                 change_path,
-                original,
+                original.as_deref().unwrap_or_default(),
                 content,
                 &diff_config,
                 DiffMetadata::default(),
@@ -486,7 +498,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 };
                 let plain_diff = generate_unified_diff(
                     change_path,
-                    original,
+                    original.as_deref().unwrap_or_default(),
                     content,
                     &plain_config,
                     DiffMetadata {
@@ -598,6 +610,18 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .await;
 
     Ok(())
+}
+
+fn target_file_create(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?
+        .write_all(content.as_bytes())
 }
 
 #[cfg(test)]

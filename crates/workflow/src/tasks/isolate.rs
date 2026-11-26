@@ -5,8 +5,8 @@
 //! `codemod-internal:dependencies` (`registry`, `semver`, the dependency
 //! graph) backed by the run's package registry.
 //!
-//! Callbacks are pure: they change the current file through the file API
-//! and read the target through a read-only `fs`; the network, processes,
+//! Callbacks change the target through the `file` and `files` APIs;
+//! the network, processes,
 //! other writes, environment changes and timers fail with the declared step
 //! to use instead (`http()`, `shell()`, `sleep()`). Capabilities granted to
 //! the run (`--allow-*`, codemod.yaml) no longer reach them.
@@ -36,11 +36,6 @@ const ISOLATE_GIT_MODULE: &str = "codemod-internal:isolate-git";
 pub(crate) const ASSESS_MODULE: &str = "codemod-internal:assess";
 /// The globals of steps' and callbacks' isolates (`js/callback_globals.ts`).
 const CALLBACK_GLOBALS_MODULE: &str = "codemod-internal:callback-globals";
-
-/// What a write through `fs` in a callback says; `{name}` is the function
-/// called. The same words as `unavailable("fs.…", "callback")` in
-/// `js/orchestrator.ts`, which the Node.js host throws.
-pub(crate) const READ_ONLY_FS: &str = "{name} is not available in workflow callbacks (function steps, forEachFile callbacks and reducers): change the current file with file.write(), file.rename() or file.delete(), and anything else with a step such as shell() or agent()";
 
 /// What the YAML translation's callbacks run jssg transforms with.
 pub(crate) const JSSG_COMPAT_MODULE: &str = "codemod-internal:jssg-compat";
@@ -112,7 +107,7 @@ impl StepIsolates {
                 .overlay
                 .as_ref()
                 .map(super::overlay::Overlay::pending_files),
-            read_only_fs: Some(READ_ONLY_FS.to_string()),
+            legacy_fs: self.v1,
         }
     }
 }
@@ -208,7 +203,7 @@ pub(crate) fn ignore_capabilities(
     }
     if !requested.is_empty() {
         task.log(format!(
-            "capabilities ({}) are no longer given to callbacks: they read the target through a read-only fs; use step(http(...)) for the network and step(shell(...)) for commands",
+            "capabilities ({}) are no longer given to callbacks: use codemod/files for the target, step(http(...)) for the network and step(shell(...)) for commands",
             requested.join(", ")
         ));
     }

@@ -31,6 +31,10 @@
       "types": "./types/deps.d.ts",
       "default": "./runtime/deps.mjs"
     },
+    "./files": {
+      "types": "./types/files.d.ts",
+      "default": "./runtime/files.mjs"
+    },
     "./git": {
       "types": "./types/git.d.ts",
       "default": "./runtime/git.mjs"

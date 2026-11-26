@@ -54,7 +54,7 @@ impl CodemodModuleResolver {
     /// The modules every transform gets, and `llm` when `llm` is set (it
     /// makes network requests, so it needs the fetch capability).
     pub fn offering(llm: bool) -> Self {
-        let mut modules = vec!["ast-grep", "runtime"];
+        let mut modules = vec!["ast-grep", "runtime", "files"];
         if llm {
             modules.push("llm");
         }
@@ -118,6 +118,10 @@ macro_rules! with_codemod_modules {
     ($loader:expr, llm: $llm:expr) => {{
         let llm: bool = $llm;
         let mut loader = $loader
+            .with_module(
+                "codemod/files",
+                $crate::sandbox::engine::target_files::FilesModule,
+            )
             .with_module("codemod/ast-grep", $crate::AstGrepModule)
             .with_module(
                 "codemod/runtime",

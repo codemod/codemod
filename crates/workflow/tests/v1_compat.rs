@@ -331,10 +331,9 @@ nodes:
 }
 
 /// 1.x gave transforms an `fs` over the target without the capability.
-/// They keep reading through it; changing files through it is refused, as
-/// callbacks change files only by what they return.
+/// They keep reading and creating target files through the compatibility shim.
 #[test]
-fn transforms_read_the_target_with_fs_but_cannot_write() {
+fn transforms_read_and_create_target_files_with_legacy_fs() {
     let h = Harness::new();
     h.write("src/a.ts", "OLD\n");
     h.write("names.json", "{\"OLD\":\"NEW\"}");
@@ -347,7 +346,8 @@ export default async function transform(root: any, options: any) {
   const names = JSON.parse(fs.readFileSync(options.targetDir + "/names.json", "utf8"));
   const again = JSON.parse(await readFile("names.json", "utf8"));
   if (again.OLD !== names.OLD) throw new Error("relative read differs");
-  if (fs.existsSync("/etc/hosts")) throw new Error("read outside the target");
+  try { fs.existsSync("../outside"); throw new Error("escaped the target"); }
+  catch (error) { if (!error.message.includes("inside the target")) throw error; }
   return root.root().text().replace("OLD", names.OLD);
 }
 "#,
@@ -380,15 +380,11 @@ nodes:
           include: ["src/**/*.ts"]
 "#,
     );
-    let error = output(&h.start_loaded(workflow, Value::Null, false)).unwrap_err();
+    output(&h.start_loaded(workflow, Value::Null, false)).unwrap();
     assert_eq!(h.read("src/a.ts"), "NEW\n");
-    assert!(
-        error.contains("fs.writeFileSync is not available in workflow callbacks"),
-        "{error}"
-    );
-    assert!(!h.exists("other.txt"));
+    assert_eq!(h.read("other.txt"), "x");
 
-    // TypeScript workflows use the same read-only target fs as YAML.
+    // TypeScript workflows do not get the compatibility shim.
     let h = Harness::new();
     h.write("a.ts", "x\n");
     h.bundle_file(
@@ -407,5 +403,5 @@ export default async function main() {
 "#,
         Value::Null,
     );
-    assert_eq!(output(&report).unwrap(), json!([true]));
+    assert!(output(&report).unwrap_err().contains("codemod/files"));
 }

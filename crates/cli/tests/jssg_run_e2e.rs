@@ -162,6 +162,31 @@ fn jssg_run_drops_a_failed_files_changes_to_other_files() {
     );
 }
 
+#[test]
+fn standalone_transforms_can_create_target_files_without_allow_fs() {
+    let fixture = Fixture::new(&[]);
+    write(
+        fixture.package.path(),
+        "codemod.ts",
+        r#"
+import { files } from "codemod/files";
+export default function transform(root) {
+  if (root.filename().endsWith("index.ts")) {
+    files.create("generated/index.txt", files.read("shared/index.ts"));
+  }
+  return null;
+}
+"#,
+    );
+    let dry = fixture.run(&["--dry-run"]);
+    assert!(dry.status.success(), "{}", text(&dry));
+    assert!(text(&dry).contains("generated/index.txt"));
+    assert!(!fixture.target.path().join("generated").exists());
+    let run = fixture.run(&[]);
+    assert!(run.status.success(), "{}", text(&run));
+    assert_eq!(fixture.read("generated/index.txt"), "export {};\n");
+}
+
 /// A file that can't be written fails the run, and says so once.
 #[cfg(unix)]
 #[test]
