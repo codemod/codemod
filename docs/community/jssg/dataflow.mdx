@@ -40,10 +40,10 @@ import { step, forEachFile } from "codemod/workflow";
 import { callGraph, parse } from "codemod/ast-grep";
 
 export default async function main() {
-  const { callers } = callGraph("typescript");
   await step(
     "Await loadConfig",
     forEachFile({ include: "src/**/*.ts", language: "typescript" }, (file) => {
+      const { callers } = callGraph("typescript");
       const fn = parse(file).root().find("function loadConfig() { $$$ }");
       for (const caller of (fn && callers.get(fn)) ?? []) {
         // caller.site is the call, caller.node the function that makes it
@@ -457,7 +457,9 @@ const dead = exported.filter((fn) => !live.has(fn));
 ### Across steps: nodes are keys
 
 A step's result is JSON, so a node a step returns is its key, and a lookup or a crawl's result is
-its edges with keys for nodes. Anywhere an analysis takes a node (`get()`, `crawl()`'s start and
+its edges with keys for nodes. Values a callback captures from `main` cross the same way. A
+built-in lookup (`callGraph(lang).callers` and the like) answers node by node in the step that asks,
+so it can't be returned or captured: ask for it inside the step or callback that uses it. Anywhere an analysis takes a node (`get()`, `crawl()`'s start and
 `stopAt`, `lookup()`'s edges), its key works too. `lookup(result)` makes a returned lookup or crawl
 result a lookup again:
 

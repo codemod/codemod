@@ -1196,7 +1196,7 @@ export function createRuntime(host: Host) {
   /** Captured values of an extracted callback; none for callbacks run in place. */
   function capturesOf(callback: Extracted): Json | undefined {
     if (typeof callback.captures !== "function") return undefined;
-    const captures = callback.captures();
+    const captures = plainCapture(callback.captures(), "captures");
     checkJson(captures, "captures");
     return captures;
   }
@@ -1496,6 +1496,41 @@ export function fileHandle(
 
 function messageOf(error: unknown): string {
   return isRecord(error) && "message" in error ? String(error.message) : String(error);
+}
+
+/**
+ * A captured value as the callback gets it: what a step's result would be.
+ * Class instances with `toJSON` become plain (a node its key, a lookup or a
+ * crawl's result its edges, which `lookup(value)` makes a lookup again).
+ * What a `toJSON` throws (a built-in lookup's) names the capture.
+ */
+function plainCapture(value: unknown, path: string): unknown {
+  if (!value || typeof value !== "object" || value instanceof Date) return value;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (Array.isArray(value)) return value.map((item, index) => plainCapture(item, `${path}[${index}]`));
+  if (prototype === Object.prototype || prototype === null) {
+    const plain: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      // defineProperty keeps a `__proto__` key as data.
+      Object.defineProperty(plain, key, {
+        value: plainCapture(item, `${path}.${key}`),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return plain;
+  }
+  if ("toJSON" in value && typeof value.toJSON === "function") {
+    let json: unknown;
+    try {
+      json = value.toJSON();
+    } catch (error) {
+      throw new TypeError(`${path}: ${messageOf(error)}`);
+    }
+    return plainCapture(json, path);
+  }
+  return value;
 }
 
 /** Throw a TypeError naming the first part of `value` that is not JSON. */

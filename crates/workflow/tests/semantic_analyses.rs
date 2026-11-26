@@ -389,3 +389,50 @@ export default async function main() {
     );
     assert_eq!(output(&report).unwrap(), json!(["helper()"]));
 }
+
+#[test]
+fn a_lookup_a_callback_captures_arrives_as_edges_and_is_a_lookup_again() {
+    let report = harness().start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { join, lookup, parse } from "codemod/ast-grep";
+export default async function main() {
+  const exports = lookup(await step(() =>
+    join({
+      language: "typescript",
+      from: { find: "export function $F() { $$$ }", on: "$F" },
+      to: { find: "function $F() { $$$ }", on: "$F" },
+    }),
+  ));
+  const found = await step(forEachFile({ include: "src/a.ts" }, (file) => {
+    const run = parse(file).root().find("export function run() { $$$ }");
+    return lookup(exports).has(run);
+  }));
+  return found.outputs;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([true]));
+}
+
+#[test]
+fn capturing_a_built_in_lookup_fails_and_says_to_ask_for_it_in_the_callback() {
+    let report = harness().start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { callGraph, parse } from "codemod/ast-grep";
+export default async function main() {
+  const { callers } = callGraph("typescript");
+  await step(forEachFile({ include: "src/lib.ts" }, (file) => callers.get(parse(file).root())));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("captures.callers: callers: a built-in lookup answers node by node")
+            && error.contains("`callGraph(lang)` in the later step or inside the callback"),
+        "{error}"
+    );
+}

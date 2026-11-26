@@ -96,6 +96,16 @@ impl Builtin {
             Self::TypeOf => "typeOf",
         }
     }
+
+    /// The analysis that gives this lookup.
+    fn analysis(self) -> &'static str {
+        match self {
+            Self::Callers | Self::Callees => "callGraph",
+            Self::Sources | Self::Uses => "dataflow",
+            Self::Definition | Self::References | Self::Imports | Self::Importers => "symbols",
+            Self::TypeOf => "types",
+        }
+    }
 }
 
 /// Edges stored for one node: the node and its edge objects.
@@ -398,9 +408,11 @@ impl<'js> Lookup<'js> {
             return Err(Exception::throw_type(
                 &ctx,
                 &format!(
-                    "{}: a built-in lookup can't be a step's result; it answers node by node \
-                     in the step that asks. Ask for it again in the later step.",
-                    kind.name()
+                    "{}: a built-in lookup answers node by node where it is asked, so it can't \
+                     be a step's result or a value a callback captures. Ask for it where it is \
+                     used: `{}(lang)` in the later step or inside the callback.",
+                    kind.name(),
+                    kind.analysis()
                 ),
             ));
         }
