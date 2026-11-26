@@ -14,6 +14,7 @@ use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
+use butterflow_core::jssg_runner::JssgFileChange;
 use codemod_deps::Registry;
 use rquickjs::{async_with, CatchResultExt, Function, Module, Promise};
 use serde::Deserialize;
@@ -35,6 +36,7 @@ pub(crate) struct Reduce {
 
 /// One output to fold: the file's path and what its callback returned, as JSON.
 pub(crate) type Entry = (String, String);
+pub(crate) type Reduction = (Value, Vec<JssgFileChange>);
 
 /// What the reducer's thread needs, taken from the task before it starts.
 pub(crate) struct Fold {
@@ -78,7 +80,7 @@ impl Fold {
     /// `cancel` is the step's flag: a reducer whose promise is still
     /// pending when it is set stops waiting for it, so a step that times out
     /// or is canceled does not hang on a reducer that never settles.
-    pub fn run(self, entries: Receiver<Entry>, cancel: &AtomicBool) -> Result<Value, String> {
+    pub fn run(self, entries: Receiver<Entry>, cancel: &AtomicBool) -> Result<Reduction, String> {
         let Fold {
             options,
             registry,
@@ -88,7 +90,7 @@ impl Fold {
             initial,
             workflow_path,
         } = self;
-        let json = block_on(async move {
+        let (json, created) = block_on(async move {
             let sandbox = isolate::start(options, registry, None).await?;
             let json = async_with!(sandbox.context => |ctx| {
                 let run = async {
@@ -118,13 +120,15 @@ impl Fold {
             .await;
             // A `failStep` the reducer caught still fails the step.
             let failure = sandbox.take_side_effects().failure;
+            let created = super::function::created_files(&sandbox);
             sandbox.shutdown(SHUTDOWN_GRACE).await;
             if let Some(failure) = failure {
                 return Err(format!("the reducer failed: {}", failure.message));
             }
-            json
+            Ok((json?, created))
         })?;
-        serde_json::from_str(&json).map_err(|e| e.to_string())
+        let value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        Ok((value, created))
     }
 }
 

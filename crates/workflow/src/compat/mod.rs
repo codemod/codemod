@@ -31,6 +31,7 @@
 //!   `pull_request` and step `commit` become git steps.
 
 pub mod expr;
+mod files;
 mod legacy;
 mod print;
 mod transform_module;

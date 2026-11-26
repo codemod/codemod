@@ -494,7 +494,7 @@ export default async function main() {
 }
 
 #[test]
-fn using_an_effectful_builtin_in_the_body_is_a_build_error() {
+fn using_fs_in_the_body_points_to_files() {
     let h = Harness::new();
     let error = load_error(
         &h,
@@ -506,7 +506,7 @@ export default async function main() {
 "#,
     );
     assert!(
-        error.contains("uses 'readFileSync' from 'fs' outside a step"),
+        error.contains("fs is not available in 2.0 workflows") && error.contains("codemod/files"),
         "{error}"
     );
 }
@@ -586,10 +586,10 @@ export default async function main() {
 }
 "#,
     );
-    assert!(error.contains("the workflow body uses 'reader'"), "{error}");
-    assert!(error.contains("read.js → node:fs"), "{error}");
+    assert!(error.contains("read.js imports 'node:fs'"), "{error}");
+    assert!(error.contains("codemod/files"), "{error}");
 
-    // Inside a step it is fine.
+    // A callback's imports get the same refusal from the isolate.
     let h = Harness::new();
     h.bundle_file(
         "node_modules/reader/package.json",
@@ -599,7 +599,7 @@ export default async function main() {
         "node_modules/reader/index.js",
         "export const read = () => \"ok\";\nimport \"node:fs\";\n",
     );
-    let workflow = h.workflow(
+    let report = h.start(
         r#"
 import { step } from "codemod/workflow";
 import { read } from "reader";
@@ -607,8 +607,9 @@ export default async function main() {
   return step(() => read());
 }
 "#,
+        Value::Null,
     );
-    assert!(workflow.built.body_imports.is_empty());
+    assert!(output(&report).unwrap_err().contains("codemod/files"));
 }
 
 #[test]

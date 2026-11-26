@@ -239,6 +239,80 @@ fn a_dry_run_changes_nothing() {
 }
 
 #[test]
+fn files_create_is_previewed_and_a_finished_create_is_not_repeated_on_resume() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { files } from "codemod/files";
+import { approval, forEachFile, step } from "codemod/workflow";
+export default async function main({ dryRun }) {
+  await step("Edit", forEachFile("src/a.ts", (file) => file.write("edited\n")));
+  await step("Create", () => files.create("generated/inventory.txt", files.read("src/a.ts")));
+  if (!dryRun) await step(approval("Continue?"));
+  return step("Check", () => ({
+    contents: files.read("generated/inventory.txt"),
+    paths: files.list("generated/**/*.txt"),
+  }));
+}
+"#,
+    );
+    let output = fixture.run(&["--format", "jsonl", "--dry-run"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("generated/inventory.txt"));
+    assert!(text(&output).contains("+edited"));
+    assert!(!fixture.target.path().join("generated").exists());
+    assert_eq!(run_finished(&output)["output"]["contents"], "edited\n");
+
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    assert_eq!(fixture.read("generated/inventory.txt"), "edited\n");
+    let id = latest_run_id(&fixture);
+    let output = fixture.codemod(&[
+        "workflow",
+        "resume",
+        "--id",
+        &id,
+        "--approve",
+        "--no-interactive",
+    ]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(fixture.read("generated/inventory.txt"), "edited\n");
+}
+
+#[test]
+fn files_refuses_an_escape_and_workflows_point_fs_imports_to_files() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { files } from "codemod/files";
+import { step } from "codemod/workflow";
+export default () => step(() => files.create("../escape.txt", "outside"));
+"#,
+    );
+    let output = fixture.run(&[]);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("must stay inside the target"),
+        "{}",
+        text(&output)
+    );
+
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { readFileSync } from "node:fs";
+import { step } from "codemod/workflow";
+export default () => step(() => readFileSync("src/a.ts", "utf8"));
+"#,
+    );
+    let output = fixture.run(&[]);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("codemod/files"), "{}", text(&output));
+}
+
+#[test]
 fn a_container_runtime_is_refused_before_anything_runs() {
     let fixture = Fixture::new();
     fixture.package_file(
@@ -278,16 +352,16 @@ nodes:
 }
 
 #[test]
-fn a_legacy_fs_write_points_to_v1_without_running_it() {
+fn an_unsupported_legacy_fs_operation_points_to_v1_without_running_it() {
     let fixture = Fixture::new();
     fixture.package_file("codemod.yaml", YAML_PACKAGE_MANIFEST);
     fixture.package_file("workflow.yaml", YAML);
     fixture.package_file(
         "scripts/codemod.ts",
         r#"
-import { writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 export default function transform(root) {
-  if (root.root().text().startsWith("var")) writeFileSync("extra.txt", "no");
+  if (root.root().text().startsWith("var")) mkdirSync("extra");
   return null;
 }
 "#,
@@ -305,11 +379,11 @@ export default function transform(root) {
     let message = text(&output);
     assert_eq!(output.status.code(), Some(2), "{message}");
     assert!(
-        message.contains("fs.writeFileSync is not available in workflow callbacks"),
+        message.contains("fs.mkdirSync is not available in workflow callbacks"),
         "{message}"
     );
     assert_eq!(message.matches("codemod run --v1").count(), 1, "{message}");
-    assert!(!fixture.target.path().join("extra.txt").exists());
+    assert!(!fixture.target.path().join("extra").exists());
 }
 
 #[test]

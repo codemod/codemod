@@ -8,6 +8,7 @@ const MODULES: Readonly<Record<string, string>> = {
   "codemod:deps": "./deps.mjs",
   "codemod:git": "./git.mjs",
   "codemod:assess": "./assess.mjs",
+  "codemod:files": "./files.mjs",
   "codemod:ast-grep": "./ast-grep.mjs",
   "codemod:runtime": "./runtime.mjs",
   "codemod:llm": "./llm.mjs",

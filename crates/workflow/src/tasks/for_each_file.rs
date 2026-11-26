@@ -20,7 +20,7 @@ use butterflow_core::execution::{self, language_globs};
 use butterflow_core::jssg_runner::{JssgFileChange, SemanticMode};
 use codemod_deps::Registry;
 use codemod_sandbox::sandbox::engine::{
-    ExecutionResult, FileChange, ModifiedResult, PendingFiles, TakenFile, Transaction,
+    ExecutionResult, FileChange, ModifiedResult, PendingFiles, TakenFile,
 };
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::WorkerOptions;
@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 use super::changes::{self, Change, PlannedChange};
 use super::isolate::{self, module_name, StepIsolates};
 use super::overlay::Overlay;
-use super::reduce::{self, FinishOnDrop, Fold, InOrder, Reduce};
+use super::reduce::{self, FinishOnDrop, Fold, InOrder, Reduce, Reduction};
 use super::v1_host::{self, V1Host};
 use super::{block_on, parallel_map, TaskContext, TaskOutcome};
 use crate::run::RunContext;
@@ -153,6 +153,12 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     // A reducer that failed fails the step before anything is written; the
     // files left when it stopped are not failures of their own.
     let reduced = reduced.transpose()?;
+    let reduced = if let Some((value, created)) = reduced {
+        planned.extend(changes::plan(task, &created)?);
+        Some(value)
+    } else {
+        None
+    };
     task.log_failures(&failures);
     every_file_failed(&failures, total)?;
     planned.extend(changes::plan(task, &other_changes)?);
@@ -207,7 +213,7 @@ struct Ran {
     /// (see [`OtherFiles`]).
     other_changes: Vec<JssgFileChange>,
     /// With a reducer: the folded outputs, or why the fold failed.
-    reduced: Option<Result<Value, String>>,
+    reduced: Option<Result<Reduction, String>>,
     /// In a run of a workflow.yaml: what its 1.x transforms set and counted
     /// (see [`V1Host::finish`]).
     v1: Option<Value>,
@@ -300,13 +306,7 @@ fn run_callback(
             let handles: Vec<_> = (0..workers)
                 .map(|_| {
                     let mut options = isolates.worker_options(task, selector.language.clone());
-                    // Only workers that run one file at a time keep what a
-                    // file's transforms change in a transaction of its own;
-                    // other workers' `jssgTransform` changes are refused, and
-                    // must not reach the step's.
-                    if concurrency == 1 {
-                        options.pending_files = Some(other_files.pending.clone());
-                    }
+                    options.pending_files = Some(other_files.pending.clone());
                     let job = Job {
                         options,
                         registry: isolates.registry.clone(),
@@ -481,8 +481,12 @@ pub(crate) struct FileEffects {
 pub(crate) fn commit_effects(
     task: &TaskContext<'_>,
     files: Vec<FileEffects>,
+    created: Vec<(String, String)>,
 ) -> Result<(Value, Vec<Value>), String> {
-    let mut planned = Vec::new();
+    let mut planned: Vec<_> = created
+        .into_iter()
+        .map(|(path, text)| PlannedChange::create(path, text))
+        .collect();
     let mut failures = Vec::new();
     for file in files {
         let path = file.path.clone();
@@ -721,8 +725,8 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                 }
                 let mut attempts = 0;
                 let outcomes = loop {
-                    let transaction = (concurrency == 1).then(|| other_files.pending.begin());
-                    if transaction.is_some() {
+                    let transaction = other_files.pending.begin();
+                    if concurrency == 1 {
                         // The one file the adapter may take for this callback.
                         let selected = &files[indices[0]];
                         slot.lock().unwrap_or_else(|e| e.into_inner()).current =
@@ -748,11 +752,9 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                     // It gave way to another file's transform that was waiting
                     // for a file it held, so what it did is incomplete: drop it
                     // and run it again once that one is done.
-                    if transaction.as_ref().is_some_and(Transaction::aborted) {
+                    if transaction.aborted() {
                         drop(compat);
-                        if let Some(transaction) = transaction {
-                            transaction.give_way();
-                        }
+                        transaction.give_way();
                         attempts += 1;
                         if attempts < RETRIES {
                             continue;
@@ -776,9 +778,9 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                             .collect(),
                         Err(error) => indices.iter().map(|_| Err(error.clone())).collect(),
                     };
-                    match (transaction, outcomes.as_mut_slice()) {
+                    match outcomes.as_mut_slice() {
                         // One file, in its own transaction.
-                        (Some(transaction), [outcome]) => {
+                        [outcome] => {
                             let (keep, renames) = match (outcome.as_mut(), compat) {
                                 (Err(_), _) => (false, Vec::new()),
                                 (Ok(file), Some(compat)) => {
@@ -815,14 +817,21 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                             }
                             transaction.finish(keep);
                         }
-                        _ if !effects.other_files.is_empty() => {
-                            for outcome in &mut outcomes {
-                                if outcome.is_ok() {
-                                    *outcome = Err(NOT_SUPPORTED.to_string());
+                        batch => {
+                            let error = if !effects.other_files.is_empty() || transaction.unsettled() {
+                                Some(NOT_SUPPORTED)
+                            } else if transaction.created_files() && batch.iter().any(Result::is_err) {
+                                Some("a callback in the batch failed; no files.create() changes were kept")
+                            } else {
+                                None
+                            };
+                            if let Some(error) = error {
+                                for outcome in batch.iter_mut().filter(|outcome| outcome.is_ok()) {
+                                    *outcome = Err(error.to_string());
                                 }
                             }
+                            transaction.finish(error.is_none());
                         }
-                        _ => {}
                     }
                     break outcomes;
                 };
@@ -866,7 +875,7 @@ const UNSETTLED: &str =
     "a jssgTransform() call was still running when the transform finished; await it";
 
 /// How many times one file's transform may give way to others (see
-/// [`Transaction::aborted`]) before it fails.
+/// [`codemod_sandbox::sandbox::engine::Transaction::aborted`]) before it fails.
 const RETRIES: usize = 50;
 
 /// What a step's workers share so jssg transforms (run by the YAML
@@ -889,7 +898,7 @@ impl OtherFiles {
             changes.push(JssgFileChange {
                 rename_to: renames.remove(&path),
                 path,
-                original,
+                original: Some(original),
                 content,
             });
         }
@@ -902,12 +911,23 @@ impl OtherFiles {
             if let Ok(text) = text {
                 changes.push(JssgFileChange {
                     path,
-                    original: text.clone(),
+                    original: Some(text.clone()),
                     content: text,
                     rename_to: Some(to),
                 });
             }
         }
+        changes.extend(
+            self.pending
+                .created()
+                .into_iter()
+                .map(|(path, content)| JssgFileChange {
+                    rename_to: None,
+                    path,
+                    original: None,
+                    content,
+                }),
+        );
         changes
     }
 }

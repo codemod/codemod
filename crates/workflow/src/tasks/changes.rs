@@ -16,6 +16,7 @@ use super::{parallel_map, TaskContext};
 pub(crate) enum Change {
     /// The file stays where it is, with this text.
     Edit(String),
+    Create(String),
     /// The file moves to `to` (relative to the target), with this text.
     Move {
         to: String,
@@ -34,6 +35,14 @@ pub(crate) struct PlannedChange {
 }
 
 impl PlannedChange {
+    pub fn create(path: String, text: String) -> Self {
+        Self {
+            path,
+            original: String::new(),
+            change: Change::Create(text),
+        }
+    }
+
     pub fn edit(path: String, original: String, text: String) -> Self {
         Self {
             path,
@@ -171,12 +180,14 @@ pub(crate) fn commit(
             .iter()
             .filter_map(|plan| match &plan.change {
                 Change::Move { to, .. } => Some(to.as_str()),
+                Change::Create(_) => Some(plan.path.as_str()),
                 _ => None,
             })
             .collect();
         overlay.check_destinations(&destinations)?;
     }
     let unchanged = parallel_map(&planned, |plan| match overlay {
+        _ if matches!(plan.change, Change::Create(_)) => !exists(&plan.path),
         Some(overlay) => overlay
             .read(&plan.path, &target.join(&plan.path))
             .is_ok_and(|now| now == plan.original),
@@ -222,6 +233,10 @@ pub(crate) fn commit(
             Change::Edit(text) if *text != plan.original => {
                 written.push(plan.path.clone());
                 diffs.push((&plan.path, &plan.original, text));
+            }
+            Change::Create(text) => {
+                written.push(plan.path.clone());
+                diffs.push((&plan.path, "", text));
             }
             Change::Edit(_) => {}
         }
@@ -306,7 +321,7 @@ fn check_conflicts(
 ) -> Result<(), String> {
     let vacated: HashSet<&str> = planned
         .iter()
-        .filter(|p| !matches!(p.change, Change::Edit(_)))
+        .filter(|p| matches!(p.change, Change::Delete | Change::Move { .. }))
         .map(|p| p.path.as_str())
         .collect();
     let planned_paths: HashSet<&str> = planned.iter().map(|p| p.path.as_str()).collect();
@@ -413,7 +428,7 @@ fn apply_steps(
     for plan in planned {
         let (to, text) = match &plan.change {
             Change::Edit(text) if *text == plan.original => continue,
-            Change::Edit(text) => (plan.path.as_str(), text),
+            Change::Edit(text) | Change::Create(text) => (plan.path.as_str(), text),
             Change::Move { to, text } => (to.as_str(), text),
             Change::Delete => continue,
         };
@@ -439,6 +454,19 @@ fn apply_steps(
         } else {
             originals.get(to).copied().filter(|_| full.exists())
         };
+        if matches!(plan.change, Change::Create(_)) {
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&full)
+                .map_err(|e| format!("{}: {e}", full.display()))?;
+            undo.push(Undo::Remove(full.clone()));
+            file.write_all(text.as_bytes())
+                .map_err(|e| format!("{}: {e}", full.display()))?;
+            rewritten.insert(to);
+            continue;
+        }
         fs::write(&full, text).map_err(|e| format!("{}: {e}", full.display()))?;
         undo.push(match before {
             Some(original) => Undo::Restore(full, original.to_string()),
@@ -447,7 +475,9 @@ fn apply_steps(
         rewritten.insert(to);
     }
     for plan in planned {
-        if matches!(plan.change, Change::Edit(_)) || rewritten.contains(plan.path.as_str()) {
+        if matches!(plan.change, Change::Edit(_) | Change::Create(_))
+            || rewritten.contains(plan.path.as_str())
+        {
             continue;
         }
         let full = target.join(&plan.path);
@@ -518,12 +548,12 @@ pub(crate) fn plan(
                 })
             })
             .transpose()?;
-        planned.push(PlannedChange::moved(
-            path,
-            change.original.clone(),
-            change.content.clone(),
-            rename_to,
-        ));
+        planned.push(match &change.original {
+            Some(original) => {
+                PlannedChange::moved(path, original.clone(), change.content.clone(), rename_to)
+            }
+            None => PlannedChange::create(rename_to.unwrap_or(path), change.content.clone()),
+        });
     }
     Ok(planned)
 }

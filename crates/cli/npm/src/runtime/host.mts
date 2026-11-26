@@ -27,7 +27,7 @@
  * native addon; `shard`'s functions run in the engine's isolates.
  *
  * The rules the CLI holds workflow code to hold here too. Function steps,
- * `forEachFile` callbacks and reducers are pure: they get the file API,
+ * `forEachFile` callbacks and reducers use the `file` and `files` APIs,
  * reading files and the analysis APIs, but not `fetch`, `child_process`,
  * writing files (`fs.writeFile`, `fs.mkdir`, ...), changing
  * `process.env`, or timers; use `http()`, `shell()` and `sleep()` steps
@@ -71,7 +71,7 @@ import type {
   Selector,
   StartRequest,
 } from "./orchestrator.mts";
-import { workflowUrl } from "./transforms.mts";
+import { importWorkflow } from "./transforms.mts";
 import { callbackId } from "./workflow.mts";
 
 /**
@@ -381,7 +381,7 @@ function locate(
   }
   // Marked for the load hook, which applies the build's changes to what
   // the engine runs (see transforms.mts).
-  return { path, load: () => import(workflowUrl(path)) };
+  return { path, load: () => importWorkflow(path) as Promise<Partial<WorkflowModule>> };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -563,11 +563,17 @@ async function runInPlace(
   if (!outer) throw new Error("a step started outside its run");
   if (task.task.kind === "function") {
     const step = stepScope(task.position, task.label);
-    const value = await context.run({ ...outer, step }, () => fn());
+    const files = run.targetFiles();
+    const value = await context.run({ ...outer, step, files }, () => fn());
     // A failure reported with failStep() stands even if the code caught it.
     if (step.failure !== undefined) throw new Error(step.failure);
     const result = value === undefined ? null : value;
     checkJson(result, "the step's result");
+    const created = files.created();
+    limit.check();
+    if (created.length) {
+      await run.commitFiles(task.position, task.label, "[]", JSON.stringify(created));
+    }
     return { result };
   }
   if (task.task.kind === "forEachFile") return forEachFile(run, outer, task, fn, limit);
@@ -590,14 +596,16 @@ async function forEachFile(
   const outputs: ({ output: Json } | undefined)[] = Array.from({ length: total });
   const failures: { path: string; error: string }[] = [];
   const effects: FileEffects[] = [];
+  const created: [string, string][] = [];
   const concurrency = selector.concurrency ?? 1;
-  const fold = task.reducer ? inOrderFold(task, outer, step, concurrency) : undefined;
+  const fold = task.reducer ? inOrderFold(task, outer, step, concurrency, created) : undefined;
 
   const one = async (index: number, [path, text]: [path: string, text: string]) => {
     const { file, effects: done, close } = fileHandle(path, text, step.language);
+    const targetFiles = run.targetFiles();
     try {
       step.failure = undefined;
-      const output = await context.run({ ...outer, step }, () => fn(file));
+      const output = await context.run({ ...outer, step, files: targetFiles }, () => fn(file));
       // A failure reported with failFile() stands even if the callback
       // caught it. With files in flight together it cannot be told whose it
       // was, as in the CLI.
@@ -611,6 +619,7 @@ async function forEachFile(
         else outputs[index] = { output };
       }
       if (done.length) effects.push({ path, original: text, effects: done });
+      created.push(...targetFiles.created());
     } catch (error) {
       failures.push({ path, error: describeError(error) });
     } finally {
@@ -653,7 +662,12 @@ async function forEachFile(
   if (limit.expired) throw new CanceledError("the step ran out of time");
 
   effects.sort((a, b) => (a.path < b.path ? -1 : 1));
-  const committed = await run.commitFiles(task.position, task.label, JSON.stringify(effects));
+  const committed = await run.commitFiles(
+    task.position,
+    task.label,
+    JSON.stringify(effects),
+    JSON.stringify(created),
+  );
   const allFailures = [...failures, ...committed.failures].sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
@@ -714,6 +728,7 @@ function inOrderFold(
   outer: RunScope,
   step: StepScope,
   concurrency: number,
+  created: [string, string][],
 ): InOrderFold {
   const reducer = task.reducer as Callback;
   const reduce = task.task.reduce as { initial: Json };
@@ -722,6 +737,7 @@ function inOrderFold(
   const window = Math.max(concurrency * 4, 1024);
   // The reducer's own scope: a failStep() it catches still fails the step.
   const reducing = stepScope(step.position, step.label, step.language);
+  const files = outer.run.targetFiles();
   const waiting: { index: number; go: () => void }[] = [];
   const wake = () => {
     for (let i = waiting.length - 1; i >= 0; i--) {
@@ -747,7 +763,7 @@ function inOrderFold(
       if (!entry) continue;
       try {
         reducing.failure = undefined;
-        folded = await context.run({ ...outer, step: reducing }, () =>
+        folded = await context.run({ ...outer, step: reducing, files }, () =>
           reducer(folded, entry.output, entry.path),
         );
         if (reducing.failure !== undefined) error = { error: new Error(reducing.failure) };
@@ -778,6 +794,7 @@ function inOrderFold(
       if (error) throw new Error(`the reducer failed: ${describeError(error.error)}`);
       const result = folded === undefined ? null : folded;
       checkJson(result, "the reducer's result");
+      created.push(...files.created());
       return result;
     },
   };

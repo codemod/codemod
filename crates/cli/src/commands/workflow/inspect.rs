@@ -43,6 +43,17 @@ pub async fn handler(args: &Command) -> Result<()> {
         codemod_workflow::inspect(&file, &source).map_err(|error| anyhow!("{error}"))?;
     let params = codemod_workflow::params::declared_params(&source);
     let modules = codemod_workflow::params::imported_modules(&source);
+    let files_module = |module: &str| matches!(module, "codemod/files" | "codemod:files");
+    let uses_files = modules.iter().any(|module| files_module(module))
+        || inspection.files.iter().any(|file| {
+            path.parent()
+                .and_then(|dir| std::fs::read_to_string(dir.join(file)).ok())
+                .is_some_and(|source| {
+                    codemod_workflow::params::imported_modules(&source)
+                        .iter()
+                        .any(|module| files_module(module))
+                })
+        });
     let mut requested: Vec<String> = resolve_capabilities(
         ResolveCapabilitiesArgs {
             allow_fs: false,
@@ -81,6 +92,7 @@ pub async fn handler(args: &Command) -> Result<()> {
             "install_skill": calls(&["installSkill"]),
             "wait": calls(&["sleep", "waitForEvent"]),
             "assess": modules.iter().any(|module| matches!(module.as_str(), "codemod/assess" | "codemod:assess")),
+            "files": uses_files,
         },
         "steps": inspection.steps.iter().map(|step| json!({
             "label": step.label,
@@ -122,6 +134,9 @@ fn print_text(described: &Value) {
         }
     }
     let uses = &described["uses"];
+    if uses["files"] == true {
+        println!("Files:     target-only reads and recorded creation (codemod/files)");
+    }
     let reaches: Vec<&str> = [
         ("http", "network (http)"),
         ("shell", "commands (shell)"),
@@ -142,7 +157,7 @@ fn print_text(described: &Value) {
         .unwrap_or_default();
     if !requested.is_empty() {
         println!(
-            "Asks for:  {} (ignored: callbacks no longer get capabilities; use http() and shell() steps)",
+            "Asks for:  {} (ignored: use codemod/files and http() or shell() steps)",
             requested.join(", ")
         );
     }

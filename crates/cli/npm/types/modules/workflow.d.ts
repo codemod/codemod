@@ -59,7 +59,7 @@ declare module "codemod:workflow" {
   //
   // Code inside `step(() => ...)` and `forEachFile(...)` callbacks runs in
   // its own isolate and is pure: it changes the current file through `file`,
-  // reads the target through a read-only `fs`, and analyzes code. The
+  // reads the target and creates files through `codemod/files`, and analyzes code. The
   // network, commands, other writes, `process.env` changes and timers fail
   // there with the step to use instead: `http()`, `shell()`, `agent()`,
   // `sleep()`. The rest of the workflow, the body, runs again on every
@@ -300,7 +300,7 @@ declare module "codemod:workflow" {
     semanticAnalysis?: SemanticAnalysis;
     /**
      * @deprecated Callbacks no longer get capabilities: they read the target
-     * through a read-only `fs` without one, and reach the network and run
+     * through `codemod/files` without one, and reach the network and run
      * commands through `http()` and `shell()` steps. Still accepted; the
      * step's log says it is ignored.
      */

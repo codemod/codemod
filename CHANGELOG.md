@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 The 2.0 alphas are tagged `cli-2.0.0-alpha.N` and published to npm under the `alpha` tag. Each entry below is a summary; the full notes, with before/after code for every breaking change, are in the [workflow v2 changelog](https://docs.codemod.com/community/workflows/changelog). Upgrading from 1.x: see [Upgrade from 1.x](https://docs.codemod.com/community/workflows/upgrade-from-1x).
 
+## [cli-2.0.0-alpha.11] - Unreleased
+
+- *(workflow)* Replace `fs` in 2.0 workflows with `codemod/files` for target-only reads and recorded file creation, with a compatibility adapter for 1.x packages.
+
 ## [cli-2.0.0-alpha.10] - 2026-11-26
 
 ### 💥 Breaking Changes

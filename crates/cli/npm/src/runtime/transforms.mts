@@ -10,10 +10,16 @@
 // "./rules.yaml"`): the hook loads one as a module whose default export is
 // its content, as the CLI's module loader does.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { addon } from "./addon.mts";
+import { context } from "./context.mts";
+
+const readSource = readFileSync;
+const loading = new AsyncLocalStorage<boolean>();
+const runtimeDir = new URL("./", import.meta.url).href;
 
 /** Marks the import of a workflow file the host runs, for the load hook. */
 const WORKFLOW_QUERY = "codemod-workflow";
@@ -31,6 +37,23 @@ interface Loaded {
 export function workflowUrl(path: string): string {
   const url = pathToFileURL(path).href;
   return (globalThis as { Bun?: unknown }).Bun === undefined ? `${url}?${WORKFLOW_QUERY}` : url;
+}
+
+export function importWorkflow(path: string): Promise<unknown> {
+  return loading.run(true, () => import(workflowUrl(path)));
+}
+
+export function refuseWorkflowFs(specifier: string, parent: string | undefined): void {
+  if (
+    (parent && new URL(parent).searchParams.has(WORKFLOW_QUERY)) ||
+    ((loading.getStore() || context.getStore()) && !parent?.startsWith(runtimeDir))
+  ) {
+    if (/^(node:)?fs(\/promises)?$/.test(specifier)) {
+      throw new Error(
+        'fs is not available in 2.0 workflows; use import { files } from "codemod/files" inside a callback',
+      );
+    }
+  }
 }
 
 /** `loaded` with its source rewritten when `url` is a workflow the host imports. */
@@ -61,6 +84,6 @@ export function loadYaml(url: string): { format: "module"; source: string; short
       "this codemod native addon cannot load YAML; reinstall codemod so the addon and the package match",
     );
   }
-  const source = native.yamlModule(readFileSync(fileURLToPath(url), "utf8"));
+  const source = native.yamlModule(readSource(fileURLToPath(url), "utf8"));
   return { format: "module", source, shortCircuit: true };
 }
