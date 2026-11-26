@@ -382,10 +382,13 @@ nodes:
     );
     let error = output(&h.start_loaded(workflow, Value::Null, false)).unwrap_err();
     assert_eq!(h.read("src/a.ts"), "NEW\n");
-    assert!(error.contains("read-only"), "{error}");
+    assert!(
+        error.contains("fs.writeFileSync is not available in workflow callbacks"),
+        "{error}"
+    );
     assert!(!h.exists("other.txt"));
 
-    // A TypeScript workflow's callbacks have no `fs` without the capability.
+    // TypeScript workflows use the same read-only target fs as YAML.
     let h = Harness::new();
     h.write("a.ts", "x\n");
     h.bundle_file(
@@ -398,11 +401,11 @@ import { forEachFile, step } from "codemod/workflow";
 import read from "./scripts/read.ts";
 
 export default async function main() {
-  await step("Read", forEachFile({ include: "a.ts" }, () => read()));
+  const result = await step("Read", forEachFile({ include: "a.ts" }, () => read()));
+  return result.outputs;
 }
 "#,
         Value::Null,
     );
-    let error = output(&report).unwrap_err();
-    assert!(error.contains("'fs'"), "{error}");
+    assert_eq!(output(&report).unwrap(), json!([true]));
 }
