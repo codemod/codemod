@@ -44,6 +44,19 @@ fn no_command_in_non_interactive_mode_prints_next_steps() {
 }
 
 #[test]
+fn unpublish_without_a_terminal_needs_yes() {
+    let output = Command::new(codemod_binary())
+        .args(["unpublish", "@codemod/nope", "--version", "1.0.0"])
+        .env("DISABLE_ANALYTICS", "true")
+        .output()
+        .expect("failed to run codemod unpublish");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("pass --yes to confirm"), "{stderr}");
+}
+
+#[test]
 fn init_without_a_terminal_does_not_prompt() {
     let dir = tempfile::tempdir().unwrap();
     let output = Command::new(codemod_binary())

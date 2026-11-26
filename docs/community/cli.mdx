@@ -1150,8 +1150,12 @@ npx codemod unpublish <PACKAGE> [options]
   Show what would be removed without actually unpublishing.
 </ResponseField>
 
+<ResponseField name="--yes, -y" type="boolean">
+  Unpublish without asking for confirmation. Without a terminal to ask on (in CI, or with input piped in), `unpublish` refuses to run unless you pass it.
+</ResponseField>
+
 <Tip>
-  The CLI always prompts for confirmation when `--version` or `--force` is used. This interactive step cannot be bypassed programmatically.
+  In a terminal, the CLI asks for confirmation when `--version` or `--force` is used, unless you pass `--yes`.
 </Tip>
 
 <Accordion title="Examples">
@@ -1164,6 +1168,9 @@ npx codemod unpublish <PACKAGE> [options]
   
   # Remove all versions (will prompt)
   npx codemod unpublish my-codemod --force
+
+  # Remove a single version from a script or CI job (no prompt)
+  npx codemod unpublish my-codemod --version 0.1.0 --yes
   
   # Unpublish from a custom registry
   npx codemod unpublish my-codemod --force --registry https://registry.example.com

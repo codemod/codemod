@@ -286,9 +286,11 @@ pub fn handler(args: &Command) -> Result<()> {
     let (project_path, project_name, git_repository_url) = if no_interactive {
         let project_path = match args.path.clone() {
             Some(path) => path,
-            None => return Err(anyhow!(
+            None => {
+                return Err(anyhow!(
                 "Path argument is required without a terminal to ask on (or with --no-interactive)"
-            )),
+            ))
+            }
         };
 
         let project_name = match args.name.clone() {
