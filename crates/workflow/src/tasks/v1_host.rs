@@ -19,6 +19,10 @@ use std::time::Duration;
 use rquickjs::{Ctx, Exception, Function, Object};
 use serde_json::{json, Map, Value};
 
+/// By metric name, then by cardinality (as canonical JSON): the cardinality
+/// and its count.
+type Metrics = BTreeMap<String, BTreeMap<String, (Value, f64)>>;
+
 /// A step's shared 1.x state and metrics.
 #[derive(Default)]
 pub(crate) struct V1Host {
@@ -28,9 +32,7 @@ pub(crate) struct V1Host {
     /// `acquireLock` names held now.
     held: Mutex<HashSet<String>>,
     released: Condvar,
-    /// By metric name, then by cardinality (as canonical JSON): the
-    /// cardinality and its count.
-    metrics: Mutex<BTreeMap<String, BTreeMap<String, (Value, f64)>>>,
+    metrics: Mutex<Metrics>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -128,7 +130,7 @@ impl V1Host {
 }
 
 /// A metric's entries as `getEntries()` gives them: whole counts as integers.
-fn entries_of(metrics: &BTreeMap<String, BTreeMap<String, (Value, f64)>>, name: &str) -> Value {
+fn entries_of(metrics: &Metrics, name: &str) -> Value {
     let count = |count: f64| {
         if count.fract() == 0.0 && count.abs() < 9_007_199_254_740_992.0 {
             json!(count as i64)
