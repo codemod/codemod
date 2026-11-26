@@ -2,9 +2,9 @@
 //! methods, matchers and languages as the engine's QuickJS binding
 //! (`codemod-sandbox`'s `sg_node.rs`).
 //!
-//! Like `parse()` in a QuickJS `forEachFile` callback, roots parsed here have
-//! no semantic provider: `definition()` returns `null` and `references()` an
-//! empty array.
+//! Roots parsed here have no semantic provider: `mutations()` and the root's
+//! module queries throw, and so do the analyses (`callGraph()`, `symbols()`,
+//! ...) that `codemod/ast-grep` exports on this host.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -164,14 +164,8 @@ impl SgRoot {
     #[napi]
     pub fn write(&self, _content: String) -> Result<()> {
         Err(Error::from_reason(
-            "root.write() is for files found through definition() or references(), which roots parsed in a forEachFile callback have none of; call file.write(text) for the callback's file",
+            "root.write() is for files found through symbols(lang).definition or .references, which roots parsed in a forEachFile callback have none of; call file.write(text) for the callback's file",
         ))
-    }
-
-    /// Throws: module resolution needs the semantic provider.
-    #[napi]
-    pub fn importers(&self, _target: Option<Unknown<'_>>) -> Result<Vec<Value>> {
-        Err(no_semantic_provider("importers"))
     }
 
     /// Throws: module resolution needs the semantic provider.
@@ -188,24 +182,8 @@ impl SgRoot {
 
     /// Throws: module resolution needs the semantic provider.
     #[napi]
-    pub fn resolve_module(&self, _specifier: String) -> Result<Option<String>> {
-        Err(no_semantic_provider("resolveModule"))
-    }
-
-    /// Throws: module resolution needs the semantic provider.
-    #[napi]
     pub fn resolve_export(&self, _module: String, _name: String) -> Result<Option<Value>> {
         Err(no_semantic_provider("resolveExport"))
-    }
-
-    /// Throws: module resolution needs the semantic provider.
-    #[napi]
-    pub fn specifier_for(
-        &self,
-        _target: Unknown<'_>,
-        _options: Option<Value>,
-    ) -> Result<Option<String>> {
-        Err(no_semantic_provider("specifierFor"))
     }
 }
 
@@ -481,18 +459,6 @@ impl SgNode {
         }
     }
 
-    /// Always `null`: roots parsed in Node have no semantic provider.
-    #[napi]
-    pub fn definition(&self, _options: Option<Value>) -> Option<Value> {
-        None
-    }
-
-    /// Always empty: roots parsed in Node have no semantic provider.
-    #[napi]
-    pub fn references(&self) -> Vec<Value> {
-        Vec::new()
-    }
-
     /// A string naming this node across roots: its file, range and kind.
     #[napi]
     pub fn key(&self) -> String {
@@ -516,52 +482,11 @@ impl SgNode {
             && inner.end <= outer.end
     }
 
-    /// Throws, as `flowsFrom()` does.
-    #[napi]
-    pub fn depends_on(&self, _source: Unknown<'_>, _options: Option<Value>) -> Result<bool> {
-        Err(no_semantic_provider("dependsOn"))
-    }
-
-    /// Throws, as `flowsFrom()` does.
-    #[napi]
-    pub fn reaches(&self, _target: Unknown<'_>, _options: Option<Value>) -> Result<bool> {
-        Err(no_semantic_provider("reaches"))
-    }
-
     /// Throws: roots parsed in Node have no semantic provider, and an empty
-    /// answer would read as "no sources".
-    #[napi]
-    pub fn flows_from(&self, _options: Option<Value>) -> Result<Vec<Value>> {
-        Err(no_semantic_provider("flowsFrom"))
-    }
-
-    /// Throws, as `flowsFrom()` does.
-    #[napi]
-    pub fn flows_to(&self, _options: Option<Value>) -> Result<Vec<Value>> {
-        Err(no_semantic_provider("flowsTo"))
-    }
-
-    /// Throws, as `flowsFrom()` does: an empty answer would read as "calls nothing".
-    #[napi]
-    pub fn callees(&self, _options: Option<Value>) -> Result<Vec<Value>> {
-        Err(no_semantic_provider("callees"))
-    }
-
-    /// Throws, as `flowsFrom()` does: an empty answer would read as "unused".
-    #[napi]
-    pub fn callers(&self, _options: Option<Value>) -> Result<Vec<Value>> {
-        Err(no_semantic_provider("callers"))
-    }
-
-    /// Throws, as `flowsFrom()` does: an empty answer would read as "never changed".
+    /// answer would read as "never changed".
     #[napi]
     pub fn mutations(&self, _options: Option<Value>) -> Result<Vec<Value>> {
         Err(no_semantic_provider("mutations"))
-    }
-
-    #[napi]
-    pub fn type_info(&self) -> Option<String> {
-        None
     }
 }
 

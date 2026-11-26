@@ -1,5 +1,8 @@
-// Imported names must follow barrel re-exports (named, `export *`, renamed,
-// and `import` + `export { x }`) to the original declaration.
+// The definition lookup follows imported names through barrel re-exports
+// (named, `export *`, renamed, and `import` + `export { x }`) to the original
+// declaration, from the import specifier and from a call site alike.
+import { symbols } from "codemod:ast-grep";
+
 const expected = {
   toMoment: {
     file: "packages/shared/src/dates.ts",
@@ -16,9 +19,9 @@ const expected = {
 };
 
 function check(label, def, want) {
-  if (!def) throw new Error(`${label}: definition() returned null`);
+  if (!def) throw new Error(`${label}: definition.get(node) returned no edge`);
   if (def.kind !== "external") throw new Error(`${label}: expected kind external, got ${def.kind}`);
-  const file = def.root.filename().replace(/\\/g, "/");
+  const file = def.node.getRoot().filename().replace(/\\/g, "/");
   if (!file.endsWith(want.file)) throw new Error(`${label}: expected ${want.file}, got ${file}`);
   if (def.node.text() !== want.name) {
     throw new Error(
@@ -31,14 +34,16 @@ function check(label, def, want) {
 }
 
 export default function transform(root) {
+  const { definition } = symbols("typescript");
   const specs = root.root().findAll({ rule: { kind: "import_specifier" } });
   if (specs.length !== 4) throw new Error(`expected 4 import specifiers, got ${specs.length}`);
   for (const spec of specs) {
     const name = spec.field("name");
     const want = expected[name.text()];
-    check(`import ${name.text()}`, name.definition(), want);
+    const fromImport = definition.get(name)?.[0];
+    check(`import ${name.text()}`, fromImport, want);
 
-    // A call site resolves to its import first; following that lands on the declaration.
+    // A call site lands on the declaration too, not on its import.
     const call = root.root().find({
       rule: {
         kind: "identifier",
@@ -47,10 +52,10 @@ export default function transform(root) {
       },
     });
     if (!call) throw new Error(`no call for ${name.text()}`);
-    const local = call.definition();
-    if (!local || local.kind !== "local")
-      throw new Error(`call ${name.text()}: expected local, got ${local && local.kind}`);
-    check(`call ${name.text()} -> import`, local.node.definition(), want);
+    const fromCall = definition.get(call)?.[0];
+    check(`call ${name.text()}`, fromCall, want);
+    if (!fromCall.node.equals(fromImport.node))
+      throw new Error(`call ${name.text()}: landed on another declaration than its import`);
   }
   return null;
 }

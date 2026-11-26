@@ -1,5 +1,8 @@
-// callees() on a JSX element is the component it renders. Fixture: the i18n
-// review's visibility case (Toolbar.tsx), plus member tags (Nav.tsx).
+// The callees lookup on a JSX element answers with the component it renders.
+// Fixture: the i18n review's visibility case (Toolbar.tsx), plus member tags
+// (Nav.tsx).
+import { callGraph } from "codemod:ast-grep";
+
 function expectEqual(actual, expected, label) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
@@ -12,14 +15,11 @@ function basename(path) {
   return path.split("/").pop();
 }
 
-function describe(entries) {
-  return entries.map(
-    (c) =>
-      (c.resolved ? c.name + "@" + basename(c.root.filename()) : "u:" + c.name) +
-      ":" +
-      c.via +
-      ":" +
-      c.depth,
+const { callees } = callGraph("tsx");
+
+function describe(node) {
+  return (callees.get(node) ?? []).map(
+    (e) => e.node.field("name").text() + "@" + basename(e.node.getRoot().filename()) + ":" + e.via,
   );
 }
 
@@ -47,11 +47,11 @@ export default function transform(root) {
       ["opening", opening],
       ["name", name],
     ]) {
-      expectEqual(describe(node.callees()), ["Tooltip@Tooltip.tsx:jsx:1"], label);
+      expectEqual(describe(node), ["Tooltip@Tooltip.tsx:jsx"], label);
     }
     expectEqual(
-      describe(element(root, "TrackedButton").callees()),
-      ["TrackedButton@TrackedButton.tsx:jsx:1"],
+      describe(element(root, "TrackedButton")),
+      ["TrackedButton@TrackedButton.tsx:jsx"],
       "TrackedButton",
     );
 
@@ -59,26 +59,22 @@ export default function transform(root) {
     // inside it, not every call of the enclosing function (console.log,
     // analytics.track are outside the <div>).
     expectEqual(
-      describe(element(root, "div").callees()),
+      describe(element(root, "div")),
       [
-        "TrackedButton@TrackedButton.tsx:jsx:1",
-        "Tooltip@Tooltip.tsx:jsx:1",
-        "statusLabel@status.ts:direct:1",
+        "TrackedButton@TrackedButton.tsx:jsx",
+        "Tooltip@Tooltip.tsx:jsx",
+        "statusLabel@status.ts:direct",
       ],
       "div",
     );
   } else if (file === "Nav.tsx") {
     expectEqual(
-      describe(element(root, "Menu.Item").callees()),
-      ["Item@Menu.tsx:jsx:1"],
+      describe(element(root, "Menu.Item")),
+      ["Item@Menu.tsx:jsx"],
       "Menu.Item",
     );
-    // Can't tell: a member tag on something unknown is reported unresolved.
-    expectEqual(
-      describe(element(root, "props.Slot").callees()),
-      ["u:props.Slot:jsx:1"],
-      "props.Slot",
-    );
+    // Can't tell: a member tag on something unknown has no edge.
+    expectEqual(describe(element(root, "props.Slot")), [], "props.Slot");
   } else {
     throw new Error("unexpected target " + file);
   }

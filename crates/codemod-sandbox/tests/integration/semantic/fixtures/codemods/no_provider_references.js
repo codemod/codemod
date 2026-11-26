@@ -1,20 +1,19 @@
+// Without a semantic provider, the references lookup has no edges:
+// references.get(node) is undefined.
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root) {
+  const { references } = symbols("javascript");
   const node = root.root().find({ rule: { pattern: "x" } });
   if (!node) {
     throw new Error("Expected to find 'x' node");
   }
 
-  const references = node.references();
+  const edges = references.get(node);
 
-  // Should return empty array when no provider is configured
-  if (!Array.isArray(references)) {
-    throw new Error("Expected references to be an array, got: " + typeof references);
-  }
-
-  if (references.length !== 0) {
+  if (edges !== undefined) {
     throw new Error(
-      "Expected empty array when no semantic provider is configured, got length: " +
-        references.length,
+      "Expected undefined when no semantic provider is configured, got: " + JSON.stringify(edges),
     );
   }
 

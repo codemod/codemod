@@ -233,13 +233,16 @@ fn jssg_run_keeps_a_files_change_and_a_later_root_write_to_it() {
         package.path(),
         "codemod.js",
         r#"
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root) {
   const text = root.root().text();
   if (text.includes("import")) {
     const spec = root.root().find({ rule: { kind: "import_specifier" } });
-    const def = spec.field("name").definition();
-    if (!def || def.kind !== "external") throw new Error("no definition");
-    def.root.write(def.root.root().text() + "// written by b_user\n");
+    const [def] = symbols("typescript").definition.get(spec.field("name")) ?? [];
+    const lib = def?.node.getRoot();
+    if (!lib || !lib.filename().endsWith("a_lib.ts")) throw new Error("no definition");
+    lib.write(lib.root().text() + "// written by b_user\n");
     return null;
   }
   const edit = text.replace("OLD", "NEW");

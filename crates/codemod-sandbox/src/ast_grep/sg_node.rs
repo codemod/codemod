@@ -227,7 +227,7 @@ impl<'js> SgRootRjs<'js> {
             if self.inner.current_file_path.is_none() && in_callback_isolate(&ctx) {
                 return Err(Exception::throw_message(
                     &ctx,
-                    "root.write() is for files found through definition() or references(), which roots parsed in a forEachFile callback have none of; call file.write(text) for the callback's file",
+                    "root.write() is for files found through symbols(lang).definition or .references, which roots parsed in a forEachFile callback have none of; call file.write(text) for the callback's file",
                 ));
             }
 
@@ -269,29 +269,6 @@ impl<'js> SgRootRjs<'js> {
             })?;
 
             Ok(())
-        }
-    }
-
-    // Module resolution for codemods that rewrite imports (workspace scope).
-
-    /// The file `specifier` resolves to from this root's file, or null.
-    #[qjs(rename = "resolveModule")]
-    pub fn resolve_module(&self, ctx: Ctx<'js>, specifier: String) -> Result<Value<'js>> {
-        #[cfg(not(feature = "native"))]
-        {
-            let _ = specifier;
-            return Err(Exception::throw_message(
-                &ctx,
-                &not_in_wasm("resolveModule"),
-            ));
-        }
-        #[cfg(feature = "native")]
-        {
-            let (provider, file) = self.module_query(&ctx, "resolveModule")?;
-            let path = provider
-                .resolve_module(&file, &specifier)
-                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
-            or_null(&ctx, path.map(|p| p.to_string_lossy().to_string()))
         }
     }
 
@@ -429,133 +406,6 @@ impl<'js> SgRootRjs<'js> {
             Ok(calls.as_array().is_some_and(|calls| !calls.is_empty()))
         }
     }
-
-    /// Every place in the workspace that refers to `target` (this root's
-    /// file by default; a path or an SgRoot): `import` and `export … from`
-    /// statements, `require()`, `import()`, and test mocks. An array of
-    /// `{ node, root, kind, specifier }` with `unparsed`.
-    #[qjs(rename = "importers")]
-    pub fn importers(&self, ctx: Ctx<'js>, target: Opt<Value<'js>>) -> Result<Value<'js>> {
-        #[cfg(not(feature = "native"))]
-        {
-            let _ = target;
-            return Err(Exception::throw_message(&ctx, &not_in_wasm("importers")));
-        }
-        #[cfg(feature = "native")]
-        {
-            let (provider, file) = self.module_query(&ctx, "importers")?;
-            let target_path = match target.0 {
-                None => file.clone(),
-                Some(value) if value.is_undefined() || value.is_null() => file.clone(),
-                Some(value) => target_path(&ctx, &file, value, "importers")?,
-            };
-            let found = provider
-                .importers(&target_path)
-                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
-
-            let result = rquickjs::Array::new(ctx.clone())?;
-            let mut seen = std::collections::HashSet::new();
-            let mut count = 0;
-            for file in &found.files {
-                let root = if file.file_path == file_path_of(&self.inner) {
-                    Arc::clone(&self.inner)
-                } else {
-                    let lang = Lang::from_str(&detect_language_from_path(&file.file_path))
-                        .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
-                    match SgRootRjs::try_new_with_semantic(
-                        AstGrep::new(file.content.clone(), lang),
-                        Some(file.file_path.to_string_lossy().to_string()),
-                        self.inner.semantic_provider.clone(),
-                        self.inner.current_file_path.clone(),
-                        self.inner.target_directory.as_deref(),
-                    ) {
-                        Ok(root) => root.inner,
-                        Err(_) => continue,
-                    }
-                };
-                for importer in &file.importers {
-                    let Some(mut node) = SgNodeRjs::node_in(&root, importer.range) else {
-                        continue;
-                    };
-                    // A static import is found by its binding: report the statement.
-                    if importer.kind == language_core::ImportKind::Import {
-                        if let Some(statement) = node.ancestor_of_kind("import_statement") {
-                            node = statement;
-                        }
-                    }
-                    if !seen.insert(node.key()) {
-                        continue;
-                    }
-                    let object = rquickjs::Object::new(ctx.clone())?;
-                    object.set("node", node)?;
-                    object.set(
-                        "root",
-                        SgRootRjs {
-                            inner: Arc::clone(&root),
-                            _phantom: PhantomData,
-                        },
-                    )?;
-                    object.set("kind", importer.kind.as_str())?;
-                    object.set("specifier", importer.specifier.clone())?;
-                    result.set(count, object)?;
-                    count += 1;
-                }
-            }
-            let unparsed = rquickjs::Array::new(ctx.clone())?;
-            for (index, file) in found.unparsed.iter().enumerate() {
-                let object = rquickjs::Object::new(ctx.clone())?;
-                object.set("path", file.file_path.to_string_lossy().to_string())?;
-                object.set("message", file.message.clone())?;
-                unparsed.set(index, object)?;
-            }
-            result.as_object().set("unparsed", unparsed)?;
-            result.into_js(&ctx)
-        }
-    }
-
-    /// A specifier this root's file can import `target` with (a path, or a
-    /// root from `definition()`/`resolveExport()`), checked by resolving it;
-    /// null when none reaches it. `options.like` keeps the style of the
-    /// specifier being replaced; `options.prefer` is "relative" or "alias".
-    #[qjs(rename = "specifierFor")]
-    pub fn specifier_for(
-        &self,
-        ctx: Ctx<'js>,
-        target: Value<'js>,
-        options: Opt<Value<'js>>,
-    ) -> Result<Value<'js>> {
-        #[cfg(not(feature = "native"))]
-        {
-            let _ = (target, options);
-            return Err(Exception::throw_message(&ctx, &not_in_wasm("specifierFor")));
-        }
-        #[cfg(feature = "native")]
-        {
-            let (provider, file) = self.module_query(&ctx, "specifierFor")?;
-            let target_path = target_path(&ctx, &file, target, "specifierFor")?;
-            let mut spec_options = language_core::SpecifierOptions::default();
-            if let Some(opts) = query_options(&ctx, options, "specifierFor", &["prefer", "like"])? {
-                spec_options.like = opts.get::<_, Option<String>>("like")?;
-                spec_options.prefer = match opts.get::<_, Option<String>>("prefer")?.as_deref() {
-                    None => None,
-                    Some("relative") => Some(language_core::SpecifierStyle::Relative),
-                    Some("alias") => Some(language_core::SpecifierStyle::Alias),
-                    Some(other) => {
-                        return Err(Exception::throw_range(
-                            &ctx,
-                            &format!(
-                                "specifierFor(options): prefer must be \"relative\" or \"alias\", not \"{other}\""
-                            ),
-                        ))
-                    }
-                };
-            }
-            let specifier = provider
-                .specifier_for(&file, &target_path, &spec_options)
-                .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
-            or_null(&ctx, specifier)
-        }
-    }
 }
 
 #[cfg(feature = "native")]
@@ -586,46 +436,108 @@ impl SgRootRjs<'_> {
     }
 }
 
-/// A query's `target`: a path (relative to `file`'s directory, or absolute)
-/// or an SgRoot with a file.
+/// The file `value` names, for `symbols(lang).resolveModule` and
+/// `.specifierFor`: a path (absolute, or relative to the target directory),
+/// a workflow file (`{ path }`), an SgRoot, or a node in one.
 #[cfg(feature = "native")]
-fn target_path<'js>(
+pub(crate) fn file_of_value<'js>(
     ctx: &Ctx<'js>,
-    file: &std::path::Path,
-    target: Value<'js>,
-    method: &str,
+    value: &Value<'js>,
+    target_directory: Option<&std::path::Path>,
+    what: &str,
 ) -> Result<std::path::PathBuf> {
-    let path = if let Some(path) = target.as_string() {
-        std::path::PathBuf::from(path.to_string()?)
-    } else if let Ok(root) = rquickjs::Class::<SgRootRjs>::from_value(&target) {
-        match root.borrow().inner.filename.clone() {
-            Some(name) => std::path::PathBuf::from(name),
-            None => {
-                return Err(Exception::throw_type(
+    let from_root = |root: &SgRootInner| {
+        root.filename
+            .clone()
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| {
+                Exception::throw_type(
                     ctx,
-                    &format!(
-                        "{method}(target): this root was parsed from a string and has no file"
-                    ),
-                ))
-            }
-        }
+                    &format!("{what}: this root was parsed from a string and has no file"),
+                )
+            })
+    };
+    let path = if let Some(path) = value.as_string() {
+        std::path::PathBuf::from(path.to_string()?)
+    } else if let Ok(root) = rquickjs::Class::<SgRootRjs>::from_value(value) {
+        return from_root(&root.borrow().inner);
+    } else if let Ok(node) = rquickjs::Class::<SgNodeRjs>::from_value(value) {
+        return from_root(&node.borrow().root);
+    } else if let Some(path) = value
+        .as_object()
+        .and_then(|o| o.get::<_, Option<String>>("path").ok().flatten())
+    {
+        std::path::PathBuf::from(path)
     } else {
         return Err(Exception::throw_type(
             ctx,
-            &format!("{method}(target): target must be a file path or an SgRoot"),
+            &format!("{what}: expected a path, a workflow file, an SgRoot or an SgNode"),
         ));
     };
-    Ok(if path.is_relative() {
-        file.parent().unwrap_or(file).join(path)
-    } else {
-        path
-    })
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    match target_directory {
+        Some(dir) => Ok(dir.join(path)),
+        None => Err(Exception::throw_type(
+            ctx,
+            &format!(
+                "{what}: `{}` is relative, and there is no target directory here to resolve it \
+                 against. Pass an absolute path, an SgRoot or an SgNode.",
+                path.display()
+            ),
+        )),
+    }
 }
 
-/// A root's file, canonicalized, for comparing with provider paths.
+/// `symbols(lang).resolveModule(file, specifier)`: the file `specifier`
+/// resolves to from `file`, or null.
 #[cfg(feature = "native")]
-fn file_path_of(root: &SgRootInner) -> std::path::PathBuf {
-    std::path::PathBuf::from(root.canonical_filename())
+pub(crate) fn resolve_module_from<'js>(
+    ctx: &Ctx<'js>,
+    provider: &dyn SemanticProvider,
+    file: &std::path::Path,
+    specifier: &str,
+) -> Result<Value<'js>> {
+    let path = provider
+        .resolve_module(file, specifier)
+        .map_err(|e| Exception::throw_message(ctx, &format!("resolveModule(): {e}")))?;
+    or_null(ctx, path.map(|p| p.to_string_lossy().to_string()))
+}
+
+/// `symbols(lang).specifierFor(file, target, options)`: a specifier `file`
+/// can import `target` with, checked by resolving it; null when none
+/// reaches it. `options.like` keeps the style of the specifier being
+/// replaced; `options.prefer` is "relative" or "alias".
+#[cfg(feature = "native")]
+pub(crate) fn specifier_from<'js>(
+    ctx: &Ctx<'js>,
+    provider: &dyn SemanticProvider,
+    file: &std::path::Path,
+    target: &std::path::Path,
+    options: Opt<Value<'js>>,
+) -> Result<Value<'js>> {
+    let mut spec_options = language_core::SpecifierOptions::default();
+    if let Some(opts) = query_options(ctx, options, "specifierFor", &["prefer", "like"])? {
+        spec_options.like = opts.get::<_, Option<String>>("like")?;
+        spec_options.prefer = match opts.get::<_, Option<String>>("prefer")?.as_deref() {
+            None => None,
+            Some("relative") => Some(language_core::SpecifierStyle::Relative),
+            Some("alias") => Some(language_core::SpecifierStyle::Alias),
+            Some(other) => {
+                return Err(Exception::throw_range(
+                    ctx,
+                    &format!(
+                        "specifierFor(options): prefer must be \"relative\" or \"alias\", not \"{other}\""
+                    ),
+                ))
+            }
+        };
+    }
+    let specifier = provider
+        .specifier_for(file, target, &spec_options)
+        .map_err(|e| Exception::throw_message(ctx, &format!("specifierFor(): {e}")))?;
+    or_null(ctx, specifier)
 }
 
 /// `module` as a path: absolute paths as they are, anything else resolved
@@ -1381,7 +1293,8 @@ impl<'js> SgNodeRjs<'js> {
     /// - No semantic provider is configured
     /// - No symbol is found at this position
     /// - The definition cannot be resolved (e.g., external symbol)
-    #[qjs(rename = "definition")]
+    /// Hidden from JavaScript: `symbols(lang).definition` answers through it.
+    #[qjs(skip)]
     pub fn definition(
         &self,
         ctx: Ctx<'js>,
@@ -1469,7 +1382,8 @@ impl<'js> SgNodeRjs<'js> {
     ///
     /// In lightweight mode, this only searches files that have been processed.
     /// In accurate mode, this searches the entire workspace.
-    #[qjs(rename = "references")]
+    /// Hidden from JavaScript: `symbols(lang).references` answers through it.
+    #[qjs(skip)]
     pub fn references(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
         #[cfg(not(feature = "native"))]
         {
@@ -1643,32 +1557,6 @@ impl<'js> SgNodeRjs<'js> {
             .is_ok_and(|other| other.borrow().key() == self.key())
     }
 
-    /// Whether this node's value is computed from `source`: a node, or a
-    /// predicate over the steps of `flowsFrom(options)`.
-    #[qjs(rename = "dependsOn")]
-    pub fn depends_on(
-        &self,
-        ctx: Ctx<'js>,
-        source: Value<'js>,
-        options: Opt<Value<'js>>,
-    ) -> Result<bool> {
-        let steps = self.data_flow(ctx.clone(), options, true)?;
-        any_step(&ctx, "dependsOn", steps, source)
-    }
-
-    /// Whether this node's value reaches `target`: a node, or a predicate
-    /// over the steps of `flowsTo(options)`.
-    #[qjs(rename = "reaches")]
-    pub fn reaches(
-        &self,
-        ctx: Ctx<'js>,
-        target: Value<'js>,
-        options: Opt<Value<'js>>,
-    ) -> Result<bool> {
-        let steps = self.data_flow(ctx.clone(), options, false)?;
-        any_step(&ctx, "reaches", steps, target)
-    }
-
     /// Follow this node's value backward: what it is computed from.
     ///
     /// Returns an array of steps, nearest first. Each step has the `node` and
@@ -1677,7 +1565,8 @@ impl<'js> SgNodeRjs<'js> {
     /// code (a parameter, an import, a global, a call result).
     ///
     /// Empty when no semantic provider is configured.
-    #[qjs(rename = "flowsFrom")]
+    /// Hidden from JavaScript: `dataflow(lang).sources` answers through it.
+    #[qjs(skip)]
     pub fn flows_from(&self, ctx: Ctx<'js>, options: Opt<Value<'js>>) -> Result<Value<'js>> {
         self.data_flow(ctx, options, true)
     }
@@ -1688,7 +1577,7 @@ impl<'js> SgNodeRjs<'js> {
     /// Returns the same step objects as `flowsFrom()`. A step with
     /// `via: "argument"` is a call that receives the value (`index` is the
     /// argument position).
-    #[qjs(rename = "flowsTo")]
+    #[qjs(skip)]
     pub fn flows_to(&self, ctx: Ctx<'js>, options: Opt<Value<'js>>) -> Result<Value<'js>> {
         self.data_flow(ctx, options, false)
     }
@@ -1698,47 +1587,16 @@ impl<'js> SgNodeRjs<'js> {
     /// Returns an array of `{ node, root, name, resolved, via, depth, callSite }`.
     /// A call whose callee is not a function in the workspace comes back with
     /// `resolved: false` and the call as its `node`.
-    #[qjs(rename = "callees")]
+    #[qjs(skip)]
     pub fn callees(&self, ctx: Ctx<'js>, options: Opt<Value<'js>>) -> Result<Value<'js>> {
         self.call_graph(ctx, options, true)
     }
 
     /// Functions that call the function at this node. Needs workspace scope
     /// to see callers in other files.
-    #[qjs(rename = "callers")]
+    #[qjs(skip)]
     pub fn callers(&self, ctx: Ctx<'js>, options: Opt<Value<'js>>) -> Result<Value<'js>> {
         self.call_graph(ctx, options, false)
-    }
-
-    /// Why the function at this node is called from outside the workspace's
-    /// code: its package exports it (`{ kind: "export", label:
-    /// "@acme/ui#Button" }`), or a rule in the selector's
-    /// `semanticAnalysis.entryPoints` declares it (`{ kind: "http", label:
-    /// "GET app/api/users/[id]/route.ts" }`). `[]` when neither applies.
-    /// `callers()` never includes these. Needs workspace scope.
-    #[qjs(rename = "entryPoints")]
-    pub fn entry_points(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        #[cfg(not(feature = "native"))]
-        {
-            return Err(Exception::throw_message(&ctx, &not_in_wasm("entryPoints")));
-        }
-        #[cfg(feature = "native")]
-        {
-            let (provider, file_path, range) = self
-                .semantic_query("entryPoints")
-                .map_err(|message| Exception::throw_message(&ctx, &message))?;
-            let found = provider.get_entry_points(&file_path, range).map_err(|e| {
-                self.query_error(&ctx, "entryPoints", "Failed to find entry points", e)
-            })?;
-            let result = rquickjs::Array::new(ctx.clone())?;
-            for (index, entry) in found.iter().enumerate() {
-                let object = rquickjs::Object::new(ctx.clone())?;
-                object.set("kind", entry.kind.clone())?;
-                object.set("label", entry.label.clone())?;
-                result.set(index, object)?;
-            }
-            result.into_js(&ctx)
-        }
     }
 
     /// Places that change the variable at this node, or the object it holds.
@@ -1831,7 +1689,7 @@ impl<'js> SgNodeRjs<'js> {
     /// Returns null if:
     /// - No semantic provider is configured
     /// - Types are off, or no expression has exactly this range
-    #[qjs(rename = "typeInfo")]
+    #[qjs(skip)]
     pub fn type_info(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
         #[cfg(not(feature = "native"))]
         {
@@ -2317,25 +2175,6 @@ impl<'js> SgNodeRjs<'js> {
         }
     }
 
-    /// The nearest ancestor of this kind.
-    fn ancestor_of_kind(&self, kind: &str) -> Option<Self> {
-        let mut current = self.inner_node.get_node().parent();
-        while let Some(node) = current {
-            if node.kind() == kind {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                return Some(SgNodeRjs {
-                    root: Arc::clone(&self.root),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                });
-            }
-            current = node.parent();
-        }
-        None
-    }
-
     /// The innermost syntax node with this byte range, or the tightest one around it.
     fn node_in(root: &Arc<SgRootInner>, range: language_core::ByteRange) -> Option<Self> {
         let (start, end) = (range.start as usize, range.end as usize);
@@ -2600,46 +2439,6 @@ fn definition_value<'js>(
     result_obj.set("kind", def_result.kind.as_str())?;
     result_obj.set("exportName", or_null(ctx, def_result.export_name.clone())?)?;
     result_obj.into_js(ctx)
-}
-
-/// Whether a step of `steps` matches `target`: an SgNode (the step's node
-/// is that node) or a predicate called with each step.
-fn any_step<'js>(
-    ctx: &Ctx<'js>,
-    method: &str,
-    steps: Value<'js>,
-    target: Value<'js>,
-) -> Result<bool> {
-    let Some(steps) = steps.into_array() else {
-        return Ok(false);
-    };
-    if let Some(predicate) = target.as_function() {
-        for step in steps.iter::<Value>() {
-            let step = step?;
-            let hit: Value = predicate.call((step,))?;
-            if hit.as_bool().unwrap_or(false)
-                || hit.as_int().is_some_and(|n| n != 0)
-                || (hit.is_object() && !hit.is_null())
-            {
-                return Ok(true);
-            }
-        }
-        return Ok(false);
-    }
-    let Ok(node) = rquickjs::Class::<SgNodeRjs>::from_value(&target) else {
-        return Err(Exception::throw_type(
-            ctx,
-            &format!("{method}(target): target must be an SgNode or a function of a step"),
-        ));
-    };
-    let key = node.borrow().key();
-    for step in steps.iter::<rquickjs::Object>() {
-        let value: Value = step?.get("node")?;
-        if rquickjs::Class::<SgNodeRjs>::from_value(&value).is_ok_and(|n| n.borrow().key() == key) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 /// Whether a node kind is an expression in JS/TS or Python syntax: a query

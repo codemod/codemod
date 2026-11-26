@@ -1,21 +1,27 @@
-// references() on a declaration finds importers that reach it through barrels.
-function summarize(refs) {
+// The references lookup on a declaration finds importers that reach it
+// through barrels.
+import { symbols } from "codemod:ast-grep";
+
+// The edges' node texts, grouped by file.
+function summarize(edges) {
   const out = {};
-  for (const r of refs) {
-    const file = r.root
+  for (const { node } of edges ?? []) {
+    const file = node
+      .getRoot()
       .filename()
       .replace(/\\/g, "/")
       .replace(/^.*\/packages\//, "packages/");
-    out[file] = r.nodes.map((n) => n.text());
+    (out[file] ??= []).push(node.text());
   }
   return out;
 }
 
 export default function transform(root) {
+  const { references } = symbols("typescript");
   const decl = root.root().find({
     rule: { kind: "identifier", regex: "^toMoment$", inside: { kind: "function_declaration" } },
   });
-  const got = summarize(decl.references());
+  const got = summarize(references.get(decl));
   const want = {
     "packages/shared/src/index.ts": ["toMoment"],
     "packages/web/src/app.ts": ["toMoment", "toMoment"],
@@ -32,7 +38,7 @@ export default function transform(root) {
   const fmt = root.root().find({
     rule: { kind: "identifier", regex: "^formatDay$", inside: { kind: "function_declaration" } },
   });
-  const fmtRefs = summarize(fmt.references());
+  const fmtRefs = summarize(references.get(fmt));
   for (const file of [
     "packages/shared/src/index.ts",
     "packages/shared/src/local.ts",

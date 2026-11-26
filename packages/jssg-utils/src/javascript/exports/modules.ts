@@ -1,6 +1,8 @@
 import type JS from "codemod/langs/javascript";
 import type TSX from "codemod/langs/tsx";
 import type TS from "codemod/langs/typescript";
+// The namespace on purpose: a CLI without `symbols` still loads this module.
+import * as sg from "codemod:ast-grep";
 import type { Edit, SgNode, SgRoot } from "codemod/main";
 
 type Language = JS | TS | TSX;
@@ -196,14 +198,17 @@ export function declarationTargets<T extends Language>(
   const source = sourceOf(statement);
   if (!source) return targets;
   const from = source.text().slice(1, -1);
-  const barrel = root.resolveModule(from);
+  if (typeof sg.symbols !== "function") return targets;
+  const { resolveModule, specifierFor } = sg.symbols("typescript");
+  const file = root as unknown as sg.SgRoot;
+  const barrel = resolveModule(file, from);
   // Installed packages are not debarrelled: their internals are not theirs to
   // import (vitest's `vi` lives in `dist/vendor/vi.<hash>`).
   if (!barrel || barrel.includes("/node_modules/")) return targets;
   for (const binding of importedBindings(statement)) {
     const declaration = root.resolveExport(barrel, binding.imported);
     if (!declaration?.exportName || declaration.root.filename() === barrel) continue;
-    const specifier = root.specifierFor(declaration.root, { like: from });
+    const specifier = specifierFor(file, declaration.root as unknown as sg.SgRoot, { like: from });
     if (specifier) targets.set(binding.local, { from: specifier, name: declaration.exportName });
   }
   return targets;
@@ -216,7 +221,7 @@ export function declarationTargets<T extends Language>(
  * scope.
  *
  * For each binding, `root.resolveExport()` follows the re-exports to the
- * declaration and `root.specifierFor()` writes a specifier for its file in
+ * declaration and `symbols(lang).specifierFor()` writes a specifier for its file in
  * the style of the original (relative or alias, with or without `.js`).
  * A binding stays when it does not resolve, when it is declared in the
  * barrel itself, when no specifier reaches its file, or when the module is
@@ -258,8 +263,8 @@ const MOCKING_CALLS = new Set(["jest.mock", "jest.doMock", "vi.mock", "vi.doMock
 /**
  * Point a test-framework mock (`jest.mock("./components")`,
  * `vi.mock("./lib", factory)`, `jest.requireActual(...)`, ...) at the modules
- * a barrel's bindings moved to. `call` is the call (from `root.importers()`
- * with `kind: "mock"`, or found by pattern); `to` the new specifiers.
+ * a barrel's bindings moved to. `call` is the call (a `jest.mock(…)` or
+ * `vi.mock(…)` found by pattern); `to` the new specifiers.
  *
  * - An automatic mock (`jest.mock("m")`, no factory): the call stays (other
  *   files may still import the barrel, and mocking it is harmless) and one
@@ -271,8 +276,8 @@ const MOCKING_CALLS = new Set(["jest.mock", "jest.doMock", "vi.mock", "vi.doMock
  * @returns One edit, or null when the call is not a mock or is left alone.
  * @example
  * ```ts
- * for (const mock of root.importers(barrel).filter((i) => i.kind === "mock")) {
- *   const edit = retargetMock(mock.node, ["./components/Button", "./components/Modal"]);
+ * for (const mock of root.root().findAll({ rule: { pattern: 'jest.mock("./components")' } })) {
+ *   const edit = retargetMock(mock, ["./components/Button", "./components/Modal"]);
  * }
  * ```
  */

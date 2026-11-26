@@ -1,4 +1,10 @@
+// references.get(node) across files, with the importing file preprocessed
+// (cached) before the target runs.
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root) {
+  const { references } = symbols("typescript");
+
   // Find all 'formatDate' identifiers
   const formatDateNodes = root.root().findAll({ rule: { pattern: "formatDate" } });
   if (formatDateNodes.length < 1) {
@@ -7,26 +13,16 @@ export default function transform(root) {
 
   const funcNameNode = formatDateNodes[0];
 
-  const references = funcNameNode.references();
+  const refs = references.get(funcNameNode) ?? [];
 
-  if (!Array.isArray(references)) {
-    throw new Error("Expected references to be an array");
-  }
-
-  if (references.length === 0) {
+  if (refs.length === 0) {
     console.log("No references found - this is acceptable");
     return null;
   }
 
   // Count total references across all files
-  let totalRefs = 0;
-
-  for (const fileRef of references) {
-    totalRefs += fileRef.nodes.length;
-  }
-
-  if (totalRefs !== 3) {
-    throw new Error("Expected 3 references, got " + totalRefs);
+  if (refs.length !== 3) {
+    throw new Error("Expected 3 references, got " + refs.length);
   }
 
   return null;

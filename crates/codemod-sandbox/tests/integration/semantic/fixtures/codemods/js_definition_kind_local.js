@@ -1,4 +1,10 @@
+// definition.get(node) on a use of a variable declared in the same file lands
+// on that declaration, with kind "local".
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root) {
+  const { definition } = symbols("javascript");
+
   // Find the reference to myVar in console.log
   const ref = root.root().find({ rule: { pattern: "console.log(myVar)" } });
   if (!ref) {
@@ -11,8 +17,7 @@ export default function transform(root) {
     throw new Error("Expected to find 'myVar' reference");
   }
 
-  // Get definition
-  const def = myVarRef.definition();
+  const def = definition.get(myVarRef)?.[0];
 
   if (!def) {
     throw new Error("Expected to find definition for 'myVar'");

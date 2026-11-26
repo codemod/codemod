@@ -69,7 +69,8 @@ function nearest(node: SgNode, test: (n: SgNode) => boolean): SgNode | null {
  * @example
  * ```ts
  * const fn = enclosingFunction(call);
- * const own = name.references().flatMap((f) => f.nodes).filter((n) => fn?.contains(n));
+ * const refs = symbols("typescript").references.get(name) ?? [];
+ * const own = refs.map((r) => r.node).filter((n) => fn?.contains(n));
  * ```
  */
 export function enclosingFunction(node: SgNode): SgNode | null {
@@ -188,7 +189,8 @@ function callbackLoop(fn: SgNode): Loop | null {
  * ```ts
  * // N+1: a query made once per element
  * const loop = enclosingLoop(call);
- * if (loop?.item && arg.dependsOn(loop.item)) report(call, loop.iterable);
+ * const origins = await crawl(dataflow("typescript").sources, arg);
+ * if (loop?.item && origins.has(loop.item)) report(call, loop.iterable);
  * ```
  */
 export function enclosingLoop(node: SgNode): Loop | null {

@@ -1,5 +1,9 @@
-// The helpers on top of the queries: node identity across answers,
-// dependsOn / reaches, step.from, and callee on caller entries.
+// The helpers on top of the lookups: node identity across answers, what a
+// crawl of the sources lookup depends on, what a crawl of the uses lookup
+// reaches, the path back through edge.from, and edge.from on a crawl of the
+// callers lookup.
+import { callGraph, crawl, dataflow } from "codemod:ast-grep";
+
 function expectEqual(actual, expected, label) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
@@ -8,7 +12,9 @@ function expectEqual(actual, expected, label) {
   }
 }
 
-export default function transform(root) {
+export default async function transform(root) {
+  const { sources, uses } = dataflow("javascript");
+  const { callees, callers } = callGraph("javascript");
   const call = root.root().find({ rule: { pattern: "query($$$ARGS)" } });
   const [sql, limit] = call
     .field("arguments")
@@ -16,7 +22,8 @@ export default function transform(root) {
     .filter((n) => n.isNamed());
 
   // Identity: the same node from two answers.
-  const viaFlow = limit.flowsFrom().find((s) => s.kind === "variable").node;
+  const fromLimit = await crawl(sources, limit);
+  const viaFlow = [...fromLimit.values()].find((e) => e?.kind === "variable").node;
   const declared = root
     .root()
     .find({ rule: { pattern: "let limit = 10" } })
@@ -61,55 +68,73 @@ export default function transform(root) {
     "contains",
   );
 
-  // Booleans.
+  // What a value depends on: the nodes and edges a crawl of the sources
+  // lookup reaches.
+  const dependsOn = async (node, test) =>
+    [...(await crawl(sources, node))].some(([reached, edge]) => edge && test(reached, edge));
   expectEqual(
-    limit.dependsOn((s) => s.kind === "parameter" && s.name === "req"),
+    await dependsOn(limit, (_, e) => e.kind === "parameter" && e.name === "req"),
     true,
     "limit depends on req",
   );
-  expectEqual(limit.dependsOn(declared), true, "limit depends on its variable");
+  expectEqual(await dependsOn(limit, (n) => n.equals(declared)), true, "limit depends on its variable");
+  expectEqual(await dependsOn(limit, (_, e) => e.name === "res"), false, "not on res");
   expectEqual(
-    limit.dependsOn((s) => s.name === "res"),
-    false,
-    "not on res",
-  );
-  expectEqual(
-    sql.dependsOn((s) => s.kind === "call", { throughCalls: false }),
+    await dependsOn(sql, (_, e) => e.kind === "call"),
     false,
     "no call in sql text",
   );
+  // Where a value goes: the edges a crawl of the uses lookup reaches.
   const body = root.root().find({ rule: { pattern: "req.body" } });
+  const reaches = async (node, test) =>
+    [...(await crawl(uses, node)).values()].some((edge) => edge && test(edge));
   expectEqual(
-    body.reaches((s) => s.via === "argument" && s.name === "createUser"),
+    await reaches(body, (e) => e.via === "argument" && e.name === "createUser"),
     true,
     "body reaches createUser",
   );
   expectEqual(
-    body.reaches((s) => s.via === "argument" && s.name === "query"),
+    await reaches(body, (e) => e.via === "argument" && e.name === "query"),
     false,
     "not query",
   );
+  // A crawl starts at a node (or its key), not at a name.
   try {
-    limit.dependsOn("req");
+    await crawl(sources, "req");
     throw new Error("expected a TypeError");
   } catch (error) {
-    if (!String(error.message).includes("must be an SgNode or a function")) throw error;
+    if (!String(error.message).includes('"req" is not a node or a node.key()')) throw error;
   }
 
-  // step.from: the path back to the queried node.
-  const req = limit.flowsFrom().find((s) => s.kind === "parameter");
+  // edge.from: the path back to the start. Each edge's from is the node the
+  // next edge on the way back reached, and the last one's is the start,
+  // which maps to null.
+  const req = [...fromLimit.values()].find((e) => e?.kind === "parameter");
   const path = [];
-  for (let s = req; s; s = s.from) path.push(s.kind + ":" + s.depth);
-  expectEqual(path[path.length - 1].endsWith(":1"), true, "path ends at depth 1");
-  expectEqual(path.length, req.depth, "one step per depth");
-  expectEqual(limit.flowsFrom()[0].from, null, "depth 1 has no from");
+  for (let e = req; e; e = fromLimit.get(e.from)) path.push(e);
+  expectEqual(
+    path.slice(0, -1).every((e, i) => e.from.equals(path[i + 1].node)),
+    true,
+    "each from is the next edge's node",
+  );
+  expectEqual(path[path.length - 1].from.equals(limit), true, "path ends at the start");
+  expectEqual(fromLimit.get(limit), null, "the start has no edge");
 
-  // callee on caller entries: which function each call reaches.
-  const save = call.callees({ transitive: true }).find((c) => c.resolved && c.name === "connect");
-  if (!save) throw new Error("connect not found in callees");
+  // edge.from on a crawl of the callers lookup: which function each caller
+  // was reached from. connect is reached from query's call by crawling the
+  // callees lookup.
+  const fnName = (node) => node.field("name")?.text() ?? node.parent().field("name").text();
+  const reachedFromCall = await crawl(callees, call);
+  const connect = [...reachedFromCall.keys()].find(
+    (node) => reachedFromCall.get(node) && fnName(node) === "connect",
+  );
+  if (!connect) throw new Error("connect not found in callees");
   {
-    const callers = save.node.callers({ transitive: true });
-    const pairs = callers.map((c) => c.name + "->" + (c.callee && c.callee.name)).sort();
+    const reached = await crawl(callers, connect);
+    const pairs = [...reached]
+      .filter(([, edge]) => edge)
+      .map(([node, edge]) => fnName(node) + "->" + fnName(edge.from))
+      .sort();
     expectEqual(
       pairs.includes("query->connect") && pairs.includes("handler->query"),
       true,

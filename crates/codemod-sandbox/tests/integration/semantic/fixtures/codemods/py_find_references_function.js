@@ -1,4 +1,9 @@
+// references.get(node) on a function name gives an edge for each use of it.
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root) {
+  const { references } = symbols("python");
+
   // Find all 'greet' identifiers
   const greetNodes = root.root().findAll({ rule: { pattern: "greet" } });
   if (greetNodes.length < 1) {
@@ -8,13 +13,9 @@ export default function transform(root) {
   // Use the first one (the function name in definition)
   const funcNameNode = greetNodes[0];
 
-  const references = funcNameNode.references();
+  const refs = references.get(funcNameNode) ?? [];
 
-  if (!Array.isArray(references)) {
-    throw new Error("Expected references to be an array");
-  }
-
-  if (references.length === 0) {
+  if (refs.length === 0) {
     console.log("No references found - semantic provider may not have indexed yet");
     return null;
   }
@@ -22,12 +23,10 @@ export default function transform(root) {
   // Count total references
   let totalRefs = 0;
   let refTexts = [];
-  for (const fileRef of references) {
-    for (const node of fileRef.nodes) {
-      if (typeof node.text === "function") {
-        totalRefs++;
-        refTexts.push(node.text());
-      }
+  for (const { node } of refs) {
+    if (typeof node.text === "function") {
+      totalRefs++;
+      refTexts.push(node.text());
     }
   }
 

@@ -292,14 +292,14 @@ declare module "codemod:workflow" {
      */
     concurrency?: number;
     /**
-     * What `definition()` and `references()` on roots `parse(file)` makes can
-     * find: `"file"` (the default) looks within each file, `"workspace"`
-     * across the selected files of the target (or under `root`), and
-     * `"none"` turns it off. Analysis runs only when they are called. Code
-     * that imports an analysis from `"codemod/ast-grep"` (`callGraph`,
-     * `dataflow`, `symbols`, `types`, `entryPoints`) gets workspace analysis
-     * without this option, and importing `types` turns the TypeScript 7
-     * checker on.
+     * What the analyses from `"codemod/ast-grep"` can see on roots
+     * `parse(file)` makes: `"file"` (the default) looks within each file,
+     * `"workspace"` across the selected files of the target (or under
+     * `root`), and `"none"` turns it off. Analysis runs only when asked.
+     * `symbols(lang)` and `dataflow(lang)` follow this scope. Code that
+     * imports `callGraph`, `types`, `entryPoints` or `join` gets workspace
+     * analysis without this option, and importing `types` turns the
+     * TypeScript 7 checker on.
      */
     semanticAnalysis?: SemanticAnalysis;
     /**
@@ -323,8 +323,8 @@ declare module "codemod:workflow" {
         root?: string;
         /**
          * @deprecated Import `types` from `"codemod/ast-grep"` instead.
-         * Types from the TypeScript 7 checker: `node.typeInfo()`, and
-         * `callees()` / `callers()` that follow `x.m()` by the type of `x`
+         * Types from the TypeScript 7 checker: `types(lang).typeOf`, and
+         * call-graph edges that follow `x.m()` by the type of `x`
          * (`via: "type"`). Needs `typescript@7.0` in the target's
          * `node_modules` (or `CODEMOD_TS_API` naming its `tsc`), and a full
          * install of the target's dependencies before this step for library
@@ -334,7 +334,7 @@ declare module "codemod:workflow" {
         types?: "ts7" | "none";
         /**
          * Functions that count as entry points besides the package's
-         * exports: what `entryPoints()` reports.
+         * exports: what `entryPoints(lang)` reports.
          * @experimental
          */
         entryPoints?: EntryPointRule[];

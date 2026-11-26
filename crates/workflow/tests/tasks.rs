@@ -2573,17 +2573,19 @@ fn callbacks_have_semantic_analysis_as_the_selector_says() {
         format!(
             r#"
 import {{ step, forEachFile }} from "codemod/workflow";
-import {{ parse }} from "codemod/ast-grep";
+import {{ parse, symbols }} from "codemod/ast-grep";
 export default async function main() {{
   const found = await step(forEachFile({{ include: "src/**/*.ts", language: "typescript"{options} }}, (file) => {{
     const root = parse(file).root();
+    const {{ definition: definitions, references }} = symbols("typescript");
     if (file.path === "src/a.ts") {{
-      const definition = root.find({{ rule: {{ pattern: "console.log($A)" }} }}).getMatch("A").definition();
+      const [definition] = definitions.get(root.find({{ rule: {{ pattern: "console.log($A)" }} }}).getMatch("A")) ?? [];
       return ["definition", definition ? definition.node.text() : null];
     }}
     if (file.path === "src/lib.ts") {{
       const name = root.find({{ rule: {{ kind: "identifier", inside: {{ kind: "function_declaration" }} }} }});
-      const files = name.references().map((found) => found.root.filename().split("/").pop()).sort();
+      const names = (references.get(name) ?? []).map((edge) => edge.node.getRoot().filename().split("/").pop());
+      const files = [...new Set(names)].sort();
       return ["references", files];
     }}
   }}));
@@ -2613,9 +2615,10 @@ export default async function main() {{
     }
 }
 
-/// `semanticAnalysis.types: "ts7"` turns on the TypeScript 7 checker for
-/// `typeInfo()`; without it there are no types, and bad values are refused.
-/// The checked answer needs a checker (`CODEMOD_TS_API`, set in CI).
+/// Importing `types` turns on the TypeScript 7 checker for `typeOf`, under
+/// `semanticAnalysis: "workspace"` too; `types: "none"` turns it off, and
+/// bad values are refused. The checked answer needs a checker
+/// (`CODEMOD_TS_API`, set in CI).
 #[test]
 fn semantic_analysis_types_turn_on_the_checker() {
     let h = Harness::new();
@@ -2627,20 +2630,36 @@ fn semantic_analysis_types_turn_on_the_checker() {
         format!(
             r#"
 import {{ step, forEachFile }} from "codemod/workflow";
-import {{ parse }} from "codemod/ast-grep";
+import {{ parse, types }} from "codemod/ast-grep";
 export default async function main() {{
   const found = await step(forEachFile({{ include: "src/**/*.ts", language: "typescript"{options} }}, (file) => {{
-    return parse(file).root().find({{ rule: {{ pattern: "console.log($A)" }} }}).getMatch("A").typeInfo();
+    const value = parse(file).root().find({{ rule: {{ pattern: "console.log($A)" }} }}).getMatch("A");
+    return types("typescript").typeOf.get(value) ?? null;
   }}));
   return found.outputs;
 }}
 "#
         )
     };
+    let checker = std::env::var("CODEMOD_TS_API").is_ok_and(|v| !v.is_empty() && v != "off");
+    let checked = if checker {
+        json!(["number"])
+    } else {
+        json!([null])
+    };
     assert_eq!(
         output(&h.start(&workflow(r#", semanticAnalysis: "workspace""#), Value::Null)).unwrap(),
+        checked,
+        "importing types turns the checker on"
+    );
+    assert_eq!(
+        output(&h.start(
+            &workflow(r#", semanticAnalysis: { mode: "workspace", types: "none" }"#),
+            Value::Null
+        ))
+        .unwrap(),
         json!([null]),
-        "types are off by default"
+        "types: \"none\" turns it off"
     );
     for bad in [
         r#"{ mode: "workspace", types: "ts9" }"#,
@@ -2655,18 +2674,14 @@ export default async function main() {{
             "{bad} is refused"
         );
     }
-    let checker = std::env::var("CODEMOD_TS_API").is_ok_and(|v| !v.is_empty() && v != "off");
     assert_eq!(
         output(&h.start(
             &workflow(r#", semanticAnalysis: { mode: "workspace", types: "ts7" }"#),
             Value::Null
         ))
         .unwrap(),
-        if checker {
-            json!(["number"])
-        } else {
-            json!([null])
-        },
+        checked,
+        "the deprecated shorthand"
     );
 }
 

@@ -959,9 +959,11 @@ export default function transform() { return null; }
 #[test]
 fn a_yaml_transform_gets_semantic_analysis_and_dry_run_as_before() {
     let transform = r#"
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root: any, options: any) {
   const use = root.root().find({ rule: { pattern: "console.log($A)" } });
-  const definition = use.getMatch("A").definition();
+  const [definition] = symbols("typescript").definition.get(use.getMatch("A")) ?? [];
   const edit = `// defined: ${definition ? definition.node.text() : "unknown"}\n` + root.root().text();
   return { edit, data: options.dryRun ? "dry run" : "run" };
 }
@@ -992,14 +994,15 @@ export default function transform(root: any, options: any) {
 }
 
 /// `semantic_analysis: { mode: workspace, types: ts7 }` reaches the step as
-/// `types: "ts7"`: `typeInfo()` answers when a checker is around
+/// `types: "ts7"`: `types(lang).typeOf` answers when a checker is around
 /// (`CODEMOD_TS_API`, set in CI), and is null with types off.
 #[test]
 fn a_yaml_transform_can_turn_types_on() {
     let transform = r#"
+import { types } from "codemod:ast-grep";
 export default function transform(root: any) {
   const use = root.root().find({ rule: { pattern: "console.log($A)" } });
-  return { edit: null, data: use.getMatch("A").typeInfo() };
+  return { edit: null, data: types("typescript").typeOf.get(use.getMatch("A")) ?? null };
 }
 "#;
     let checker = std::env::var("CODEMOD_TS_API").is_ok_and(|v| !v.is_empty() && v != "off");

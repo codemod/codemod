@@ -1,6 +1,9 @@
-// references() and callers() see uses through a default import. The
-// stale-flags demo deleted a live email template whose only uses were
+// The references lookup and the callers lookup see uses through a default
+// import.
+// The stale-flags demo deleted a live email template whose only uses were
 // `import Welcome from "./emails/WelcomeEmail"`.
+import { callGraph, symbols } from "codemod:ast-grep";
+
 function expectEqual(actual, expected, label) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
@@ -14,6 +17,8 @@ function basename(path) {
 }
 
 export default function transform(root) {
+  const { callers } = callGraph("tsx");
+  const { references } = symbols("tsx");
   const name = (fn) =>
     root
       .root()
@@ -22,16 +27,15 @@ export default function transform(root) {
       })
       .field("name");
   const refs = (fn) =>
-    name(fn)
-      .references()
-      .flatMap((file) => file.nodes.map((n) => basename(file.root.filename()) + ":" + n.text()))
+    (references.get(name(fn)) ?? [])
+      .map((e) => basename(e.node.getRoot().filename()) + ":" + e.node.text())
       .sort();
 
   expectEqual(refs("WelcomeEmail"), ["send.tsx:Welcome", "send.tsx:Welcome"], "references");
   expectEqual(
-    name("WelcomeEmail")
-      .callers()
-      .map((c) => c.name + "@" + basename(c.root.filename())),
+    callers
+      .get(name("WelcomeEmail"))
+      .map((e) => e.node.field("name").text() + "@" + basename(e.node.getRoot().filename())),
     ["sendWelcome@send.tsx"],
     "callers",
   );

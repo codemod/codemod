@@ -1,5 +1,7 @@
-// Class inheritance: methods and constructors up the extends chain, super(...)
-// and super.m(...), across modules.
+// Class inheritance in the callees lookup: methods and constructors up the
+// extends chain, super(...) and super.m(...), across modules.
+import { callGraph } from "codemod:ast-grep";
+
 function expectEqual(actual, expected, label) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
@@ -12,15 +14,12 @@ function basename(path) {
   return path.split("/").pop();
 }
 
-function describe(entries) {
-  return entries.map((c) =>
-    c.resolved
-      ? c.name + "@" + basename(c.root.filename()) + ":" + c.via
-      : "u:" + c.name + ":" + c.via,
-  );
-}
-
 export default function transform(root) {
+  const { callees } = callGraph("javascript");
+  const describe = (node) =>
+    (callees.get(node) ?? []).map(
+      (e) => e.node.field("name").text() + "@" + basename(e.node.getRoot().filename()) + ":" + e.via,
+    );
   const method = (name) =>
     root
       .root()
@@ -31,41 +30,24 @@ export default function transform(root) {
   const call = (pattern) => root.root().find({ rule: { pattern } });
 
   // super(1) is Base's constructor.
-  expectEqual(
-    describe(call("super(1)").callees()),
-    ["constructor@base.js:constructor"],
-    "super(1)",
-  );
+  expectEqual(describe(call("super(1)")), ["constructor@base.js:constructor"], "super(1)");
   // super.describe() is Base's describe, not Sub's own.
-  expectEqual(
-    describe(call("super.describe()").callees()),
-    ["describe@base.js:method"],
-    "super.describe()",
-  );
+  expectEqual(describe(call("super.describe()")), ["describe@base.js:method"], "super.describe()");
   // this.greet() is inherited; this.describe() is Sub's override.
   expectEqual(
-    describe(method("run").callees()),
+    describe(method("run")),
     ["greet@base.js:method", "describe@main.js:method"],
     "callees of run",
   );
   // new Leaf() has no constructor of its own: Sub's runs. leaf.greet() is
-  // Base's. Can't tell: a class extending a call result (mixin) does not
-  // know its parent, so this.greet() inside it stays unresolved.
+  // Base's. A class extending a call result (mixin) does not know its
+  // parent: new Mixed() has no callee.
   expectEqual(
-    describe(
-      root
-        .root()
-        .find({ rule: { kind: "function_declaration" } })
-        .callees(),
-    ).sort(),
-    [
-      "constructor@main.js:constructor",
-      "go@main.js:method",
-      "greet@base.js:method",
-      "u:Mixed:constructor",
-    ],
+    describe(root.root().find({ rule: { kind: "function_declaration" } })).sort(),
+    ["constructor@main.js:constructor", "go@main.js:method", "greet@base.js:method"],
     "callees of main",
   );
-  expectEqual(describe(method("go").callees()), ["u:this.greet:method"], "callees of go");
+  // So this.greet() inside it has no callee either.
+  expectEqual(callees.has(method("go")), false, "callees of go");
   return null;
 }

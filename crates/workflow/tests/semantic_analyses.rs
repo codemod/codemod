@@ -1,5 +1,6 @@
-//! Analyses as values in workflows: code that imports `callGraph`, `join` or
-//! `crawl` from `codemod/ast-grep` gets workspace analysis without naming it.
+//! Analyses as values in workflows: code that imports `callGraph`, `types`,
+//! `entryPoints` or `join` from `codemod/ast-grep` gets workspace analysis
+//! without naming it; `symbols` and `dataflow` follow the step's scope.
 
 mod common;
 
@@ -35,6 +36,27 @@ export default async function main() {
         Value::Null,
     );
     assert_eq!(output(&report).unwrap(), json!(["helper()"]));
+}
+
+#[test]
+fn symbols_follow_the_step_scope_file_unless_workspace_is_asked() {
+    let h = harness();
+    let code = r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, symbols } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "src/lib.ts", semanticAnalysis: SCOPE }, (file) => {
+    const { references } = symbols("typescript");
+    const name = parse(file).root().find("function helper() {}").field("name");
+    return (references.get(name) ?? []).map((edge) => edge.node.getRoot().filename().split("/").pop()).sort();
+  }));
+  return found.outputs.flat();
+}
+"#;
+    let file = h.start(&code.replace("SCOPE", r#""file""#), Value::Null);
+    assert_eq!(output(&file).unwrap(), json!([]));
+    let workspace = h.start(&code.replace("SCOPE", r#""workspace""#), Value::Null);
+    assert_eq!(output(&workspace).unwrap(), json!(["a.ts", "a.ts"]));
 }
 
 #[test]
@@ -92,6 +114,36 @@ export default async function main() {
         Value::Null,
     );
     assert_eq!(output(&report).unwrap(), json!(["Button", "helper"]));
+}
+
+#[test]
+fn entry_points_say_why_each_function_is_called_from_outside() {
+    let h = Harness::new();
+    h.write(
+        "packages/ui/package.json",
+        r#"{ "name": "@acme/ui", "exports": { ".": "./src/index.ts" } }"#,
+    );
+    h.write(
+        "packages/ui/src/index.ts",
+        "export function Button() { return 1; }\nfunction helper() { return 2; }\n",
+    );
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { entryPoints } from "codemod/ast-grep";
+export default async function main() {
+  return await step(() => {
+    const outside = entryPoints("typescript");
+    return [...outside].map(([fn, why]) => [fn.field("name").text(), why]);
+  });
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!([["Button", [{ "kind": "export", "label": "@acme/ui#Button" }]]])
+    );
 }
 
 #[test]

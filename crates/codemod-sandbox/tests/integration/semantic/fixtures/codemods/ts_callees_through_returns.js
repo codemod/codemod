@@ -1,5 +1,7 @@
-// A call's result is what the called function returns: tuples
-// (const [s, setS] = createSignal()), objects, f.bind(…).
+// The callees lookup follows a call's result to what the called function
+// returns: tuples (const [s, setS] = createSignal()), objects, f.bind(…).
+import { callGraph } from "codemod:ast-grep";
+
 function expectEqual(actual, expected, label) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
@@ -8,13 +10,19 @@ function expectEqual(actual, expected, label) {
   }
 }
 
+// A function's name: its own, or the name it is bound to.
+function nameOf(fn) {
+  const own = fn.field("name");
+  if (own) return own.text();
+  const parent = fn.parent();
+  const bound = parent && (parent.field("name") || parent.field("key"));
+  return bound ? bound.text() : "<anonymous>";
+}
+
 export default function transform(root) {
+  const { callees } = callGraph("typescript");
   const callee = (pattern) =>
-    root
-      .root()
-      .find({ rule: { pattern } })
-      .callees()
-      .map((c) => (c.resolved ? c.name + ":" + c.via : "u:" + c.name));
+    (callees.get(root.root().find({ rule: { pattern } })) ?? []).map((e) => nameOf(e.node) + ":" + e.via);
 
   // setSignal.bind(null, node) is setSignal; accessor() returns read.bind(…).
   expectEqual(callee("setCount($A)"), ["setSignal:direct"], "setCount");
@@ -22,12 +30,12 @@ export default function transform(root) {
   expectEqual(callee("store.set(2)"), ["set:method"], "store.set");
   expectEqual(callee("get()"), ["get:direct"], "get");
   // A getter's value is what it returns, and reading it is not handing the
-  // getter function itself to log().
+  // getter function itself to log(): log(store.label) has no edge.
   expectEqual(callee("store.handler()"), ["onEvent:method"], "store.handler()");
-  expectEqual(callee("log($A)"), ["u:log"], "log(store.label)");
+  expectEqual(callee("log($A)"), [], "log(store.label)");
   // Can't tell: an element pushed at run time, and a package outside the
-  // workspace.
-  expectEqual(callee("first()"), ["u:first"], "first");
-  expectEqual(callee('getByRole("button")'), ["u:getByRole"], "getByRole");
+  // workspace. Neither has an edge.
+  expectEqual(callee("first()"), [], "first");
+  expectEqual(callee('getByRole("button")'), [], "getByRole");
   return null;
 }

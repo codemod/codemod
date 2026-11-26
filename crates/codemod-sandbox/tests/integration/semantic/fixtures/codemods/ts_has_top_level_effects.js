@@ -1,4 +1,6 @@
 // root.hasTopLevelEffects(): does importing this module run code?
+import { symbols } from "codemod:ast-grep";
+
 function expectEqual(actual, expected, label) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
@@ -8,14 +10,16 @@ function expectEqual(actual, expected, label) {
 }
 
 export default function transform(root) {
-  // Roots for the other files, reached from App.ts.
+  // Roots for the other files, reached from App.ts through references.
+  const { references } = symbols("typescript");
+  const rootReferring = (root, name, file) =>
+    references
+      .get(root.root().find({ rule: { kind: "identifier", regex: `^${name}$` } }))
+      .map((e) => e.node.getRoot())
+      .find((r) => r.filename().endsWith(file));
   const icon = root.resolveExport("./icons", "Icon").root;
-  const barrel = root
-    .importers(root.resolveModule("./icons/register"))
-    .find((i) => i.kind === "import").root;
-  const register = root
-    .importers(root.resolveModule("./registry"))
-    .find((i) => i.root.filename().endsWith("register.ts")).root;
+  const barrel = rootReferring(icon, "Icon", "icons/index.ts");
+  const register = rootReferring(root.resolveExport("./registry", "registry").root, "registry", "register.ts");
 
   expectEqual(
     {

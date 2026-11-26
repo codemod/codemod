@@ -1,6 +1,8 @@
 // SQL built by string concatenation from request data -> a parameterized
 // query: `db.query("... id = " + id)` becomes `db.query("... id = ?", [id])`.
-// Only queries whose text depends on the request (`req`) are rewritten.
+// Only queries whose text depends on the request (`req`), as a crawl of the
+// sources lookup finds, are rewritten.
+import { crawl, dataflow } from "codemod:ast-grep";
 
 // Split a "..." + x + "..." chain or a template literal into SQL text and parameters.
 function parameterize(node, out = { sql: "", params: [] }) {
@@ -34,15 +36,23 @@ function parameterize(node, out = { sql: "", params: [] }) {
   return out;
 }
 
-export default function transform(root) {
+export default async function transform(root) {
+  const { sources } = dataflow("javascript");
   const edits = [];
   for (const call of root.root().findAll({ rule: { pattern: "$DB.query($SQL)" } })) {
     const sql = call.getMatch("SQL");
-    if (!sql.dependsOn((s) => s.kind === "parameter" && s.name === "req")) continue;
+    const reached = await crawl(sources, sql);
+    const fromReq = [...reached.values()].some(
+      (edge) => edge?.kind === "parameter" && edge.name === "req",
+    );
+    if (!fromReq) continue;
 
     // The expression that builds the text: the argument, or the value the
     // variable passed as the argument was initialized with.
-    const init = sql.flowsFrom().find((s) => s.via === "assign" && s.from?.kind === "variable");
+    // edge.from is a node; the edge that reached it says what kind it is.
+    const init = [...reached.values()].find(
+      (edge) => edge?.via === "assign" && reached.get(edge.from)?.kind === "variable",
+    );
     const built = sql.kind() === "identifier" ? init?.node : sql;
     if (!built) continue;
     const { sql: text, params } = parameterize(built);

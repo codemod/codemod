@@ -1,5 +1,8 @@
-// Without a semantic provider the data-flow and call-graph queries throw:
-// an empty answer would read as "no callers" or "no sources".
+// Without a semantic provider the call-graph and data-flow lookups and
+// mutations() throw: an empty answer would read as "no callers" or
+// "no sources".
+import { callGraph, dataflow } from "codemod:ast-grep";
+
 function expectThrow(run, needle, label) {
   try {
     run();
@@ -14,9 +17,18 @@ function expectThrow(run, needle, label) {
 
 export default function transform(root) {
   const node = root.root().find({ rule: { kind: "identifier" } });
-  for (const method of ["flowsFrom", "flowsTo", "callees", "callers", "mutations"]) {
-    expectThrow(() => node[method](), method + "() needs semantic analysis", method);
+  const { callers, callees } = callGraph("javascript");
+  const { sources, uses } = dataflow("javascript");
+  const queries = [
+    ["sources.get(node)", () => sources.get(node)],
+    ["uses.get(node)", () => uses.get(node)],
+    ["callees.get(node)", () => callees.get(node)],
+    ["callers.get(node)", () => callers.get(node)],
+    ["mutations()", () => node.mutations()],
+  ];
+  for (const [query, run] of queries) {
+    expectThrow(run, query + " needs semantic analysis", query);
   }
-  expectThrow(() => node.callers(), 'semanticAnalysis: "file"', "says what to set");
+  expectThrow(() => callers.get(node), 'semanticAnalysis: "file"', "says what to set");
   return null;
 }

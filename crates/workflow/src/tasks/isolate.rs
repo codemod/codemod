@@ -260,21 +260,15 @@ pub(crate) fn semantic_mode(
     })
 }
 
-/// The analyses `codemod/ast-grep` exports. Code that imports one asks
-/// whole-workspace questions.
-const ANALYSES: &[&str] = &[
-    "callGraph",
-    "dataflow",
-    "symbols",
-    "types",
-    "entryPoints",
-    "join",
-    "crawl",
-];
+/// The analyses that only answer whole-workspace questions: code that
+/// imports one gets workspace scope. `dataflow` and `symbols` follow the
+/// step's scope instead (file by default), and `crawl` and `lookup` go
+/// wherever their lookups do.
+const ANALYSES: &[&str] = &["callGraph", "types", "entryPoints", "join"];
 
 /// The semantic analysis code gets: what `semanticAnalysis` says, or
-/// workspace scope when it names none and the code imports an analysis from
-/// `codemod/ast-grep`. Importing `types` turns the TypeScript 7 checker on,
+/// workspace scope when it names none and the code imports a
+/// whole-workspace analysis from `codemod/ast-grep`. Importing `types` turns the TypeScript 7 checker on,
 /// also under `semanticAnalysis: "workspace"`, unless the option sets
 /// `types` itself.
 pub(crate) fn semantic_mode_for(

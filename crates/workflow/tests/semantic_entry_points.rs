@@ -1,7 +1,7 @@
-//! `callers()` returns call sites only. Whether a function nothing in the
-//! workspace calls is still called from outside is its own question:
-//! `entryPoints()` (its package exports it, or a rule on the selector
-//! declares it).
+//! `callGraph(lang).callers` holds call sites only. Whether a function
+//! nothing in the workspace calls is still called from outside is its own
+//! question: `entryPoints(lang)` (its package exports it, or a rule on the
+//! selector declares it).
 
 mod common;
 
@@ -37,11 +37,12 @@ fn ask(h: &Harness, file: &str, name: &str, semantic: &str, query: &str) -> Valu
     let workflow = format!(
         r#"
 import {{ step, forEachFile }} from "codemod/workflow";
-import {{ parse }} from "codemod/ast-grep";
+import {{ callGraph, entryPoints, parse }} from "codemod/ast-grep";
 export default async function main() {{
   const found = await step(forEachFile({{ include: "{file}", semanticAnalysis: {semantic} }}, (file) => {{
+    const lang = file.path.endsWith(".py") ? "python" : "typescript";
     const fn = parse(file).root().find({{ rule: {{ kind: "identifier", regex: "^{name}$", inside: {{ kind: "{function}" }} }} }});
-    return ({query})(fn);
+    return ({query})(fn, lang);
   }}));
   return found.outputs[0];
 }}
@@ -58,7 +59,7 @@ fn callers_never_returns_an_entry_point() {
         "packages/ui/src/button.ts",
         "Button",
         r#""workspace""#,
-        "(fn) => fn.callers().length",
+        "(fn, lang) => callGraph(lang).callers.get(fn)?.length ?? 0",
     );
     assert_eq!(callers, json!(0));
 }
@@ -72,17 +73,14 @@ fn an_export_from_a_public_specifier_is_an_entry_point() {
             "packages/ui/src/button.ts",
             name,
             r#""workspace""#,
-            "(fn) => fn.entryPoints()",
+            "(fn, lang) => entryPoints(lang).has(fn.parent())",
         )
     };
-    assert_eq!(
-        entry_points("Button"),
-        json!([{ "kind": "export", "label": "@acme/ui#Button" }])
-    );
-    assert_eq!(entry_points("helper"), json!([]));
+    assert_eq!(entry_points("Button"), json!(true));
+    assert_eq!(entry_points("helper"), json!(false));
     assert_eq!(
         entry_points("unused"),
-        json!([]),
+        json!(false),
         "exported from a file the package doesn't"
     );
 }
@@ -101,14 +99,11 @@ fn a_declared_route_export_is_an_entry_point() {
             "app/api/users/[id]/route.ts",
             name,
             semantic,
-            "(fn) => fn.entryPoints()",
+            "(fn, lang) => entryPoints(lang).has(fn.parent())",
         )
     };
-    assert_eq!(
-        entry_points("GET"),
-        json!([{ "kind": "http", "label": "GET app/api/users/[id]/route.ts" }])
-    );
-    assert_eq!(entry_points("helper"), json!([]));
+    assert_eq!(entry_points("GET"), json!(true));
+    assert_eq!(entry_points("helper"), json!(false));
 }
 
 #[test]
@@ -126,12 +121,9 @@ fn a_declared_decorator_is_an_entry_point() {
             "api/views.py",
             name,
             semantic,
-            "(fn) => fn.entryPoints()",
+            "(fn, lang) => entryPoints(lang).has(fn.parent())",
         )
     };
-    assert_eq!(
-        entry_points("users"),
-        json!([{ "kind": "http", "label": "@app.route api/views.py:users" }])
-    );
-    assert_eq!(entry_points("plain"), json!([]));
+    assert_eq!(entry_points("users"), json!(true));
+    assert_eq!(entry_points("plain"), json!(false));
 }

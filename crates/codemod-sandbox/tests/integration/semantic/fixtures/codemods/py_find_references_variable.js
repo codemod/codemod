@@ -1,35 +1,28 @@
+// references.get(node) on an assignment gives an edge for each use of the
+// assigned name.
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root) {
+  const { references } = symbols("python");
+
   // Find the first assignment 'counter = 0'
   const assignment = root.root().find({ rule: { pattern: "counter = 0" } });
   if (!assignment) {
     throw new Error("Expected to find 'counter = 0'");
   }
 
-  const references = assignment.references();
+  const refs = references.get(assignment) ?? [];
 
-  if (!Array.isArray(references)) {
-    throw new Error("Expected references to be an array, got: " + typeof references);
-  }
-
-  if (references.length === 0) {
+  if (refs.length === 0) {
     console.log("No references found - semantic provider may not have indexed yet");
     return null;
   }
 
   // Collect reference texts
   let refTexts = [];
-  for (const fileRef of references) {
-    if (!fileRef.root) {
-      throw new Error("Expected fileRef.root to exist");
-    }
-    if (!Array.isArray(fileRef.nodes)) {
-      throw new Error("Expected fileRef.nodes to be an array");
-    }
-
-    for (const node of fileRef.nodes) {
-      if (typeof node.text === "function") {
-        refTexts.push(node.text());
-      }
+  for (const { node } of refs) {
+    if (typeof node.text === "function") {
+      refTexts.push(node.text());
     }
   }
 

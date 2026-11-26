@@ -1,4 +1,10 @@
+// definition.get(node) on a call to a function imported from another file
+// follows the import, in workspace scope.
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root) {
+  const { definition } = symbols("typescript");
+
   // Find all 'add' identifiers
   const addNodes = root.root().findAll({ rule: { pattern: "add" } });
   if (addNodes.length < 1) {
@@ -20,20 +26,20 @@ export default function transform(root) {
     return null;
   }
 
-  const definition = callAdd.definition();
+  const def = definition.get(callAdd)?.[0];
 
   // Definition may or may not be found depending on cross-file resolution
-  if (definition === null) {
+  if (def === undefined) {
     console.log("Definition not found (cross-file resolution may not be complete)");
     return null;
   }
 
   // If found, verify structure
-  if (!definition.node) {
+  if (!def.node) {
     throw new Error("Expected definition.node to exist");
   }
-  if (!definition.root) {
-    throw new Error("Expected definition.root to exist");
+  if (!def.node.getRoot()) {
+    throw new Error("Expected definition.node.getRoot() to exist");
   }
 
   // Log where the definition was found

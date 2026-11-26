@@ -43,67 +43,6 @@ declare module "codemod:ast-grep" {
     replace(text: string): Edit;
     commitEdits(edits: Array<Edit>): string;
 
-    // Semantic analysis methods (requires semantic provider)
-
-    /**
-     * Get the definition for the symbol at this node's position.
-     *
-     * Returns an object containing:
-     * - `node`: The SgNode at the definition location
-     * - `root`: The SgRoot for the file containing the definition
-     * - `kind`: The kind of definition ('local', 'import', or 'external')
-     *
-     * Returns null if:
-     * - No semantic provider is configured
-     * - No symbol is found at this position
-     *
-     * When a symbol comes from an import that can't be resolved (e.g., external module),
-     * the definition will point to the import statement with `kind: 'import'`.
-     *
-     * In workspace scope, imported names and names inside a named re-export
-     * (`export { a as b } from "./a"`) follow the re-export chain, through
-     * any `export *`, to the original declaration (`kind: 'external'`).
-     *
-     * @param options - Optional settings for definition lookup
-     * @param options.resolveExternal - If false, stop at import statements without
-     *   attempting to resolve the source module. Default: true
-     * @returns An object with the definition node, its root, and kind, or null
-     */
-    definition(options?: DefinitionOptions): DefinitionResult<M> | null;
-
-    /**
-     * The type of this expression or declaration name, as the TypeScript
-     * checker prints it (`"UserRepo"`, `"{ id: string; }"`, `"void"`).
-     *
-     * Needs the checker: import `types` from `"codemod/ast-grep"` in the
-     * step's code, with TypeScript 7.0 installed in the workspace (or
-     * `CODEMOD_TS_API` naming its `tsc`). Null otherwise, and when no
-     * expression has exactly this node's range. Answers describe the files
-     * as they were when the checker first read them. The selector option
-     * `semanticAnalysis: { mode: "workspace", types: "ts7" }` is a
-     * deprecated shorthand for importing `types`.
-     * @experimental
-     */
-    typeInfo(): string | null;
-
-    /**
-     * Find all references to the symbol at this node's position.
-     *
-     * Returns an array of objects, one per file, each containing:
-     * - `root`: The SgRoot for the file
-     * - `nodes`: Array of SgNode objects for each reference in that file
-     *
-     * Returns an empty array if:
-     * - No semantic provider is configured
-     * - No symbol is found at this position
-     *
-     * In file scope mode, it only searches files that have been processed.
-     * In workspace scope mode, it searches the entire workspace.
-     *
-     * @returns An array of file references, each with a root and nodes
-     */
-    references(): Array<FileReferences<M>>;
-
     /**
      * A string naming this node across answers and roots: its file, range and
      * kind. Each semantic query wraps nodes in new objects (and other files in
@@ -113,7 +52,7 @@ declare module "codemod:ast-grep" {
      * @example
      * ```ts
      * const seen = new Set<string>();
-     * for (const caller of fn.callers({ transitive: true })) {
+     * for (const caller of callGraph("typescript").callers.get(fn) ?? []) {
      *   if (seen.has(caller.node.key())) continue; // one edit per function
      *   seen.add(caller.node.key());
      * }
@@ -141,226 +80,16 @@ declare module "codemod:ast-grep" {
      * @example
      * ```ts
      * // Uses of a name inside this function only
-     * const own = name.references().flatMap((f) => f.nodes).filter((n) => fn.contains(n));
+     * const uses = symbols("typescript").references.get(name) ?? [];
+     * const own = uses.filter((edge) => fn.contains(edge.node));
      * ```
      */
     contains(other: SgNode<M>): boolean;
 
-    // Data flow and call graph (experimental; JavaScript, TypeScript and Python).
-    // Every answer is a "may" answer: see the soundness notes on each method
-    // and the result types, and https://docs.codemod.com/community/jssg/dataflow.
-
-    /**
-     * Follow this node's value backward: what it is computed from.
-     *
-     * Steps come nearest first (by `depth`). The answer stays inside the
-     * node's file unless `interprocedural` is set, and is computed from the
-     * files' current content.
-     *
-     * Soundness:
-     * - `boundary: true` marks where the trail ends because the value comes
-     *   from outside the analyzed code: a parameter, an import, a global,
-     *   `this`, or a call result. It means "unknown", not "safe".
-     * - A `let` assigned in two places has both values as sources
-     *   (flow-insensitive). `c ? a : b` has `a` and `b` as sources, not `c`.
-     * - Closures do not carry flow: a callback that reads `x` is not
-     *   "computed from" `x`.
-     * - With `throughCalls` (the default) a call's result counts as derived
-     *   from its arguments and receiver, so the trail continues into them.
-     * - `truncated` on the result: a limit was hit and steps are missing.
-     *
-     * @throws when the query cannot run, rather than answering `[]` (which
-     *   would read as "nothing found"): semantic analysis is off for the step,
-     *   the file is not JavaScript or TypeScript, the root was parsed from a
-     *   string, the host is Node.js or WebAssembly, or an option is unknown;
-     *   and (a TypeError naming the node's kind) when the query does not apply
-     *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
-     *   anything but a variable or a use of one for `mutations`, code outside
-     *   any function for `callers`. An expression the analysis does not track
-     *   (in a type position: `typeof import("./x")`) answers `[]` instead.
-     *
-     * @experimental
-     * @example
-     * ```ts
-     * // Is the SQL text built from request data?
-     * const call = root.root().find({ rule: { pattern: "$DB.query($SQL)" } })!;
-     * const fromRequest = call
-     *   .getMatch("SQL")!
-     *   .flowsFrom()
-     *   .some((step) => step.kind === "parameter" && step.name === "req");
-     * ```
-     */
-    flowsFrom(options?: FlowOptions): FlowSteps<M>;
-
-    /**
-     * Follow this node's value forward: the variables, calls, returns,
-     * property writes and JSX attributes it reaches.
-     *
-     * A step with `via: "argument"` is a call that receives the value, and
-     * `index` is the argument position. A step with `via: "return"` or
-     * `via: "store"` (`o.p = x`) is reported and not followed further: the
-     * value leaves the function or goes into the heap.
-     *
-     * Soundness: as for `flowsFrom()`; `boundary` is always `false` on
-     * forward steps.
-     *
-     * @throws when the query cannot run, rather than answering `[]` (which
-     *   would read as "nothing found"): semantic analysis is off for the step,
-     *   the file is not JavaScript or TypeScript, the root was parsed from a
-     *   string, the host is Node.js or WebAssembly, or an option is unknown;
-     *   and (a TypeError naming the node's kind) when the query does not apply
-     *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
-     *   anything but a variable or a use of one for `mutations`, code outside
-     *   any function for `callers`. An expression the analysis does not track
-     *   (in a type position: `typeof import("./x")`) answers `[]` instead.
-     *
-     * @experimental
-     * @example
-     * ```ts
-     * // Every call that receives a value derived from req.body
-     * const calls = root.root().findAll({ rule: { pattern: "req.body" } })
-     *   .flatMap((body) => body.flowsTo())
-     *   .filter((step) => step.via === "argument")
-     *   .map((step) => step.node);
-     * ```
-     */
-    flowsTo(options?: FlowOptions): FlowSteps<M>;
-
-    /**
-     * Whether this node's value is computed from `source`: `true` when a step
-     * of `flowsFrom(options)` is that node, or matches the predicate.
-     * Same soundness as `flowsFrom()`: `false` means "not found", and a
-     * `boundary` step can hide more sources.
-     *
-     * @throws as `flowsFrom()` does, and when `source` is neither.
-     * @experimental
-     * @example
-     * ```ts
-     * // Is the SQL text built from request data?
-     * sql.dependsOn((step) => step.kind === "parameter" && step.name === "req");
-     * // Is this argument created by moment(...) directly, not through an alias?
-     * name.dependsOn((step) => step.kind === "call" && step.name === "moment", { maxDepth: 1 });
-     * ```
-     */
-    dependsOn(source: SgNode<M> | ((step: FlowStep<M>) => boolean), options?: FlowOptions): boolean;
-
-    /**
-     * Whether this node's value reaches `target`: `true` when a step of
-     * `flowsTo(options)` is that node, or matches the predicate.
-     *
-     * @throws as `flowsTo()` does, and when `target` is neither.
-     * @experimental
-     * @example
-     * ```ts
-     * // Does req.body reach a db.query(...) call?
-     * body.reaches((step) => step.via === "argument" && step.name === "db.query");
-     * ```
-     */
-    reaches(target: SgNode<M> | ((step: FlowStep<M>) => boolean), options?: FlowOptions): boolean;
-
-    /**
-     * What the code at this node calls. The answer depends on the node:
-     * - the program (`root.root()`): calls made while the module is
-     *   evaluated (top-level code), so "does importing this run code?";
-     * - a call or a JSX element: what that call calls (for `<Modal />`, the
-     *   `Modal` component, `via: "jsx"`);
-     * - a function or its name: the calls written in its body;
-     * - any other code (a statement, a block): the calls written inside it.
-     *
-     * Each entry is either a function the call graph resolved
-     * (`resolved: true`, `node` is the function, possibly in another file),
-     * or a call it could not resolve (`resolved: false`, `node` is the call):
-     * a library, a builtin, or a value the analysis lost track of. In file
-     * scope, imported functions are unresolved.
-     *
-     * Soundness:
-     * - A function passed to an unresolved call (`items.map(f)`,
-     *   `setTimeout(f)`) is assumed to be called: `via: "callback"`.
-     * - `unparsed`: imports of visited files that failed to parse; calls
-     *   into them are missing. `truncated`: a limit was hit.
-     *
-     * @throws when the query cannot run, rather than answering `[]` (which
-     *   would read as "nothing found"): semantic analysis is off for the step,
-     *   the file is not JavaScript or TypeScript, the root was parsed from a
-     *   string, the host is Node.js or WebAssembly, or an option is unknown;
-     *   and (a TypeError naming the node's kind) when the query does not apply
-     *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
-     *   anything but a variable or a use of one for `mutations`, code outside
-     *   any function for `callers`. An expression the analysis does not track
-     *   (in a type position: `typeof import("./x")`) answers `[]` instead.
-     *
-     * @experimental
-     * @example
-     * ```ts
-     * const handler = root.root().find({ rule: { kind: "function_declaration" } })!;
-     * for (const callee of handler.callees({ transitive: true })) {
-     *   if (callee.resolved) {
-     *     callee.node;          // the function, in its own file
-     *     callee.callSite.node; // the call that reaches it
-     *   } else {
-     *     callee.name;          // "Number", "res.json", ...
-     *   }
-     * }
-     * ```
-     */
-    callees(options?: CallGraphOptions): CallGraphEntries<CalleeEntry<M>>;
-
-    /**
-     * Calls of the function at this node (a function, its name, or a call to
-     * it), one entry per call. `node` is the calling function, or the call
-     * itself when it is made from module top-level code (`name: "<module>"`).
-     * Needs workspace scope to see callers in other files.
-     *
-     * With `transitive: true` a function reached through several paths has
-     * one entry per call on those paths.
-     *
-     * Soundness:
-     * - Getters and setters are run by property reads and writes
-     *   (`obj.value`, `obj.value = x`), which are not calls: `[]` for a
-     *   getter or setter does not mean it is unused.
-     * - An empty answer does not mean "unused": a function stored as a value
-     *   (`{ round: fn }`, `export default fn`) or called dynamically has no
-     *   callers the graph can see. Check `references()` too. Callers are call
-     *   sites only: a function a package exports, or a route handler, is
-     *   called from outside the workspace. Ask `entryPoints()` for that.
-     * - Like every semantic answer it describes the workspace as it was when
-     *   the step started: the step's own edits are not in it.
-     * - `unparsed`: workspace files that failed to parse; calls in them are
-     *   missing. `truncated`: a limit was hit.
-     *
-     * @throws when the query cannot run, rather than answering `[]` (which
-     *   would read as "nothing found"): semantic analysis is off for the step,
-     *   the file is not JavaScript or TypeScript, the root was parsed from a
-     *   string, the host is Node.js or WebAssembly, or an option is unknown;
-     *   and (a TypeError naming the node's kind) when the query does not apply
-     *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
-     *   anything but a variable or a use of one for `mutations`, code outside
-     *   any function for `callers`. An expression the analysis does not track
-     *   (in a type position: `typeof import("./x")`) answers `[]` instead.
-     *
-     * @experimental
-     * @example
-     * ```ts
-     * // Add await to every call of loadConfig
-     * const edits = loadConfig.callers().map((caller) =>
-     *   caller.callSite.node.replace(`await ${caller.callSite.node.text()}`),
-     * );
-     * ```
-     */
-    callers(options?: CallGraphOptions): CallGraphEntries<CallerEntry<M>>;
-
-    /**
-     * Why the function at this node is called from outside the workspace's
-     * code: its package exports it through `exports` or `main`
-     * (`{ kind: "export", label: "@acme/ui#Button" }`), or a rule in the
-     * selector's `semanticAnalysis.entryPoints` declares it
-     * (`{ kind: "http", label: "GET app/api/users/[id]/route.ts" }`).
-     * `[]` when neither applies. `callers()` never includes these.
-     * Needs workspace scope.
-     *
-     * @experimental
-     */
-    entryPoints(): EntryPoint[];
+    // Mutations (experimental; JavaScript, TypeScript and Python). The call
+    // graph, data flow, symbols and types are lookups: `callGraph(lang)`,
+    // `dataflow(lang)`, `symbols(lang)`, `types(lang)`. Every answer is a
+    // "may" answer: see https://docs.codemod.com/community/jssg/dataflow.
 
     /**
      * Places that change the variable at this node, or the object it holds:
@@ -380,11 +109,8 @@ declare module "codemod:ast-grep" {
      *   would read as "nothing found"): semantic analysis is off for the step,
      *   the file is not JavaScript or TypeScript, the root was parsed from a
      *   string, the host is Node.js or WebAssembly, or an option is unknown;
-     *   and (a TypeError naming the node's kind) when the query does not apply
-     *   to the node: a statement or declaration for `flowsFrom`/`flowsTo`,
-     *   anything but a variable or a use of one for `mutations`, code outside
-     *   any function for `callers`. An expression the analysis does not track
-     *   (in a type position: `typeof import("./x")`) answers `[]` instead.
+     *   and (a TypeError naming the node's kind) when the node is not a
+     *   variable or a use of one (for `a.b`, ask about `a`).
      *
      * @experimental
      * @example
@@ -396,17 +122,6 @@ declare module "codemod:ast-grep" {
      * ```
      */
     mutations(options?: MutationOptions<M>): Array<Mutation<M>>;
-    /**
-     * The type of this expression as the TypeScript 7 checker prints it
-     * (`"Promise<User>"`), or `null` when there is no checker or no answer.
-     * Needs the checker: import `types` from `"codemod/ast-grep"` in the
-     * step's code, with a TypeScript 7 checker in the target's
-     * `node_modules/@typescript/native-preview-<os>-<arch>` (or
-     * `typescript-<os>-<arch>`), or `CODEMOD_TS_API=<path to tsc/tsgo>`.
-     *
-     * @experimental
-     */
-    typeInfo(): string | null;
   }
   /** Represents the parsed tree of code. */
   export class SgRoot<M extends TypesMap = TypesMap> {
@@ -428,7 +143,8 @@ declare module "codemod:ast-grep" {
     /**
      * Write content to this file.
      *
-     * This method is only valid for files obtained via `definition()` or `references()`.
+     * This method is only valid for files reached through `symbols(lang).definition` or
+     * `.references` (or another analysis), not the file being processed.
      * It cannot be called on the current file being processed - for that, return the
      * modified content from the `transform()` function instead.
      *
@@ -443,13 +159,13 @@ declare module "codemod:ast-grep" {
      * ```ts
      * export default function transform(root) {
      *   const node = root.root().find({ rule: { pattern: "myVar" } });
-     *   const def = node.definition();
+     *   const def = symbols("typescript").definition.get(node)?.[0];
+     *   const other = def?.node.getRoot();
      *
-     *   if (def && def.root.filename() !== root.filename()) {
+     *   if (other && other.filename() !== root.filename()) {
      *     // Edit the other file
      *     const edits = [def.node.replace("newVar")];
-     *     const newContent = def.root.root().commitEdits(edits);
-     *     def.root.write(newContent);
+     *     other.write(other.root().commitEdits(edits));
      *   }
      *
      *   // Return changes for the current file
@@ -462,31 +178,16 @@ declare module "codemod:ast-grep" {
     // Module resolution (experimental; JavaScript and TypeScript, workspace scope).
 
     /**
-     * The file `specifier` resolves to when this root's file imports it, as
-     * `definition()` resolves it: tsconfig `paths` (with `extends`), workspace
-     * packages, `node_modules`, index files and extensions.
-     *
-     * @throws when semantic analysis is not in workspace scope, or the root
-     *   was parsed from a string.
-     * @returns The absolute path, or null when it does not resolve.
-     * @experimental
-     * @example
-     * ```ts
-     * root.resolveModule("@/components"); // "/repo/src/components/index.ts"
-     * ```
-     */
-    resolveModule(specifier: string): string | null;
-
-    /**
      * What export `name` (`"default"` for the default export) of `module`
      * lands on, following re-exports through barrels and `export *`.
      * `module` is a specifier, resolved from this root's file, or an
-     * absolute path (from `resolveModule()`).
+     * absolute path (from `symbols(lang).resolveModule()`).
      *
-     * @throws as `resolveModule()` does.
-     * @returns A `definition()`-shaped result (`exportName` is how the
-     *   declaring module exports it), or null when the module does not
-     *   export the name or does not resolve.
+     * @throws when semantic analysis is off for the step, or this root was
+     *   parsed from a string.
+     * @returns The declaration (`node`, `nameNode`, `root`, `kind`, and
+     *   `exportName`: how the declaring module exports it), or null when the
+     *   module does not export the name or does not resolve.
      * @experimental
      * @example
      * ```ts
@@ -497,55 +198,6 @@ declare module "codemod:ast-grep" {
      */
     resolveExport(module: string, name: string): DefinitionResult<M> | null;
 
-    /**
-     * A specifier this root's file can import `target` with. Candidates are
-     * the relative path and every tsconfig `paths` alias whose target holds
-     * the file; each is checked by resolving it, so the answer always
-     * reaches `target`. With `like` (the specifier being replaced) its style
-     * wins: relative or alias, the same alias prefix, `.js` or no extension.
-     * Otherwise `prefer`, then the shortest.
-     *
-     * @param target - An absolute path, a path relative to this file, or an
-     *   SgRoot (from `definition()` or `resolveExport()`).
-     * @throws as `resolveModule()` does, and on an unknown option.
-     * @returns The specifier, or null when none reaches `target`.
-     * @experimental
-     * @example
-     * ```ts
-     * root.specifierFor(modal.root, { like: "@/components" }); // "@/components/modal"
-     * root.specifierFor(modal.root, { like: "../components" }); // "../components/modal"
-     * ```
-     */
-    specifierFor(target: string | SgRoot<M>, options?: SpecifierOptions): string | null;
-
-    /**
-     * Every place in the workspace that refers to `target` (this root's file
-     * when omitted; a path relative to this file, an absolute path, or an
-     * SgRoot): `import` statements (side-effect imports too), `export … from`,
-     * `require()`, `import()`, and test-framework mocks (`jest.mock`,
-     * `jest.requireActual`, `vi.mock`, `vi.importActual`, ...). Each
-     * specifier is resolved from its file, so aliases and barrels count.
-     *
-     * `import` lines in `.mdx` / `.md` files count too (kind `"import"`).
-     *
-     * Answers from a table of every module reference in the workspace, built
-     * on the first `importers()` query of the run and kept: a snapshot, as
-     * for `callers()`. A file rewritten later in the run still counts as
-     * importing what it imported then, so a barrel's consumers are known
-     * even after they were pointed elsewhere. `unparsed` lists files that
-     * did not parse: references in them are missing.
-     *
-     * @throws as `resolveModule()` does.
-     * @experimental
-     * @example
-     * ```ts
-     * // Can this barrel be deleted? Not while anything still imports it.
-     * const left = root.importers();
-     * if (left.length === 0 && left.unparsed.length === 0) {
-     *   // no importers in the workspace
-     * }
-     * ```
-     */
     /**
      * The node a `node.key()` names, in this root; null when the key names
      * another file, or this file has no node of that range and kind any more.
@@ -562,17 +214,15 @@ declare module "codemod:ast-grep" {
      */
     nodeByKey(key: string): SgNode<M> | null;
 
-    importers(target?: string | SgRoot<M>): Array<ImporterEntry<M>> & { unparsed: UnparsedFile[] };
-
     /**
      * Whether importing this module runs code: a call made at module top
-     * level (what `root.root().callees()` answers), an `import "./x"`
+     * level, an `import "./x"`
      * side-effect import, or a top-level write to an object member
      * (`registry.x = …`). Declarations alone are not effects. A "may" answer:
      * an unresolved call counts even if it is pure, and a side-effect import
      * counts without looking at the imported module.
      *
-     * @throws as `resolveModule()` does.
+     * @throws as `resolveExport()` does.
      * @experimental
      * @example
      * ```ts
@@ -591,7 +241,7 @@ declare module "codemod:ast-grep" {
      * a package without `exports` is public by declaration, even when the
      * name does not resolve (no install, no workspace config).
      *
-     * @throws as `resolveModule()` does.
+     * @throws as `resolveExport()` does.
      * @experimental
      * @example
      * ```ts
@@ -861,63 +511,12 @@ declare module "codemod:ast-grep" {
   }
 
   /**
-   * Result of getDefinition() - contains the definition node and its root.
-   */
-  /**
    * The kind of definition that was found.
    * - 'local': Definition is in the same file (local variable, function, class, etc.)
    * - 'import': Definition traced to an import statement but module couldn't be resolved
    * - 'external': Definition resolved to a different file in the workspace
    */
   export type DefinitionKind = "local" | "import" | "external";
-
-  /**
-   * Options for definition lookup.
-   */
-  export interface DefinitionOptions {
-    /**
-     * If true, attempt to resolve imports to their source modules.
-     * If false, stop at the import statement.
-     * @default true
-     */
-    resolveExternal?: boolean;
-    /**
-     * Go through import bindings: a use of an imported name normally lands
-     * on its binding in the import statement (`kind: 'local'`); with
-     * `follow` the lookup continues from there to the declaration in the
-     * other module (`kind: 'external'`), or to the import when the module
-     * cannot be resolved (`kind: 'import'`).
-     * @default false
-     * @example
-     * ```ts
-     * // <Modal /> → export default function Modal() in ./modal.tsx
-     * const def = tag.definition({ follow: true });
-     * def?.exportName; // "default"
-     * def?.nameNode?.text(); // "Modal"
-     * ```
-     */
-    follow?: boolean;
-  }
-
-  /** One place that refers to a module, from `root.importers()`. */
-  export interface ImporterEntry<M extends TypesMap = TypesMap> {
-    /**
-     * The `import` or `export … from` statement, or the `require(…)`,
-     * `import(…)` or mock call.
-     */
-    node: SgNode<M>;
-    root: SgRoot<M>;
-    /**
-     * - 'import': `import … from "m"`, `import "m"`
-     * - 'export': `export … from "m"`, `export * from "m"`
-     * - 'require': `require("m")`
-     * - 'dynamic': `import("m")`
-     * - 'mock': `jest.mock("m")`, `jest.requireActual("m")`, `vi.mock("m")`, `vi.importActual("m")`, ...
-     */
-    kind: "import" | "export" | "require" | "dynamic" | "mock";
-    /** The specifier as written. */
-    specifier: string;
-  }
 
   export interface SpecifierOptions {
     /**
@@ -930,6 +529,7 @@ declare module "codemod:ast-grep" {
     prefer?: "relative" | "alias";
   }
 
+  /** What `root.resolveExport()` finds: the declaration an export lands on. */
   export interface DefinitionResult<M extends TypesMap = TypesMap> {
     /**
      * The SgNode at the definition location. Depending on the declaration
@@ -954,16 +554,6 @@ declare module "codemod:ast-grep" {
      * A declaration exported under several names reports one of them.
      */
     exportName: string | null;
-  }
-
-  /**
-   * References in a single file - contains the root and all reference nodes.
-   */
-  export interface FileReferences<M extends TypesMap = TypesMap> {
-    /** The SgRoot for the file */
-    root: SgRoot<M>;
-    /** Array of SgNode objects for each reference in this file */
-    nodes: Array<SgNode<M>>;
   }
 
   // ---- Data flow ----------------------------------------------------------
@@ -1028,165 +618,7 @@ declare module "codemod:ast-grep" {
     | "jsx-child"
     | "return";
 
-  export interface FlowOptions {
-    /**
-     * Treat a call's result as derived from its arguments and receiver, and
-     * keep following the value through them. This is the safe assumption for
-     * calls the analysis cannot see into. With `false`, every call is a stop.
-     * @default true
-     */
-    throughCalls?: boolean;
-    /** Stop after this many steps from the node. `1` gives the direct sources (or uses) only. */
-    maxDepth?: number;
-    /**
-     * Cross function boundaries inside the workspace. Backward, a parameter
-     * continues at its callers' arguments and a resolved call's result at the
-     * callee's return values; forward, an argument goes into the callee's
-     * parameter and a returned value out to the call sites. A value that
-     * enters a function through a call leaves it through that same call.
-     * Answers then span files (`step.root` differs) and can be much larger:
-     * combine with `maxDepth` or `stopAt`. Callback edges are not followed.
-     * Uses the workspace callers table (a snapshot, as for `callers()`).
-     * @default false
-     * @example
-     * ```ts
-     * // Does a request value reach query() through helper functions?
-     * sql.dependsOn((s) => s.kind === "member" && s.name === "body", { interprocedural: true });
-     * ```
-     */
-    interprocedural?: boolean;
-    /**
-     * Report steps reached through these edges, but do not walk past them:
-     * "the first sink". `flowsTo({ stopAt: ["jsx-child", "jsx-attribute", "argument"] })`
-     * answers where a value is first used, not every place its uses go on to.
-     */
-    stopAt?: FlowEdgeKind[];
-  }
-
-  /** Fields every data-flow step has. */
-  interface FlowStepBase<M extends TypesMap> {
-    /** The syntax node of this step, in `root`. */
-    node: SgNode<M>;
-    root: SgRoot<M>;
-    /** Number of edges from the queried node (1 = a direct source or use). */
-    depth: number;
-    /**
-     * The step this one was reached from, or null for a step reached directly
-     * from the queried node (`depth` 1). Follow `from` to print the whole
-     * path, or to find the step right before one, without counting depths.
-     * With `interprocedural`, `from` can be a step in another file.
-     *
-     * @example
-     * ```ts
-     * // The value a variable passed to query() was initialized with
-     * const init = sql.flowsFrom().find((s) => s.via === "assign" && s.from?.kind === "variable");
-     * ```
-     */
-    from: FlowStep<M> | null;
-    /**
-     * Backward answers only: the value comes from outside the analyzed code
-     * (a parameter, an import, a global, `this`, a call result) and the trail
-     * ends here. "Unknown", not "safe". Always false on forward steps.
-     */
-    boundary: boolean;
-  }
-
-  /** The `kind` of a step, with the fields that kind always has. */
-  type FlowStepByKind =
-    | {
-        kind: "parameter";
-        /** The parameter's name. */
-        name: string;
-        /** The parameter's position. */
-        index: number;
-      }
-    | {
-        kind: "variable" | "import" | "reference" | "global" | "jsx-attribute";
-        /** The variable, imported, referenced, global or attribute name. */
-        name: string;
-        index: number | null;
-      }
-    | {
-        kind: "call";
-        /** The callee's text: `"moment"`, `"db.query"`, `"new Date"` is `"Date"`. */
-        name: string;
-        index: number | null;
-      }
-    | {
-        kind: "member" | "function" | "class" | "expression";
-        /** Property name, function or class name, or object key; null when computed or anonymous. */
-        name: string | null;
-        index: number | null;
-      }
-    | {
-        kind: "literal" | "this" | "object" | "array" | "jsx";
-        name: null;
-        index: number | null;
-      };
-
-  /** The `via` of a step, with the fields that edge always sets. */
-  type FlowStepByVia =
-    | {
-        /** The value is an argument of a call. Forward: `node` is the call. */
-        via: "argument";
-        /** The argument position. */
-        index: number;
-      }
-    | {
-        via: Exclude<FlowEdgeKind, "argument">;
-      };
-
-  /**
-   * One node reached by `flowsFrom()` or `flowsTo()`.
-   *
-   * Narrow on `kind` for `name` (always a string for parameters, variables,
-   * imports, references, globals and calls) and on `via` for `index`
-   * (always the position for `"argument"`):
-   *
-   * ```ts
-   * for (const step of node.flowsFrom()) {
-   *   if (step.kind === "parameter") step.name; // string
-   *   if (step.via === "argument") step.index;  // number
-   * }
-   * ```
-   */
-  export type FlowStep<M extends TypesMap = TypesMap> = FlowStepBase<M> &
-    FlowStepByKind &
-    FlowStepByVia;
-
-  /**
-   * Steps of a data-flow query, nearest first.
-   *
-   * `truncated` is true when a result limit (50,000 steps) was hit and
-   * steps are missing.
-   */
-  export type FlowSteps<M extends TypesMap = TypesMap> = Array<FlowStep<M>> & {
-    truncated: boolean;
-  };
-
   // ---- Call graph ---------------------------------------------------------
-
-  /** Why a function is called from outside the workspace's code. */
-  export interface EntryPoint {
-    /** `"export"` for the package's public API, else the rule's `kind`. */
-    kind: string;
-    /** What reaches it: `@acme/ui#Button`, `GET app/api/users/[id]/route.ts`. */
-    label: string;
-  }
-
-  export interface CallGraphOptions {
-    /** Follow calls of calls (callees of callees, callers of callers). @default false */
-    transitive?: boolean;
-    /** With `transitive`, stop after this many calls from the node. */
-    maxDepth?: number;
-    /**
-     * With `transitive`, report edges of these kinds but do not walk past
-     * them. `callers({ transitive: true, stopAt: ["callback"] })` does not
-     * continue from a function that only passes the queried one to unknown
-     * code (`names.map(getSetting)`).
-     */
-    stopAt?: CallEdgeKind[];
-  }
 
   /**
    * Why the call graph has an edge.
@@ -1201,107 +633,6 @@ declare module "codemod:ast-grep" {
    *   class members that implement it. Experimental.
    */
   export type CallEdgeKind = "direct" | "method" | "constructor" | "callback" | "jsx" | "type";
-
-  /** A call, with the root of its file. */
-  export interface CallSite<M extends TypesMap = TypesMap> {
-    /** The call expression (or `new`, or JSX element). */
-    node: SgNode<M>;
-    root: SgRoot<M>;
-  }
-
-  /** A function `callees()` resolved. */
-  export interface ResolvedCallee<M extends TypesMap = TypesMap> {
-    resolved: true;
-    /** The function (declaration, expression, arrow or method), possibly in another file. */
-    node: SgNode<M>;
-    root: SgRoot<M>;
-    /** The function's name, or the variable or key it is assigned to; null when anonymous. */
-    name: string | null;
-    via: CallEdgeKind;
-    /** Number of calls from the queried function (1 = called directly). */
-    depth: number;
-    /** The call that reaches this function. */
-    callSite: CallSite<M>;
-  }
-
-  /**
-   * A call `callees()` could not resolve to a function in the workspace: a
-   * library, a builtin, a dynamic call, or (in file scope) an import.
-   */
-  export interface UnresolvedCallee<M extends TypesMap = TypesMap> {
-    resolved: false;
-    /** The call itself. */
-    node: SgNode<M>;
-    root: SgRoot<M>;
-    /** The callee's text: `"Number"`, `"res.json"`, `"items.forEach"`. */
-    name: string;
-    via: Exclude<CallEdgeKind, "callback">;
-    depth: number;
-    /** The same call as `node`. */
-    callSite: CallSite<M>;
-    /**
-     * With the checker on (the step imports `types`):
-     * where the TypeScript checker says the called member is declared, when
-     * that is not a function in the workspace. For example the
-     * `isOpen: Accessor<boolean>` property of a context interface, in a
-     * `.d.ts` or the workspace. Absent without types or when unknown.
-     * @experimental
-     */
-    declaration?: { node: SgNode<M>; root: SgRoot<M>; name: string | null };
-  }
-
-  /** One entry of a `callees()` answer: narrow on `resolved`. */
-  export type CalleeEntry<M extends TypesMap = TypesMap> = ResolvedCallee<M> | UnresolvedCallee<M>;
-
-  /** One call of the queried function, found by `callers()`. */
-  export interface CallerEntry<M extends TypesMap = TypesMap> {
-    /** Always true: a caller is found by resolving its call. */
-    resolved: true;
-    /**
-     * The calling function, or the call itself when it is made from module
-     * top-level code.
-     */
-    node: SgNode<M>;
-    root: SgRoot<M>;
-    /** The calling function's name, `"<anonymous>"`, or `"<module>"` for top-level code. */
-    name: string;
-    /** How the call reaches the queried function (`"callback"`: it is passed to unknown code). */
-    via: CallEdgeKind;
-    /** 1 for a direct caller, 2 for a caller of a caller, ... */
-    depth: number;
-    /** The call, in the calling function. For a callback, the call it is passed to. */
-    callSite: CallSite<M>;
-    /**
-     * The function this entry's call reaches: the queried function at depth
-     * 1, a caller from the previous depth deeper. Null when the call reaches
-     * module code.
-     */
-    callee: { node: SgNode<M>; root: SgRoot<M>; name: string | null } | null;
-  }
-
-  /** An entry of either call-graph answer. */
-  export type CallGraphEntry<M extends TypesMap = TypesMap> = CalleeEntry<M> | CallerEntry<M>;
-
-  /** A file the analysis could not parse. */
-  export interface UnparsedFile {
-    path: string;
-    /** The parser's message. */
-    message: string;
-  }
-
-  /**
-   * Entries of a call-graph query, nearest first.
-   * - `truncated`: a result limit (50,000 entries) was hit and entries are missing
-   * - `unparsed`: files the walk needed but could not parse, so calls into
-   *   or out of them are missing: imports of the visited functions'
-   *   files (`callees`), or workspace files (`callers`)
-   *
-   * The answer is complete only when `!truncated && unparsed.length === 0`.
-   */
-  export type CallGraphEntries<E> = Array<E> & {
-    truncated: boolean;
-    unparsed: UnparsedFile[];
-  };
 
   // ---- Mutations ----------------------------------------------------------
 
@@ -1641,13 +972,21 @@ declare module "codemod:ast-grep" {
     callees: Lookup<SgNode, SgNode, SiteMeta & { via: CallEdgeKind }>;
   };
 
-  /** One hop of a value: what kind of node, and how it got there. */
+  /**
+   * One hop of a value: what kind of node, and how it got there.
+   * `name` is set for parameters, variables, imports, references, globals
+   * and calls (a call's name is the callee text, `"db.query"`); `index` is a
+   * parameter's position, or the argument's for `via: "argument"`.
+   * `boundary` (sources only): the value comes from outside the analyzed
+   * code (a parameter, an import, a global, `this`, a call result), so the
+   * trail ends here. "Unknown", not "safe".
+   */
   export interface FlowMeta {
     kind: FlowNodeKind;
     via: FlowEdgeKind;
     name: string | null;
     index: number | null;
-    boundary: string | null;
+    boundary: boolean;
   }
 
   /** `dataflow(lang)`: where a value comes from one hop back, and where it goes one hop on. */
@@ -1657,28 +996,113 @@ declare module "codemod:ast-grep" {
   };
 
   /**
-   * `symbols(lang)`: an identifier's definition (through imports, to the
-   * declaration, as `definition({ follow: true })`), and a definition's references.
+   * `symbols(lang)`: an identifier's definition and a name's references, in
+   * the step's scope (the file, unless the step asks for the workspace), and
+   * module resolution (workspace scope).
    */
   export function symbols(language: AnalysisLanguage): {
-    definition: Lookup<SgNode, SgNode, { kind: DefinitionKind; exportName: string | null }>;
+    /**
+     * The declaration a name means, through imports (to the import binding
+     * when the module does not resolve). One edge: `node` is the
+     * declaration (the name, the declarator or the whole `export default`
+     * statement), `nameNode` its name, `exportName` how its module exports it.
+     *
+     * @example
+     * ```ts
+     * // <Modal /> → export default function Modal() in ./modal.tsx
+     * const def = symbols("typescript").definition.get(tag)?.[0];
+     * def?.exportName; // "default"
+     * def?.nameNode?.text(); // "Modal"
+     * def?.node.getRoot().filename(); // ".../modal.tsx"
+     * ```
+     */
+    definition: Lookup<
+      SgNode,
+      SgNode,
+      { nameNode: SgNode | null; kind: DefinitionKind; exportName: string | null }
+    >;
+    /** Every use of the name, one edge per reference, across files in workspace scope. */
     references: Lookup<SgNode, SgNode>;
+    /**
+     * The file `specifier` resolves to from `file`, or null. Follows
+     * tsconfig/jsconfig `paths` (with `extends`), package `exports`, and
+     * index files.
+     *
+     * @throws when semantic analysis is off for the step, or `file` has no path.
+     * @example
+     * ```ts
+     * symbols("typescript").resolveModule(file, "@/components"); // "/repo/src/components/index.ts"
+     * ```
+     */
+    resolveModule(file: ModuleFile, specifier: string): string | null;
+    /**
+     * A specifier `file` can import `target` with, checked by resolving it;
+     * null when none reaches it. Across workspace packages, only what the
+     * target's package makes public (its `exports`, or its entry).
+     *
+     * @throws as `resolveModule()` does, and on an unknown option.
+     * @example
+     * ```ts
+     * const { specifierFor } = symbols("typescript");
+     * specifierFor(file, modal.root, { like: "@/components" }); // "@/components/modal"
+     * specifierFor(file, modal.root, { like: "../components" }); // "../components/modal"
+     * ```
+     */
+    specifierFor(file: ModuleFile, target: ModuleFile, options?: SpecifierOptions): string | null;
   };
 
   /**
-   * `types(lang)`: an expression's type from the TypeScript 7 checker, or
-   * `undefined`. Importing `types` turns the checker on for the step.
+   * A file for `symbols(lang).resolveModule` and `.specifierFor`: an
+   * absolute path or one relative to the target, a workflow file
+   * (`{ path }`), an SgRoot, or a node in one.
    */
-  export function types(language: "typescript" | "tsx" | "javascript" | "jsx"): {
+  export type ModuleFile = string | { readonly path: string } | SgRoot | SgNode;
+
+  /**
+   * `types(lang)`: an expression's type, or `undefined`. For JavaScript and
+   * TypeScript, from the TypeScript 7 checker, which importing `types` turns
+   * on for the step; for Python, the annotation as written.
+   */
+  export function types(language: AnalysisLanguage): {
     typeOf: ReadonlyMap<SgNode, string>;
   };
 
+  /** Why a function is an entry point. */
+  export interface EntryPoint {
+    /** `"export"` for the package's public API, else the declaring rule's `kind`. */
+    kind: string;
+    /** What reaches it: `"@acme/ui#Button"`, `"GET app/api/users/[id]/route.ts"`. */
+    label: string;
+  }
+
+  /** `entryPoints(lang)` as a step's result: `[function, reasons]` rows. */
+  export interface EntryPointsJSON {
+    readonly entryPoints: ReadonlyArray<readonly [NodeKey, ReadonlyArray<EntryPoint>]>;
+  }
+
+  /**
+   * Every function in the workspace something outside its code calls, mapped
+   * to why. Pass it as `crawl()`'s start to walk from all of them.
+   */
+  export interface EntryPoints extends ReadonlyMap<SgNode, ReadonlyArray<EntryPoint>> {
+    get(fn: SgNode | NodeKey): ReadonlyArray<EntryPoint> | undefined;
+    has(fn: SgNode | NodeKey): boolean;
+    toJSON(): EntryPointsJSON;
+  }
+
   /**
    * `entryPoints(lang)`: every function in the workspace something outside
-   * its code calls (package exports, and `semanticAnalysis.entryPoints`
-   * rules). `node.entryPoints()` says why.
+   * its code calls, and why: its package exports it (`kind: "export"`), or a
+   * `semanticAnalysis.entryPoints` rule declares it (the rule's `kind`).
+   *
+   * @example
+   * ```ts
+   * const outside = entryPoints("typescript");
+   * outside.get(button); // [{ kind: "export", label: "@acme/ui#Button" }]
+   * const live = await crawl(callGraph("typescript").callees, outside);
+   * ```
    */
-  export function entryPoints(language: AnalysisLanguage): SgNode[];
+  export function entryPoints(language: AnalysisLanguage): EntryPoints;
 
   /**
    * A lookup from `[from, to, meta?]` edges. Both ends are nodes or their
@@ -1706,6 +1130,8 @@ declare module "codemod:ast-grep" {
   export function lookup<Meta extends object = any>(json: LookupJSON): Lookup<SgNode, SgNode, Meta>;
   /** A crawl's result an earlier step returned, made one again. */
   export function lookup<Meta extends object = any>(json: ReachedJSON): ReachedMap<Meta>;
+  /** `entryPoints(lang)` an earlier step returned, as entry points again. */
+  export function lookup(json: EntryPointsJSON): EntryPoints;
 
   /** One side of a `join`. */
   export interface JoinSide<M extends TypesMap = TypesMap> {
@@ -1768,11 +1194,12 @@ declare module "codemod:ast-grep" {
    * each start node to `null`. Never walks past a node in `stopAt` (it is
    * still reached). Takes lookups only: make a Map into one with `lookup()`,
    * and a lookup an earlier step returned with `lookup(result)`. Start and
-   * `stopAt` take nodes or their keys.
+   * `stopAt` take nodes or their keys; a lookup, a crawl's result or
+   * `entryPoints(lang)` as the start means its nodes.
    */
   export function crawl<Meta = {}>(
     lookups: Lookup<SgNode, SgNode, Meta> | ReadonlyArray<Lookup<SgNode, SgNode, any>>,
-    start: SgNode | NodeKey | Iterable<SgNode | NodeKey>,
+    start: SgNode | NodeKey | Iterable<SgNode | NodeKey> | ReadonlyMap<SgNode, unknown>,
     options?: { stopAt?: Iterable<SgNode | NodeKey> },
   ): Promise<ReachedMap<Meta>>;
 }

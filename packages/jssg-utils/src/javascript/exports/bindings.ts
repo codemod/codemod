@@ -1,3 +1,6 @@
+// The namespace on purpose: a CLI without `symbols` still loads this module,
+// and these helpers answer null there instead of failing at import.
+import * as sg from "codemod:ast-grep";
 import type JS from "codemod/langs/javascript";
 import type TS from "codemod/langs/typescript";
 import type TSX from "codemod/langs/tsx";
@@ -19,17 +22,41 @@ function asNode<T extends Language>(node: SgNode<T>): Node {
   return node as unknown as Node;
 }
 
-function safeDefinition(node: Node, resolveExternal = true) {
+interface Definition {
+  node: Node;
+  kind: string;
+}
+
+type SymbolsOf = (language: "typescript") => {
+  definition: { get(node: Node): ReadonlyArray<Definition> | undefined };
+  references: { get(node: Node): ReadonlyArray<{ node: Node }> | undefined };
+};
+
+/** `symbols(lang)` on a CLI that has it. Its lookups throw without semantic analysis. */
+function lookups() {
+  const symbols = (sg as unknown as { symbols?: SymbolsOf }).symbols;
+  return symbols ? symbols("typescript") : null;
+}
+
+/** Where the name is declared, through imports. Null when the step has no semantic analysis. */
+function safeDefinition(node: Node): Definition | null {
   try {
-    return node.definition({ resolveExternal });
+    const found = lookups();
+    if (found) return found.definition.get(node)?.[0] ?? null;
+    // CLIs before `symbols(lang)` answer on the node.
+    const legacy = node as unknown as { definition?(o: object): Definition | null };
+    return legacy.definition?.({ resolveExternal: true, follow: true }) ?? null;
   } catch {
     return null;
   }
 }
 
-function safeReferences(node: Node) {
+function safeReferences(node: Node): Node[] {
   try {
-    return node.references();
+    const found = lookups();
+    if (found) return (found.references.get(node) ?? []).map((edge) => edge.node);
+    const legacy = node as unknown as { references?(): { nodes: Node[] }[] };
+    return (legacy.references?.() ?? []).flatMap((file) => file.nodes);
   } catch {
     return [];
   }
@@ -120,6 +147,24 @@ function bindingFromDefinedNode(defined: Node, localNameHint: string): ImportBin
   return bindingInStatement(statement, localNameHint);
 }
 
+/** The name an import statement binds as `localName`: the alias, default or namespace identifier. */
+function importedLocal(statement: Node, localName: string): Node | null {
+  for (const specifier of statement.findAll({ rule: { kind: "import_specifier" } })) {
+    const local = specifier.field("alias") ?? specifier.field("name");
+    if (local?.text() === localName) return local;
+  }
+  const clause = statement.find({ rule: { kind: "import_clause" } });
+  if (!clause) return null;
+  for (const child of clause.children()) {
+    if (child.kind() === "identifier" && child.text() === localName) return child;
+    if (child.kind() === "namespace_import") {
+      const identifier = child.children().find((inner) => inner.kind() === "identifier");
+      if (identifier?.text() === localName) return identifier;
+    }
+  }
+  return null;
+}
+
 /**
  * Import that defines this use, or null when the name is local.
  *
@@ -131,41 +176,42 @@ function bindingFromDefinedNode(defined: Node, localNameHint: string): ImportBin
  * Named imports compare `importedName` with the exported name, so
  * `import { setup as create }` reports `setup`, not `create`.
  *
- * Returns null when semantic analysis is unavailable. `definition()` can
- * throw in that case; this function does not.
+ * A use counts when it means the same declaration as the import's own name,
+ * so a shadowing local is not the import. Returns null when semantic analysis
+ * is unavailable; this function does not throw.
  */
 export function importBindingOf<T extends Language>(node: SgNode<T>): ImportBinding | null {
   const current = asNode(node);
-  const definition = safeDefinition(current, false);
-  if (!definition) return null;
-  return bindingFromDefinedNode(definition.node, current.text());
+  const name = current.text();
+  for (const statement of current.getRoot().root().findAll({ rule: { kind: "import_statement" } })) {
+    const local = importedLocal(statement, name);
+    if (!local) continue;
+    const binding = bindingInStatement(statement, name);
+    if (!binding) continue;
+    if (local.equals(current)) return binding;
+    const used = safeDefinition(current);
+    const imported = safeDefinition(local);
+    if (used && imported && used.node.equals(imported.node)) return binding;
+    return null;
+  }
+  return null;
 }
 
 function resolveDefinitionNode(node: Node): Node | null {
   const definition = safeDefinition(node);
   if (!definition) return null;
-
-  const specifier = asSpecifier(definition.node);
-  if (!specifier) return definition.node;
-
-  const localNode = specifier.field("alias") ?? specifier.field("name");
-  if (!localNode || localNode.id() === node.id()) {
-    return definition.kind === "external" ? definition.node : specifier;
-  }
-
-  const followed = safeDefinition(localNode);
-  if (followed?.kind === "external") return followed.node;
-  return specifier;
+  // An import the workspace couldn't follow stays on its specifier.
+  return asSpecifier(definition.node) ?? definition.node;
 }
 
 /**
- * The node that defines this use, following one import into another project file.
+ * The node that defines this use, following imports into other project files.
  *
  * A local declaration returns that node. An import the workspace can resolve
- * (`kind: "external"`, which means another project file) returns that file's
- * definition. An unresolved package import returns the import specifier.
+ * returns the declaration it leads to, through re-exports. An unresolved
+ * package import returns the import specifier.
  *
- * Does not follow a second hop. `const a = setup(); const b = a` resolves `b`
+ * Follows imports only, not values. `const a = setup(); const b = a` resolves `b`
  * to `b`, not to `setup()`.
  */
 export function resolveDefinition<T extends Language>(node: SgNode<T>): SgNode<T> | null {
@@ -229,8 +275,9 @@ function isInsideImport(node: Node): boolean {
 /**
  * Edits that rename references of `binding` in `currentFile`.
  *
- * Shadowed bindings are left alone, because `references()` only returns this
- * binding. Other files are left alone: workspace `references()` includes them,
+ * Shadowed bindings are left alone, because `symbols(lang).references` only
+ * returns this binding. Other files are left alone: in workspace scope the
+ * references include them,
  * and those edits do not belong on the file currently being committed. Pass
  * `root.filename()` as `currentFile`.
  *
@@ -247,14 +294,11 @@ export function renameReferences<T extends Language>(
 ): Edit[] {
   const edits: Edit[] = [];
 
-  for (const file of safeReferences(asNode(binding))) {
-    if (file.root.filename() !== currentFile) continue;
-
-    for (const reference of file.nodes) {
-      if (reference.id() === binding.id()) continue;
-      if (isInsideImport(reference)) continue;
-      edits.push(reference.replace(toName));
-    }
+  for (const reference of safeReferences(asNode(binding))) {
+    if (reference.getRoot().filename() !== currentFile) continue;
+    if (reference.id() === binding.id()) continue;
+    if (isInsideImport(reference)) continue;
+    edits.push(reference.replace(toName));
   }
 
   return edits;

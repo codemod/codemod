@@ -144,11 +144,12 @@ fn semantic_analysis_resolves_definitions_in_a_callback() {
         dir.path(),
         "find.ts",
         r#"
-import { parse } from "codemod/ast-grep";
+import { parse, symbols } from "codemod/ast-grep";
 export default (file: any) => {
   const root = parse(file).root();
   const use = root.find({ rule: { pattern: "console.log($X)" } }).getMatch("X");
-  return { definedOnLine: use.definition()?.node.range().start.line ?? null };
+  const [def] = symbols("typescript").definition.get(use) ?? [];
+  return { definedOnLine: def?.node.range().start.line ?? null };
 };
 "#,
     );

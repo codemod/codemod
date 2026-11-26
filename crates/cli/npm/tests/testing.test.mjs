@@ -1123,10 +1123,11 @@ test("runCallback runs a callback file on fixtures as jssg test does", HOSTS.qui
 test("runCallback resolves definitions with semantic analysis", HOSTS.quickjs, async () => {
   const dir = scratch({
     "find.ts": `
-import { parse } from "codemod/ast-grep";
+import { parse, symbols } from "codemod/ast-grep";
 export default (file: any) => {
   const use = parse(file).root().find({ rule: { pattern: "console.log($X)" } }).getMatch("X");
-  return use.definition()?.node.range().start.line ?? null;
+  const [def] = symbols("typescript").definition.get(use) ?? [];
+  return def?.node.range().start.line ?? null;
 };
 `,
   });
@@ -1144,13 +1145,16 @@ export default (file: any) => {
 test("runCallback answers data-flow and call-graph queries", HOSTS.quickjs, async () => {
   const dir = scratch({
     "flow.ts": `
-import { parse } from "codemod/ast-grep";
-export default (file: any) => {
+import { callGraph, crawl, dataflow, parse } from "codemod/ast-grep";
+export default async (file: any) => {
   const root = parse(file).root();
   const arg = root.find({ rule: { pattern: "save($X)" } }).getMatch("X");
-  const sources = arg.flowsFrom().map((s: any) => s.kind + ":" + s.name);
+  const reached = await crawl(dataflow("typescript").sources, arg);
+  const sources = [...reached.values()].filter(Boolean).map((e: any) => e.kind + ":" + e.name);
   const fn = root.find({ rule: { kind: "function_declaration" } });
-  const callers = fn.callers().map((c: any) => c.name + ":" + c.callSite.node.text());
+  const callers = (callGraph("typescript").callers.get(fn) ?? []).map(
+    (c: any) => c.node.field("name").text() + ":" + c.site.text(),
+  );
   return { sources, callers };
 };
 `,
@@ -1178,7 +1182,7 @@ export default (file: any) => {
     semanticAnalysis: "none",
   });
   assert.equal(none.status, "failed");
-  assert.match(none.error ?? "", /flowsFrom\(\) needs semantic analysis/);
+  assert.match(none.error ?? "", /sources\.get\(node\) needs semantic analysis/);
 });
 
 test("node: data-flow and call-graph queries say they need the CLI", HOSTS.node, async () => {
@@ -1186,10 +1190,11 @@ test("node: data-flow and call-graph queries say they need the CLI", HOSTS.node,
     scratch({
       "workflow.ts": `
 import { step, forEachFile } from "codemod/workflow";
-import { parse } from "codemod/ast-grep";
+import { callGraph, parse } from "codemod/ast-grep";
 export default async function main() {
   await step("Callers", forEachFile("**/*.ts", (file) => {
-    parse(file).root().find({ rule: { kind: "function_declaration" } })!.callers();
+    const fn = parse(file).root().find({ rule: { kind: "function_declaration" } })!;
+    callGraph("typescript").callers.get(fn);
   }));
 }
 `,
@@ -1200,7 +1205,7 @@ export default async function main() {
   const result = await run(path, { target: { "a.ts": "function f() {}\n" } });
 
   assert.equal(result.status, "failed");
-  assert.match(result.error ?? "", /callers\(\) is not available on the Node\.js host yet/);
+  assert.match(result.error ?? "", /callGraph\(\) is not available on the Node\.js host yet/);
 });
 
 test("runCallback fails the run when the callback fails on a file", HOSTS.quickjs, async () => {

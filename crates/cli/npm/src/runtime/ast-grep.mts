@@ -5,7 +5,7 @@
 // `forEachFile` callback: `definition()` returns null.
 
 import { readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { isAbsolute, join as joinPath, relative } from "node:path";
 
 import { addon } from "./addon.mts";
 import { context } from "./context.mts";
@@ -62,7 +62,7 @@ export function parse(source: unknown, second?: unknown): unknown {
   // The file's real path, and its path inside the target: what the CLI's
   // runtime gives `filename()` and `relativeFilename()`.
   const target = store?.run.target;
-  const filename = real(isAbsolute(path) || !target ? path : join(target, path));
+  const filename = real(isAbsolute(path) || !target ? path : joinPath(target, path));
   const inTarget = target ? relative(real(target), filename) : path;
   const outside = inTarget.startsWith("..") || isAbsolute(inTarget);
   return native.parse(language, source.text, filename, outside ? undefined : inTarget);
@@ -97,4 +97,52 @@ export function jssgTransform(): never {
   );
 }
 
-export default { parse, parseAsync, parseFile, kind, jssgTransform };
+// The workspace analyses need the engine's semantic provider, which roots parsed
+// here have none of. Each throws when called, so a codemod that uses one fails
+// with what to do instead of reading "no callers" from a missing export.
+function needsTheCli(what: string): never {
+  throw new Error(
+    `${what} is not available on the Node.js host yet: run the workflow with the codemod CLI, or test it with { host: "quickjs" }`,
+  );
+}
+
+export function callGraph(..._args: unknown[]): never {
+  return needsTheCli("callGraph()");
+}
+export function dataflow(..._args: unknown[]): never {
+  return needsTheCli("dataflow()");
+}
+export function symbols(..._args: unknown[]): never {
+  return needsTheCli("symbols()");
+}
+export function types(..._args: unknown[]): never {
+  return needsTheCli("types()");
+}
+export function entryPoints(..._args: unknown[]): never {
+  return needsTheCli("entryPoints()");
+}
+export function lookup(..._args: unknown[]): never {
+  return needsTheCli("lookup()");
+}
+export function join(..._args: unknown[]): never {
+  return needsTheCli("join()");
+}
+export function crawl(..._args: unknown[]): never {
+  return needsTheCli("crawl()");
+}
+
+export default {
+  parse,
+  parseAsync,
+  parseFile,
+  kind,
+  jssgTransform,
+  callGraph,
+  dataflow,
+  symbols,
+  types,
+  entryPoints,
+  lookup,
+  join,
+  crawl,
+};

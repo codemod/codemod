@@ -17,14 +17,14 @@ fn harness() -> Harness {
 /// Step 1 adds a second call to `helper` in a.ts; step 2 asks for its callers.
 const CALLERS_AFTER_AN_EDIT: &str = r#"
 import { step, forEachFile } from "codemod/workflow";
-import { parse } from "codemod/ast-grep";
+import { callGraph, parse } from "codemod/ast-grep";
 export default async function main() {
   await step("Add a call", forEachFile({ include: "src/a.ts" }, (file) => {
     file.write(file.text + "helper();\n");
   }));
   const found = await step("Callers", forEachFile({ include: "src/lib.ts", semanticAnalysis: "workspace" }, (file) => {
     const name = parse(file).root().find({ rule: { kind: "identifier", inside: { kind: "function_declaration" } } });
-    return name.callers().length;
+    return callGraph("typescript").callers.get(name)?.length ?? 0;
   }));
   return found.outputs;
 }
@@ -34,14 +34,14 @@ export default async function main() {
 /// question whose answer depends on byte offsets.
 const DEFINITION_AFTER_AN_EDIT: &str = r#"
 import { step, forEachFile } from "codemod/workflow";
-import { parse } from "codemod/ast-grep";
+import { parse, symbols } from "codemod/ast-grep";
 export default async function main() {
   await step("Add a header", forEachFile({ include: "src/b.ts" }, (file) => {
     file.write("// a header that moves every offset\n" + file.text);
   }));
   const found = await step("Definition", forEachFile({ include: "src/b.ts", semanticAnalysis: "file" }, (file) => {
     const use = parse(file).root().find({ rule: { pattern: "console.log($A)" } }).getMatch("A");
-    return use.definition()?.node.text() ?? null;
+    return symbols("typescript").definition.get(use)?.[0]?.node.text() ?? null;
   }));
   return found.outputs;
 }
@@ -81,12 +81,12 @@ fn a_node_from_text_this_step_produced_throws() {
     let report = h.start(
         r#"
 import { step, forEachFile } from "codemod/workflow";
-import { parse } from "codemod/ast-grep";
+import { callGraph, parse } from "codemod/ast-grep";
 export default async function main() {
   const found = await step(forEachFile({ include: "src/lib.ts", semanticAnalysis: "workspace" }, (file) => {
     const edited = parse({ path: file.path, text: "// moved\n" + file.text, language: "typescript" });
     try {
-      edited.root().find({ rule: { kind: "identifier", inside: { kind: "function_declaration" } } }).callers();
+      callGraph("typescript").callers.get(edited.root().find({ rule: { kind: "identifier", inside: { kind: "function_declaration" } } }));
       return "answered";
     } catch (error) {
       return String(error.message ?? error);
@@ -119,13 +119,14 @@ fn types_see_the_previous_steps_edits_in_a_dry_run() {
     );
     let workflow = r#"
 import { step, forEachFile } from "codemod/workflow";
-import { parse } from "codemod/ast-grep";
+import { parse, types } from "codemod/ast-grep";
 export default async function main() {
   await step("Retype", forEachFile({ include: "src/c.ts" }, (file) => {
     file.write(file.text.replace("const value: number = 1;", "const value: string = \"1\";"));
   }));
-  const found = await step("Type", forEachFile({ include: "src/c.ts", semanticAnalysis: { mode: "workspace", types: "ts7" } }, (file) => {
-    return parse(file).root().find({ rule: { pattern: "console.log($A)" } }).getMatch("A").typeInfo();
+  const found = await step("Type", forEachFile({ include: "src/c.ts" }, (file) => {
+    const value = parse(file).root().find({ rule: { pattern: "console.log($A)" } }).getMatch("A");
+    return types("typescript").typeOf.get(value) ?? null;
   }));
   return found.outputs;
 }

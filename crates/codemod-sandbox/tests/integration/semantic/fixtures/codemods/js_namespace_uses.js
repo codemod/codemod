@@ -1,5 +1,8 @@
-// F1 (ergonomics review): uses through `import * as utils` must count, or a
-// safe-delete codemod deletes functions that are still used.
+// F1 (ergonomics review): uses through `import * as utils` must count, as
+// edges in the references lookup and in the callers lookup, or a safe-delete
+// codemod deletes functions that are still used.
+import { callGraph, symbols } from "codemod:ast-grep";
+
 function expectEqual(actual, expected, label) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
@@ -12,7 +15,17 @@ function basename(path) {
   return path.split("/").pop();
 }
 
+// Who makes a call: the calling function's name, or "<module>" for a call at
+// a module's top level, where the edge's node is the call itself.
+function callerName(edge) {
+  if (edge.node.equals(edge.site)) return "<module>";
+  const own = edge.node.field("name");
+  return own ? own.text() : "<anonymous>";
+}
+
 export default function transform(root) {
+  const graph = callGraph("javascript");
+  const { references } = symbols("javascript");
   const name = (fn) =>
     root
       .root()
@@ -21,13 +34,11 @@ export default function transform(root) {
       })
       .field("name");
   const refs = (fn) =>
-    name(fn)
-      .references()
-      .flatMap((file) => file.nodes.map((n) => basename(file.root.filename()) + ":" + n.text()));
+    (references.get(name(fn)) ?? []).map(
+      (e) => basename(e.node.getRoot().filename()) + ":" + e.node.text(),
+    );
   const callers = (fn) =>
-    name(fn)
-      .callers()
-      .map((c) => c.name + ":" + c.via + " " + c.callSite.node.text());
+    (graph.callers.get(name(fn)) ?? []).map((e) => callerName(e) + ":" + e.via + " " + e.site.text());
 
   // Stored in an object: a reference, not a call.
   expectEqual(refs("oldRound"), ["app.js:oldRound"], "references of oldRound");

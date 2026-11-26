@@ -1,5 +1,8 @@
-// x.save() where x: UserRepo, a class: the call graph follows the type.
+// x.save() where x: UserRepo, a class: the callees and callers lookups follow
+// the type, and the typeOf lookup gives the checker's type of an expression.
 // Needs a TypeScript 7 checker (CODEMOD_TS_API).
+import { callGraph, crawl, types } from "codemod:ast-grep";
+
 function expectEqual(actual, expected, label) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
@@ -12,44 +15,56 @@ function basename(path) {
   return path.split("/").pop();
 }
 
-export default function transform(root) {
+// Hops back to a start node along `from`.
+function depthOf(reached, node) {
+  let depth = 0;
+  for (let edge = reached.get(node); edge; edge = reached.get(edge.from)) depth++;
+  return depth;
+}
+
+export default async function transform(root) {
+  const { callees, callers } = callGraph("typescript");
+  const { typeOf } = types("typescript");
+  const name = (node) => node.field("name")?.text();
   const register = root.root().find({ rule: { kind: "function_declaration" } });
   const call = register.find({ rule: { pattern: "repo.save($$$)" } });
 
   // The call resolves to the class method, marked as found through types.
   expectEqual(
-    call.callees().map((c) => [c.name, basename(c.root.filename()), c.via, c.resolved]),
-    [["save", "repo.ts", "type", true]],
+    callees.get(call).map((e) => [name(e.node), basename(e.node.getRoot().filename()), e.via]),
+    [["save", "repo.ts", "type"]],
     "callees of repo.save()",
   );
-  // And the walk continues through it.
+  // And a crawl continues through it.
+  const all = await crawl(callees, register);
   expectEqual(
-    register
-      .callees({ transitive: true })
-      .filter((c) => c.name === "audit")
-      .map((c) => [c.name, c.via, c.depth]),
+    [...all]
+      .filter(([node, edge]) => edge && name(node) === "audit")
+      .map(([node, edge]) => [name(node), edge.via, depthOf(all, node)]),
     [["audit", "direct", 2]],
-    "transitive callees through the typed edge",
+    "crawled callees through the typed edge",
   );
   // Callers of the method see the typed call too.
-  const save = call.callees()[0].node;
+  const save = callees.get(call)[0].node;
   expectEqual(
-    save.callers().map((c) => [c.name, c.via]),
+    callers.get(save).map((e) => [name(e.node), e.via]),
     [["register", "type"]],
     "callers of UserRepo.save",
   );
-  // stopAt can leave typed edges out of a walk.
+  // Stopping at what typed edges reached leaves the rest out of the walk.
+  const typed = [...all].filter(([, edge]) => edge?.via === "type").map(([node]) => node);
+  const untyped = await crawl(callees, register, { stopAt: typed });
   expectEqual(
-    register.callees({ transitive: true, stopAt: ["type"] }).filter((c) => c.name === "audit"),
+    [...untyped.keys()].filter((node) => name(node) === "audit"),
     [],
-    "stopAt type",
+    "stopAt what typed edges reached",
   );
 
-  // typeInfo(): the checker's type for an expression.
+  // typeOf: the checker's type for an expression.
   const repo = call.find({ rule: { pattern: "repo" } });
-  expectEqual(repo.typeInfo(), "UserRepo", "type of repo");
-  expectEqual(call.typeInfo(), "void", "type of repo.save(...)");
+  expectEqual(typeOf.get(repo), "UserRepo", "type of repo");
+  expectEqual(typeOf.get(call), "void", "type of repo.save(...)");
   const arg = call.find({ rule: { kind: "object" } });
-  expectEqual(arg.typeInfo(), "{ id: string; }", "type of the argument");
+  expectEqual(typeOf.get(arg), "{ id: string; }", "type of the argument");
   return null;
 }

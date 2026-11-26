@@ -1,24 +1,69 @@
+// An import from an external package (not in the workspace) can't be
+// followed, so definition.get(node) lands on the import binding in this file:
+// from the imported name it is the import itself (kind "import"), and from a
+// use of the name it is the same import specifier, as the local declaration
+// of the name (kind "local").
+import { symbols } from "codemod:ast-grep";
+
+function describe(def) {
+  if (!def) return null;
+  return {
+    kind: def.kind,
+    file: def.node.getRoot().filename().split("/").pop(),
+    node: def.node.kind(),
+    text: def.node.text(),
+    exportName: def.exportName,
+    name: def.nameNode && def.nameNode.text(),
+  };
+}
+
+function expectEqual(actual, expected, label) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(
+      label + ": expected " + JSON.stringify(expected) + ", got " + JSON.stringify(actual),
+    );
+  }
+}
+
 export default function transform(root) {
-  // Find the import specifier
-  const importSpec = root.root().find({ rule: { pattern: "something" } });
-  if (!importSpec) {
-    throw new Error("Expected to find 'something'");
+  const { definition } = symbols("javascript");
+  const [imported, use] = root.root().findAll({ rule: { pattern: "something" } });
+  if (!imported || !use) {
+    throw new Error("Expected to find the import of 'something' and its use");
   }
 
-  // Get definition with resolveExternal: false
-  const def = importSpec.definition({ resolveExternal: false });
+  const fromImport = definition.get(imported);
+  expectEqual(fromImport && fromImport.length, 1, "edges from the imported name");
+  expectEqual(
+    describe(fromImport[0]),
+    {
+      kind: "import",
+      file: "input.js",
+      node: "import_specifier",
+      text: "something",
+      exportName: null,
+      name: "something",
+    },
+    "definition of the imported name",
+  );
 
-  if (!def) {
-    throw new Error("Expected to find definition for 'something' (import statement)");
+  const fromUse = definition.get(use);
+  expectEqual(fromUse && fromUse.length, 1, "edges from the use");
+  expectEqual(
+    describe(fromUse[0]),
+    {
+      kind: "local",
+      file: "input.js",
+      node: "import_specifier",
+      text: "something",
+      exportName: null,
+      name: "something",
+    },
+    "definition of a use",
+  );
+  if (!fromUse[0].node.equals(fromImport[0].node)) {
+    throw new Error("Expected the use and the import to land on the same import specifier");
   }
-
-  // Should be an import kind since we're not resolving external
-  if (def.kind !== "import") {
-    throw new Error("Expected definition kind to be 'import', got '" + def.kind + "'");
-  }
-
-  console.log("Definition kind:", def.kind);
-  console.log("Definition text:", def.node.text());
 
   return null;
 }

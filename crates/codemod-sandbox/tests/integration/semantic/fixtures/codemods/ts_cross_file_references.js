@@ -1,4 +1,10 @@
+// references.get(node) on an exported function finds its uses across the
+// workspace, as one flat edge per reference node.
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root) {
+  const { references } = symbols("typescript");
+
   // Find all 'add' identifiers (first one should be the function name)
   const addNodes = root.root().findAll({ rule: { pattern: "add" } });
   if (addNodes.length < 1) {
@@ -7,32 +13,22 @@ export default function transform(root) {
 
   const funcNameNode = addNodes[0];
 
-  const references = funcNameNode.references();
+  const refs = references.get(funcNameNode) ?? [];
 
-  // Should return array of file references
-  if (!Array.isArray(references)) {
-    throw new Error("Expected references to be an array");
-  }
-
-  if (references.length === 0) {
+  if (refs.length === 0) {
     console.log("No references found - this is acceptable");
     return null;
   }
 
-  // Each entry should have root and nodes
-  let totalRefs = 0;
-  for (const fileRef of references) {
-    if (!fileRef.root) {
-      throw new Error("Expected fileRef.root to exist");
+  // Each edge should have a node in some file
+  for (const edge of refs) {
+    if (!edge.node || !edge.node.getRoot()) {
+      throw new Error("Expected each edge to have a node with a root");
     }
-    if (!Array.isArray(fileRef.nodes)) {
-      throw new Error("Expected fileRef.nodes to be an array");
-    }
-    totalRefs += fileRef.nodes.length;
   }
 
-  if (totalRefs !== 2) {
-    throw new Error("Expected 2 references, got " + totalRefs);
+  if (refs.length !== 2) {
+    throw new Error("Expected 2 references, got " + refs.length);
   }
 
   return null;

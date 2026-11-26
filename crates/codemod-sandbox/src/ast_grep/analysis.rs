@@ -26,11 +26,14 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use rquickjs::{
-    atom::PredefinedAtom, class::Trace, prelude::Opt, Array, Class, Ctx, Exception, Function,
-    IntoJs, JsLifetime, Object, Promise, Result, Value,
+    atom::PredefinedAtom, class::Trace, prelude::Opt, Array, Class, Ctx, Error, Exception,
+    Function, IntoJs, JsLifetime, Object, Promise, Result, Value,
 };
 
-use super::sg_node::{parse_node_key, root_for_path, root_for_text, SgNodeRjs, SgRootInner};
+use super::sg_node::{
+    file_of_value, parse_node_key, resolve_module_from, root_for_path, root_for_text,
+    specifier_from, SgNodeRjs, SgRootInner,
+};
 use super::utils::{convert_matcher, JsMatcherRjs};
 use super::{DefaultParseLanguage, ParseSemanticProvider};
 use crate::sandbox::engine::execution_engine::{JssgFileChanges, TargetDirectory};
@@ -105,12 +108,25 @@ struct Stored<'js> {
 pub struct Lookup<'js> {
     #[qjs(skip_trace)]
     builtin: Option<(Builtin, Family)>,
-    /// A crawl's result, not a lookup: crawl does not take it.
+    /// What the entries hold: edges, a crawl's result, or entry points'
+    /// reasons. Only edges can be crawled.
     #[qjs(skip_trace)]
-    reached: bool,
+    shape: Shape,
     entries: Vec<Stored<'js>>,
     #[qjs(skip_trace)]
     index: HashMap<String, usize>,
+}
+
+/// What a stored lookup's entries hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shape {
+    /// `node -> [{ node, ...meta }]`: a lookup.
+    Edges,
+    /// `node -> edge | null`: what `crawl` reached, and how.
+    Reached,
+    /// `function -> [{ kind, label }]`: `entryPoints(lang)`, why each
+    /// function is called from outside.
+    Reasons,
 }
 
 unsafe impl<'js> JsLifetime<'js> for Lookup<'js> {
@@ -121,16 +137,16 @@ impl<'js> Lookup<'js> {
     fn builtin(kind: Builtin, family: Family) -> Self {
         Self {
             builtin: Some((kind, family)),
-            reached: false,
+            shape: Shape::Edges,
             entries: Vec::new(),
             index: HashMap::new(),
         }
     }
 
-    fn stored(entries: Vec<Stored<'js>>, index: HashMap<String, usize>, reached: bool) -> Self {
+    fn stored(entries: Vec<Stored<'js>>, index: HashMap<String, usize>, shape: Shape) -> Self {
         Self {
             builtin: None,
-            reached,
+            shape,
             entries,
             index,
         }
@@ -139,8 +155,11 @@ impl<'js> Lookup<'js> {
     fn what(&self) -> &'static str {
         match self.builtin {
             Some((kind, _)) => kind.name(),
-            None if self.reached => "crawl()'s result",
-            None => "lookup()",
+            None => match self.shape {
+                Shape::Reached => "crawl()'s result",
+                Shape::Reasons => "entryPoints()",
+                Shape::Edges => "lookup()",
+            },
         }
     }
 
@@ -184,9 +203,9 @@ impl<'js> Lookup<'js> {
         match kind {
             Builtin::Callers | Builtin::Callees => {
                 let found = if kind == Builtin::Callers {
-                    sg.callers(ctx.clone(), Opt(None))?
+                    renamed(ctx, sg.callers(ctx.clone(), Opt(None)), "callers()", kind)?
                 } else {
-                    sg.callees(ctx.clone(), Opt(None))?
+                    renamed(ctx, sg.callees(ctx.clone(), Opt(None)), "callees()", kind)?
                 };
                 for entry in array_items(&found)? {
                     let entry: Object = entry.get()?;
@@ -208,9 +227,14 @@ impl<'js> Lookup<'js> {
             }
             Builtin::Sources | Builtin::Uses => {
                 let found = if kind == Builtin::Sources {
-                    sg.flows_from(ctx.clone(), Opt(None))?
+                    renamed(
+                        ctx,
+                        sg.flows_from(ctx.clone(), Opt(None)),
+                        "flowsFrom()",
+                        kind,
+                    )?
                 } else {
-                    sg.flows_to(ctx.clone(), Opt(None))?
+                    renamed(ctx, sg.flows_to(ctx.clone(), Opt(None)), "flowsTo()", kind)?
                 };
                 for step in array_items(&found)? {
                     let step: Object = step.get()?;
@@ -229,17 +253,22 @@ impl<'js> Lookup<'js> {
                 // on what the name means, so a crawl can go on from there.
                 let options = Object::new(ctx.clone())?;
                 options.set("follow", true)?;
-                let found = sg.definition(ctx.clone(), Opt(Some(options)))?;
+                let found = renamed(
+                    ctx,
+                    sg.definition(ctx.clone(), Opt(Some(options))),
+                    "definition()",
+                    kind,
+                )?;
                 if let Some(definition) = found.as_object() {
                     let edge = Object::new(ctx.clone())?;
-                    for field in ["node", "kind", "exportName"] {
+                    for field in ["node", "nameNode", "kind", "exportName"] {
                         edge.set(field, definition.get::<_, Value>(field)?)?;
                     }
                     push(edge)?;
                 }
             }
             Builtin::References => {
-                let found = sg.references(ctx.clone())?;
+                let found = renamed(ctx, sg.references(ctx.clone()), "references()", kind)?;
                 for file in array_items(&found)? {
                     let file: Object = file.get()?;
                     let nodes: Value = file.get("nodes")?;
@@ -251,7 +280,7 @@ impl<'js> Lookup<'js> {
                 }
             }
             Builtin::TypeOf => {
-                let found = sg.type_info(ctx.clone())?;
+                let found = renamed(ctx, sg.type_info(ctx.clone()), "typeInfo()", kind)?;
                 return Ok(if found.is_null() {
                     Value::new_undefined(ctx.clone())
                 } else {
@@ -352,7 +381,7 @@ impl<'js> Lookup<'js> {
     /// The lookup as JSON, so a step can return it: nodes become their keys.
     /// `{ lookup: [[from, to, meta], ...], nodeFields }` for edges, or
     /// `{ reached: [[node, edge | null], ...], nodeFields }` for a crawl's
-    /// result, where `nodeFields` names the edge fields that held nodes.
+    /// result, `{ entryPoints: [[function, reasons], ...] }` for entry points, where `nodeFields` names the edge fields that held nodes.
     /// `lookup(json)` in a later step makes it a lookup again.
     #[qjs(rename = "toJSON")]
     pub fn to_json(&self, ctx: Ctx<'js>) -> Result<Object<'js>> {
@@ -370,7 +399,14 @@ impl<'js> Lookup<'js> {
         let list = Array::new(ctx.clone())?;
         for entry in &self.entries {
             let from = key_of(&ctx, &entry.node, "toJSON()")?;
-            if self.reached {
+            if self.shape == Shape::Reasons {
+                let row = Array::new(ctx.clone())?;
+                row.set(0, from)?;
+                row.set(1, entry.value.clone())?;
+                list.set(list.len(), row)?;
+                continue;
+            }
+            if self.shape == Shape::Reached {
                 let row = Array::new(ctx.clone())?;
                 row.set(0, from)?;
                 match entry.value.as_object() {
@@ -391,7 +427,12 @@ impl<'js> Lookup<'js> {
             }
         }
         let json = Object::new(ctx.clone())?;
-        json.set(if self.reached { "reached" } else { "lookup" }, list)?;
+        let name = match self.shape {
+            Shape::Edges => "lookup",
+            Shape::Reached => "reached",
+            Shape::Reasons => "entryPoints",
+        };
+        json.set(name, list)?;
         json.set("nodeFields", node_fields.into_iter().collect::<Vec<_>>())?;
         Ok(json)
     }
@@ -624,46 +665,97 @@ pub(crate) fn dataflow_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Object<'j
     )
 }
 
-/// `symbols(lang)`: `{ definition, references }`.
+/// `symbols(lang)`: the `definition` and `references` lookups, and two
+/// functions for codemods that rewrite imports: `resolveModule(file,
+/// specifier)` and `specifierFor(file, target, options)`.
 pub(crate) fn symbols_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Object<'js>> {
     let family = family_of(&ctx, "symbols", &lang)?;
-    pair(
+    let object = pair(
         &ctx,
         family,
         &[
             ("definition", Builtin::Definition),
             ("references", Builtin::References),
         ],
-    )
+    )?;
+    object.set(
+        "resolveModule",
+        Function::new(ctx.clone(), resolve_module_rjs)?.with_name("resolveModule")?,
+    )?;
+    object.set(
+        "specifierFor",
+        Function::new(ctx.clone(), specifier_for_rjs)?.with_name("specifierFor")?,
+    )?;
+    Ok(object)
 }
 
-/// `types(lang)`: `{ typeOf }`.
+/// The step's provider and `file`'s path, or why a module query can't run.
+fn module_query<'js>(
+    ctx: &Ctx<'js>,
+    file: &Value<'js>,
+    method: &str,
+) -> Result<(Arc<dyn language_core::SemanticProvider>, std::path::PathBuf)> {
+    let provider = step_provider(ctx).ok_or_else(|| {
+        Exception::throw_message(
+            ctx,
+            &format!(
+                "{method}(): there is no semantic analysis here. It works in workflow steps \
+                 (and with `codemod jssg run --semantic-workspace <dir>`)."
+            ),
+        )
+    })?;
+    let target = target_directory(ctx);
+    let path = file_of_value(ctx, file, target.as_deref(), &format!("{method}(file)"))?;
+    Ok((provider, path))
+}
+
+/// `symbols(lang).resolveModule(file, specifier)`.
+fn resolve_module_rjs<'js>(
+    ctx: Ctx<'js>,
+    file: Value<'js>,
+    specifier: String,
+) -> Result<Value<'js>> {
+    let (provider, path) = module_query(&ctx, &file, "resolveModule")?;
+    resolve_module_from(&ctx, &*provider, &path, &specifier)
+}
+
+/// `symbols(lang).specifierFor(file, target, options)`.
+fn specifier_for_rjs<'js>(
+    ctx: Ctx<'js>,
+    file: Value<'js>,
+    target: Value<'js>,
+    options: Opt<Value<'js>>,
+) -> Result<Value<'js>> {
+    let (provider, path) = module_query(&ctx, &file, "specifierFor")?;
+    let dir = target_directory(&ctx);
+    let target = file_of_value(&ctx, &target, dir.as_deref(), "specifierFor(target)")?;
+    specifier_from(&ctx, &*provider, &path, &target, options)
+}
+
+/// `types(lang)`: `{ typeOf }`. JavaScript and TypeScript types come from
+/// the TypeScript 7 checker; Python's are its annotations, as written.
 pub(crate) fn types_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Object<'js>> {
     let family = family_of(&ctx, "types", &lang)?;
-    if family != Family::JavaScript {
-        return Err(Exception::throw_type(
-            &ctx,
-            &format!("types(\"{lang}\"): types come from the TypeScript 7 checker, for TypeScript and JavaScript."),
-        ));
-    }
     pair(&ctx, family, &[("typeOf", Builtin::TypeOf)])
 }
 
 /// `entryPoints(lang)`: every function in the workspace something outside
-/// its code calls, each with `entryPoints()` saying why.
-pub(crate) fn entry_points_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Array<'js>> {
+/// its code calls, mapped to why: `[{ kind, label }]`, where `kind` is
+/// `"export"` for the package's public API, else the declaring rule's kind.
+pub(crate) fn entry_points_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Lookup<'js>> {
     let family = family_of(&ctx, "entryPoints", &lang)?;
     let provider = step_provider(&ctx).ok_or_else(|| {
-            Exception::throw_message(
-                &ctx,
-                "entryPoints(): there is no semantic analysis here. It works inside forEachFile callbacks.",
-            )
-        })?;
+        Exception::throw_message(
+            &ctx,
+            "entryPoints(): there is no semantic analysis here. It works inside workflow steps.",
+        )
+    })?;
     let found = provider
         .list_entry_points(family.provider_language())
         .map_err(|e| Exception::throw_message(&ctx, &format!("entryPoints(): {e}")))?;
     let target = target_directory(&ctx);
-    let result = Array::new(ctx.clone())?;
+    let mut entries: Vec<Stored<'js>> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     let mut roots: Vec<(std::path::PathBuf, Arc<SgRootInner>)> = Vec::new();
     for function in found {
         let root = match roots.iter().find(|(path, _)| *path == function.file_path) {
@@ -680,11 +772,28 @@ pub(crate) fn entry_points_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Array
                 root
             }
         };
-        if let Some(node) = SgNodeRjs::node_at(&root, function.range) {
-            result.set(result.len(), node)?;
+        let Some(node) = SgNodeRjs::node_at(&root, function.range) else {
+            continue;
+        };
+        let key = node.key();
+        if index.contains_key(&key) {
+            continue;
         }
+        let reasons = Array::new(ctx.clone())?;
+        for entry in &function.entry_points {
+            let reason = Object::new(ctx.clone())?;
+            reason.set("kind", entry.kind.clone())?;
+            reason.set("label", entry.label.clone())?;
+            reasons.set(reasons.len(), reason)?;
+        }
+        index.insert(key, entries.len());
+        entries.push(Stored {
+            node: Class::instance(ctx.clone(), node)?.into_value(),
+            value: reasons.into_value(),
+        });
     }
-    Ok(result)
+    freeze_all(&ctx, &entries)?;
+    Ok(Lookup::stored(entries, index, Shape::Reasons))
 }
 
 fn target_directory(ctx: &Ctx<'_>) -> Option<std::path::PathBuf> {
@@ -721,12 +830,36 @@ pub(crate) fn lookup_rjs<'js>(ctx: Ctx<'js>, edges: Value<'js>) -> Result<Lookup
         if !reached.is_undefined() {
             return reached_from_json(&ctx, &mut nodes, &reached, &node_fields);
         }
+        let reasons: Value = json.get("entryPoints")?;
+        if !reasons.is_undefined() {
+            return reasons_from_json(&ctx, &mut nodes, &reasons);
+        }
         let list: Value = json.get("lookup")?;
         if !list.is_undefined() {
             return edges_lookup(&ctx, &mut nodes, &list, &node_fields);
         }
     }
     edges_lookup(&ctx, &mut nodes, &edges, &[])
+}
+
+/// A lookup answers through the node methods, whose errors name the method
+/// (`flowsTo() on ...`). Name the lookup instead (`uses.get(node) on ...`),
+/// since that is what the codemod called; most of those methods are not
+/// visible to JavaScript.
+fn renamed<'js, T>(ctx: &Ctx<'js>, result: Result<T>, method: &str, kind: Builtin) -> Result<T> {
+    match result {
+        Err(Error::Exception) => {
+            let thrown = ctx.catch();
+            if let Some(error) = thrown.as_object() {
+                if let Ok(message) = error.get::<_, String>("message") {
+                    let lookup = format!("{}.get(node)", kind.name());
+                    let _ = error.set("message", message.replace(method, &lookup));
+                }
+            }
+            Err(ctx.throw(thrown))
+        }
+        other => other,
+    }
 }
 
 fn edges_lookup<'js>(
@@ -789,7 +922,7 @@ fn edges_lookup<'js>(
         list.set(list.len(), edge)?;
     }
     freeze_all(ctx, &entries)?;
-    Ok(Lookup::stored(entries, index, false))
+    Ok(Lookup::stored(entries, index, Shape::Edges))
 }
 
 /// A crawl's result an earlier step returned: `[[node, edge | null], ...]`.
@@ -835,7 +968,39 @@ fn reached_from_json<'js>(
         index.insert(key, entries.len());
         entries.push(Stored { node, value });
     }
-    Ok(Lookup::stored(entries, index, true))
+    Ok(Lookup::stored(entries, index, Shape::Reached))
+}
+
+/// `lookup(json)` for entry points an earlier step returned:
+/// `[[function, reasons], ...]`.
+fn reasons_from_json<'js>(
+    ctx: &Ctx<'js>,
+    nodes: &mut Nodes,
+    rows: &Value<'js>,
+) -> Result<Lookup<'js>> {
+    let mut entries: Vec<Stored<'js>> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for (n, row) in iterate_values(ctx, rows, "lookup(entryPoints)")?
+        .into_iter()
+        .enumerate()
+    {
+        let what = format!("lookup(entryPoints): function {n}");
+        let bad = || Exception::throw_type(ctx, &format!("{what} must be [function, reasons]"));
+        let row = row.as_array().ok_or_else(bad)?;
+        let key = key_of(ctx, &row.get(0)?, &what)?;
+        let node = nodes.node(ctx, row.get(0)?, &what)?.ok_or_else(bad)?;
+        let value: Value = row.get(1)?;
+        if value.as_array().is_none() {
+            return Err(bad());
+        }
+        if index.contains_key(&key) {
+            continue;
+        }
+        index.insert(key, entries.len());
+        entries.push(Stored { node, value });
+    }
+    freeze_all(ctx, &entries)?;
+    Ok(Lookup::stored(entries, index, Shape::Reasons))
 }
 
 /// `crawl(lookups, start, { stopAt })`: every node reached from `start`
@@ -884,11 +1049,22 @@ fn crawl<'js>(
             )
         })?;
         let lookup = lookup.borrow().clone();
-        if lookup.reached {
-            return Err(Exception::throw_type(
-                ctx,
-                "crawl(lookups): a crawl's result is not a lookup.",
-            ));
+        match lookup.shape {
+            Shape::Edges => {}
+            Shape::Reached => {
+                return Err(Exception::throw_type(
+                    ctx,
+                    "crawl(lookups): a crawl's result is not a lookup.",
+                ))
+            }
+            Shape::Reasons => {
+                return Err(Exception::throw_type(
+                    ctx,
+                    "crawl(lookups): entryPoints() maps a function to why it is an entry point, \
+                     not to nodes. To crawl from the entry points, pass it as the start: \
+                     crawl(callees, entryPoints(lang)).",
+                ))
+            }
         }
         if matches!(lookup.builtin, Some((Builtin::TypeOf, _))) {
             return Err(Exception::throw_type(
@@ -901,12 +1077,42 @@ fn crawl<'js>(
 
     let starts = if Class::<SgNodeRjs>::from_value(&start).is_ok() || start.is_string() {
         vec![start]
+    } else if let Ok(lookup) = Class::<Lookup>::from_value(&start) {
+        // A lookup as the start: its nodes (`crawl(callees, entryPoints(lang))`).
+        let lookup = lookup.borrow();
+        lookup
+            .list(ctx, "as crawl()'s start")?
+            .iter()
+            .map(|e| e.node.clone())
+            .collect()
     } else {
         iterate_values(ctx, &start, "crawl(lookups, start)")?
     };
 
     let mut stop: HashSet<String> = HashSet::new();
-    if let Some(options) = options.as_ref().and_then(Value::as_object) {
+    let options = match options {
+        Some(value) if !value.is_undefined() && !value.is_null() => {
+            let Some(object) = value.into_object() else {
+                return Err(Exception::throw_type(
+                    ctx,
+                    "crawl(..., options): options must be an object",
+                ));
+            };
+            // A typo would silently crawl everything: say so instead.
+            for key in object.keys::<String>() {
+                let key = key?;
+                if key != "stopAt" {
+                    return Err(Exception::throw_type(
+                        ctx,
+                        &format!("crawl(..., options): unknown option `{key}`; expected `stopAt`"),
+                    ));
+                }
+            }
+            Some(object)
+        }
+        _ => None,
+    };
+    if let Some(options) = options.as_ref() {
         let stop_at: Value = options.get("stopAt")?;
         if !stop_at.is_undefined() && !stop_at.is_null() {
             for node in iterate_values(ctx, &stop_at, "crawl(..., { stopAt })")? {
@@ -962,7 +1168,7 @@ fn crawl<'js>(
             }
         }
     }
-    Ok(Lookup::stored(entries, index, true))
+    Ok(Lookup::stored(entries, index, Shape::Reached))
 }
 
 /// One side of a `join`: a pattern, the metavariable whose text joins, and
@@ -1133,7 +1339,9 @@ pub(crate) fn join_rjs<'js>(ctx: Ctx<'js>, spec: Object<'js>) -> Result<Lookup<'
         _ if by.is_undefined() || by.is_null() => By::Resolve(Lookup::builtin(Builtin::Definition, family)),
         Some(text) if text.to_string()? == "text" => By::Text,
         _ => match Class::<Lookup>::from_value(&by) {
-            Ok(lookup) if !lookup.borrow().reached => By::Only(lookup.borrow().clone()),
+            Ok(lookup) if lookup.borrow().shape == Shape::Edges => {
+                By::Only(lookup.borrow().clone())
+            }
             _ => {
                 return Err(Exception::throw_type(
                     &ctx,
@@ -1270,5 +1478,5 @@ pub(crate) fn join_rjs<'js>(ctx: Ctx<'js>, spec: Object<'js>) -> Result<Lookup<'
         }
     }
     freeze_all(&ctx, &entries)?;
-    Ok(Lookup::stored(entries, index, false))
+    Ok(Lookup::stored(entries, index, Shape::Edges))
 }
