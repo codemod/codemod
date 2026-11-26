@@ -6,6 +6,7 @@
 // ./ast-grep/langs/*: {"types":"./types/langs/*.d.ts"}
 // ./langs/*: {"types":"./types/langs/*.d.ts"}
 // ./main: {"types":"./types/main.d.ts","default":"./runtime/ast-grep.mjs"}
+// ./files: {"types":"./types/files.d.ts","default":"./runtime/files.mjs"}
 // ./runtime: {"types":"./types/runtime.d.ts","default":"./runtime/runtime.mjs"}
 // ./protocol: {"types":"./types/protocol.d.ts"}
 
@@ -18,6 +19,7 @@
 /// <reference path="modules/deps.d.ts" />
 /// <reference path="modules/git.d.ts" />
 /// <reference path="modules/assess.d.ts" />
+/// <reference path="modules/files.d.ts" />
 /// <reference path="modules/langs.d.ts" />
 
 // workflow.d.ts
@@ -27,6 +29,10 @@ export * from "codemod:workflow";
 // main.d.ts
 /// <reference path="modules/ast-grep.d.ts" />
 export * from "codemod:ast-grep";
+
+// files.d.ts
+/// <reference path="modules/files.d.ts" />
+export * from "codemod:files";
 
 // runtime.d.ts
 /// <reference path="modules/runtime.d.ts" />
@@ -305,6 +311,17 @@ declare module "*.yaml" {
 declare module "*.yml" {
     const content: import("codemod:workflow").AstGrepRules;
     export default content;
+}
+
+// modules/files.d.ts
+declare module "codemod:files" {
+    export interface Files {
+        read(path: string): string;
+        exists(path: string): boolean;
+        list(glob: string): string[];
+        create(path: string, text: string): void;
+    }
+    export const files: Readonly<Files>;
 }
 
 // modules/ast-grep.d.ts
@@ -632,7 +649,7 @@ declare module "codemod/protocol" {
     }
     export type StepKind = string;
     export type RunStatus = "running" | "awaiting-approval" | "paused" | "succeeded" | "failed" | "canceled" | "rejected";
-    export type StepStatus = "succeeded" | "partial" | "failed" | "canceled" | "awaiting-approval" | "rejected" | "waiting";
+    export type StepStatus = "started" | "skipped" | "succeeded" | "partial" | "failed" | "canceled" | "awaiting-approval" | "rejected" | "waiting";
     export interface Omitted {
         bytes: number;
         limit: number;
@@ -650,6 +667,10 @@ declare module "codemod/protocol" {
         kind: "pull-request";
         title: string;
         branch: string;
+    } | {
+        kind: "interrupted-step";
+        label: string;
+        position: number;
     } | {
         kind: "uncommitted-changes";
         path: string;

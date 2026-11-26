@@ -16,6 +16,7 @@ Look for `@experimental` in TypeScript, an **Experimental** badge or callout in 
 ## Stable in 2.0
 
 - Workflow APIs: `step`, `fail`, `StepError`, `WorkflowFailure`, `WorkflowContext` and parameters, `forEachFile` and its reducer, `astGrep`, `approval` and question IDs, `shell`, and nested `codemod()`.
+- Target file access: [`codemod/files`](/community/workflows/reference#target-files) (`read`, `exists`, `list`, and `create`) in workflow callbacks and JSSG transforms.
 - JSSG: `codemod/ast-grep` parsing, `SgRoot` and `SgNode` (apart from the semantic APIs), `jssgTransform`, and `codemod/runtime` helpers.
 - CLI: `run`, `workflow run/resume/status/list/cancel/validate/upgrade`, `resume --approve`, `jssg run/test`, `publish`, `search`, `login/logout/whoami`, and `init --no-interactive` for workflow packages.
 - Automation: `--control stdio`, the `codemod/protocol` v1 JSONL protocol, `status` and `list` with `--format json`, and exit codes `0`, `1`, `2`, and `3`, including `fail({ exitCode })`.

@@ -24,6 +24,8 @@ See [Codemod API stability](/community/api-stability) for the compatibility guar
 <Update label="2.0.0-alpha.11" description="Unreleased">
 - **`codemod/files` replaces `fs` in 2.0 workflows.** Callbacks and JSSG transforms can read, list, and create target files; new files are recorded and previewed with other edits. YAML packages retain compatibility for supported target-local `fs` calls.
 - **Resume no longer silently repeats interrupted side effects.** Check what a step did, then choose **Rerun** or **Skip**. Unattended resumes exit `3` until you pass `--rerun-step` or `--skip-step`. Step records are appended and synced to disk, and alpha.10 runs can still be read.
+- **Experimental APIs are labeled.** Look for `@experimental` in declarations, an Experimental marker in the docs or CLI help, and a notice on first use.
+- **JSSG parse and module-load errors count as failures.** Workflow steps no longer silently skip these errors.
 </Update>
 
 <Update label="2.0.0-alpha.10" description="November 26, 2026">

@@ -7,6 +7,9 @@ The 2.0 alphas are tagged `cli-2.0.0-alpha.N` and published to npm under the `al
 ## [cli-2.0.0-alpha.11] - Unreleased
 
 - *(workflow)* Replace `fs` in 2.0 workflows with `codemod/files` for target-only reads and recorded file creation, with a compatibility adapter for 1.x packages.
+- *(workflow)* Ask before repeating interrupted side effects on resume and harden run-store writes. Use `--rerun-step` or `--skip-step` to continue a non-interactive run.
+- *(api)* Mark experimental APIs in types, docs, and CLI help, and notify users on first use.
+- *(jssg)* Report parse and module-load errors as failures instead of silently skipping them.
 
 ## [cli-2.0.0-alpha.10] - 2026-11-26
 
