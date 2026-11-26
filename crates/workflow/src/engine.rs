@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use butterflow_state::run_store::{
     MemoryStore, RunLease, RunRecord, RunSettings, RunStatus, RunStore, StepRecord, StepStatus,
-    StoreError,
+    StoreError, TargetHolder,
 };
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -46,6 +46,8 @@ pub enum EngineError {
     Exists(String),
     #[error("run '{0}' is being executed by another process; wait for it, or stop it with `codemod workflow cancel --id {0}`")]
     Busy(String),
+    #[error("{}", target_busy(.0))]
+    TargetBusy(TargetHolder),
     #[error("'{0}' cannot name an event: use 1 to 100 letters, digits, '.', '_' or '-'")]
     EventName(String),
     #[error("{}", other_version(run, made_by.as_deref(), stale))]
@@ -63,6 +65,15 @@ pub enum EngineError {
         started: &'static str,
         resuming: &'static str,
     },
+}
+
+/// Why a run cannot start on a target another run holds.
+fn target_busy(holder: &TargetHolder) -> String {
+    let run = &holder.run_id;
+    format!(
+        "another run ({run}) is already running on {}: wait for it, follow it with `codemod workflow attach --id {run}`, or stop it with `codemod workflow cancel --id {run}`",
+        holder.target.display()
+    )
 }
 
 /// Why a run another codemod version made is not resumed.
@@ -323,6 +334,9 @@ pub(crate) struct Execution {
     pub context: Arc<RunContext>,
     stop: StopHandle,
     _lease: Box<dyn RunLease>,
+    /// The hold on the run's target, so no other run changes it meanwhile;
+    /// `None` for dry runs and tests.
+    _target: Option<Box<dyn RunLease>>,
 }
 
 impl Execution {
@@ -521,6 +535,12 @@ impl Engine {
         if store.get_run(&record.id)?.is_some() {
             return Err(EngineError::Exists(record.id));
         }
+        // Before the run is saved: a run refused here leaves nothing behind.
+        let target_lease = if dry_run || test.is_some() {
+            None
+        } else {
+            Some(lock_target(store.as_ref(), &record.target, &record.id)?)
+        };
         store.put_run(&record)?;
         let lease = store
             .acquire(&record.id)?
@@ -532,7 +552,9 @@ impl Engine {
                 Arc::clone(&store),
             ))
         });
-        Ok(self.begin(store, record, lease, callbacks, dry_run, test, false, gate))
+        let mut execution = self.begin(store, record, lease, callbacks, dry_run, test, false, gate);
+        execution._target = target_lease;
+        Ok(execution)
     }
 
     /// Take a stored run to continue it, marked running again.
@@ -584,6 +606,7 @@ impl Engine {
             .store
             .acquire(&record.id)?
             .ok_or_else(|| EngineError::Busy(record.id.clone()))?;
+        let target_lease = lock_target(self.store.as_ref(), &record.target, &record.id)?;
         record
             .reopen(options.force)
             .map_err(|refused| match refused {
@@ -610,7 +633,9 @@ impl Engine {
                 Arc::clone(&store),
             ))
         });
-        Ok(self.begin(store, record, lease, callbacks, false, None, true, gate))
+        let mut execution = self.begin(store, record, lease, callbacks, false, None, true, gate);
+        execution._target = Some(target_lease);
+        Ok(execution)
     }
 
     /// Announce a run and set up what its steps share.
@@ -675,6 +700,7 @@ impl Engine {
             context,
             stop: self.stop.clone(),
             _lease: lease,
+            _target: None,
         }
     }
 
@@ -756,6 +782,23 @@ pub fn send_event(
         }
     }
     Ok(store.send_event(run_id, name, data)?)
+}
+
+/// Hold the repository `target` is in (or `target` itself, outside one)
+/// for run `run_id`: one run changes a repository at a time.
+fn lock_target(
+    store: &dyn RunStore,
+    target: &Path,
+    run_id: &str,
+) -> Result<Box<dyn RunLease>, EngineError> {
+    let target = absolute(target);
+    let repository = target
+        .ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .unwrap_or(&target);
+    store
+        .lock_target(repository, run_id)?
+        .map_err(EngineError::TargetBusy)
 }
 
 fn absolute(path: &Path) -> PathBuf {

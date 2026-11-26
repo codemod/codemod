@@ -587,6 +587,50 @@ fn runs_this_version_cannot_read_are_listed_as_unreadable() {
 }
 
 #[test]
+fn one_run_at_a_time_changes_a_target() {
+    let fixture = Fixture::new(TWO_APPROVALS);
+    let mut first = fixture.control(&fixture.run_args(&[]));
+    let id = first.event("hello")["run_id"].as_str().unwrap().to_string();
+    first.event("question");
+
+    // A second run on the same target fails fast, naming the first.
+    let second = fixture.run(&["--approve"]);
+    assert_eq!(second.status.code(), Some(1), "{}", text(&second));
+    // As one line: the error is wrapped to the terminal's width.
+    let shown = regex::Regex::new("\x1b\\[[0-9;]*m")
+        .unwrap()
+        .replace_all(&text(&second), "")
+        .replace('│', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        shown.contains(&format!("another run ({id})"))
+            && shown.contains(&format!("codemod workflow attach --id {id}"))
+            && shown.contains(&format!("codemod workflow cancel --id {id}")),
+        "{shown}"
+    );
+    assert_eq!(fixture.read("src/b.ts"), "var b = 2;\n");
+
+    // A killed run's lock goes with its process.
+    first.child.kill().unwrap();
+    let (_, _, _) = first.finish();
+    let second = fixture.run(&["--approve"]);
+    assert!(second.status.success(), "{}", text(&second));
+    assert_eq!(fixture.read("src/b.ts"), "let b = 2;\n");
+    // And the killed run can be resumed once the target is free.
+    let resumed = fixture.codemod(&[
+        "workflow",
+        "resume",
+        "--id",
+        &id,
+        "--approve",
+        "--no-interactive",
+    ]);
+    assert!(resumed.status.success(), "{}", text(&resumed));
+}
+
+#[test]
 fn seq_keeps_increasing_when_a_run_is_resumed() {
     let fixture = Fixture::new(TWO_APPROVALS);
     let first = events(&fixture.run(&["--format", "jsonl"]));

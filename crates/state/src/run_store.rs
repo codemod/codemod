@@ -391,6 +391,16 @@ pub trait RunStore: Send + Sync {
     /// Whether something is executing the run now.
     fn is_held(&self, run_id: &str) -> StoreResult<bool>;
 
+    /// Take a target (a repository) for run `run_id` until the lease is
+    /// dropped, so two runs never change one repository at once. `Err`
+    /// names the run holding it. A lease does not outlive its process: a
+    /// lock a killed process left is taken over.
+    fn lock_target(
+        &self,
+        target: &Path,
+        run_id: &str,
+    ) -> StoreResult<Result<Box<dyn RunLease>, TargetHolder>>;
+
     /// Ask whatever executes the run to stop.
     fn request_cancel(&self, run_id: &str) -> StoreResult<()>;
     fn cancel_requested(&self, run_id: &str) -> StoreResult<bool>;
@@ -423,6 +433,50 @@ pub fn valid_event_name(name: &str) -> bool {
 
 /// Held while a run executes; dropping it releases the run.
 pub trait RunLease: Send + Sync {}
+
+/// The run that holds a target ([`RunStore::lock_target`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetHolder {
+    pub run_id: String,
+    /// Its process, when known.
+    #[serde(default)]
+    pub pid: Option<u32>,
+    /// The target it locked (the repository).
+    #[serde(default)]
+    pub target: PathBuf,
+}
+
+/// Whether process `pid` is still running. Where that cannot be told, it
+/// is taken to be.
+fn process_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return false;
+        };
+        // Signal 0 checks the process exists; EPERM means it does, as
+        // someone else's.
+        // SAFETY: kill with signal 0 sends nothing.
+        let result = unsafe { libc::kill(pid, 0) };
+        result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+/// A stable name for a target's lock file (FNV-1a of its path).
+fn target_lock_name(target: &Path) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in target.to_string_lossy().bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{hash:016x}.lock")
+}
 
 /// Select a store from `CODEMOD_RUN_STORE` (`local`, the default, or
 /// `memory`). `CODEMOD_RUN_STORE_DIR` moves the local store.
@@ -458,10 +512,29 @@ struct MemoryRun {
 
 type MemoryRuns = Arc<Mutex<BTreeMap<String, MemoryRun>>>;
 
+type MemoryTargets = Arc<Mutex<BTreeMap<PathBuf, String>>>;
+
 /// Keeps everything in memory. For tests, and runs that must not persist.
 #[derive(Default)]
 pub struct MemoryStore {
     runs: MemoryRuns,
+    targets: MemoryTargets,
+}
+
+struct MemoryTargetLease {
+    targets: MemoryTargets,
+    target: PathBuf,
+}
+
+impl RunLease for MemoryTargetLease {}
+
+impl Drop for MemoryTargetLease {
+    fn drop(&mut self) {
+        self.targets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.target);
+    }
 }
 
 fn with_runs<T>(runs: &MemoryRuns, f: impl FnOnce(&mut BTreeMap<String, MemoryRun>) -> T) -> T {
@@ -541,6 +614,26 @@ impl RunStore for MemoryStore {
 
     fn is_held(&self, run_id: &str) -> StoreResult<bool> {
         Ok(self.with(|runs| runs.get(run_id).is_some_and(|r| r.held)))
+    }
+
+    fn lock_target(
+        &self,
+        target: &Path,
+        run_id: &str,
+    ) -> StoreResult<Result<Box<dyn RunLease>, TargetHolder>> {
+        let mut targets = self.targets.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(holder) = targets.get(target) {
+            return Ok(Err(TargetHolder {
+                run_id: holder.clone(),
+                pid: Some(std::process::id()),
+                target: target.to_path_buf(),
+            }));
+        }
+        targets.insert(target.to_path_buf(), run_id.to_string());
+        Ok(Ok(Box::new(MemoryTargetLease {
+            targets: Arc::clone(&self.targets),
+            target: target.to_path_buf(),
+        })))
     }
 
     fn request_cancel(&self, run_id: &str) -> StoreResult<()> {
@@ -701,6 +794,51 @@ struct LocalLease {
 
 impl RunLease for LocalLease {}
 
+/// A target's lock file where the file system has no locks: it names the
+/// holder's process, and goes when the lease does. One a killed process
+/// left is taken over (its process is gone).
+struct PidLease {
+    path: PathBuf,
+}
+
+impl RunLease for PidLease {}
+
+impl Drop for PidLease {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+impl LocalStore {
+    /// `<root>/.targets/<hash>.lock`: one per target, outside the runs.
+    fn target_lock_path(&self, target: &Path) -> PathBuf {
+        self.root.join(".targets").join(target_lock_name(target))
+    }
+
+    /// Take a target where file locks are not supported: by the process id
+    /// written in its lock file.
+    fn lock_target_by_pid(
+        path: PathBuf,
+        holder: TargetHolder,
+    ) -> StoreResult<Result<Box<dyn RunLease>, TargetHolder>> {
+        let io = |source| StoreError::Io {
+            path: path.clone(),
+            source,
+        };
+        let current: Option<TargetHolder> = fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok());
+        if let Some(current) = current {
+            if current.pid.is_some_and(process_alive) {
+                return Ok(Err(current));
+            }
+        }
+        let text = serde_json::to_string(&holder).unwrap_or_default();
+        fs::write(&path, text).map_err(io)?;
+        Ok(Ok(Box::new(PidLease { path })))
+    }
+}
+
 impl RunStore for LocalStore {
     fn put_run(&self, run: &RunRecord) -> StoreResult<()> {
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -791,6 +929,66 @@ impl RunStore for LocalStore {
         Ok(self
             .try_lock(run_id)?
             .map(|file| Box::new(LocalLease { _file: file }) as Box<dyn RunLease>))
+    }
+
+    #[allow(clippy::incompatible_msrv)]
+    fn lock_target(
+        &self,
+        target: &Path,
+        run_id: &str,
+    ) -> StoreResult<Result<Box<dyn RunLease>, TargetHolder>> {
+        use std::io::{Read as _, Seek as _, Write as _};
+        let path = self.target_lock_path(target);
+        let io = |source| StoreError::Io {
+            path: path.clone(),
+            source,
+        };
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(io)?;
+        }
+        let holder = TargetHolder {
+            run_id: run_id.to_string(),
+            pid: Some(std::process::id()),
+            target: target.to_path_buf(),
+        };
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(io)?;
+        match file.try_lock() {
+            Ok(()) => {
+                // What a run before left here (also one that was killed) is
+                // not a holder any more.
+                file.set_len(0).map_err(io)?;
+                file.seek(std::io::SeekFrom::Start(0)).map_err(io)?;
+                file.write_all(
+                    serde_json::to_string(&holder)
+                        .unwrap_or_default()
+                        .as_bytes(),
+                )
+                .map_err(io)?;
+                file.flush().map_err(io)?;
+                Ok(Ok(Box::new(LocalLease { _file: file })))
+            }
+            Err(fs::TryLockError::WouldBlock) => {
+                let mut text = String::new();
+                let _ = file.read_to_string(&mut text);
+                let held = serde_json::from_str(&text).unwrap_or(TargetHolder {
+                    run_id: "unknown".to_string(),
+                    pid: None,
+                    target: target.to_path_buf(),
+                });
+                Ok(Err(held))
+            }
+            // No file locks here (some network file systems): by process id.
+            Err(fs::TryLockError::Error(_)) => {
+                drop(file);
+                Self::lock_target_by_pid(path, holder)
+            }
+        }
     }
 
     fn is_held(&self, run_id: &str) -> StoreResult<bool> {
@@ -1142,6 +1340,69 @@ mod tests {
         assert_eq!(unreadable[0].id, "new");
         assert_eq!(unreadable[0].codemod_version.as_deref(), Some("9.0.0"));
         assert!(unreadable[0].started_at.is_some());
+    }
+
+    fn targets_are_locked_one_run_at_a_time(store: &dyn RunStore) {
+        let target = Path::new("/work/app");
+        let first = store.lock_target(target, "a").unwrap().ok().unwrap();
+        let held = store.lock_target(target, "b").unwrap().err().unwrap();
+        assert_eq!(held.run_id, "a");
+        assert_eq!(held.pid, Some(std::process::id()));
+        // Another target is free.
+        let other = store.lock_target(Path::new("/work/lib"), "b").unwrap();
+        assert!(other.is_ok());
+        drop(first);
+        assert!(store.lock_target(target, "b").unwrap().is_ok());
+    }
+
+    #[test]
+    fn memory_store_locks_targets() {
+        targets_are_locked_one_run_at_a_time(&MemoryStore::default());
+    }
+
+    #[test]
+    fn local_store_locks_targets_and_takes_over_a_killed_runs_lock() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = LocalStore::new(dir.path());
+        targets_are_locked_one_run_at_a_time(&store);
+        // A run that was killed left its lock file behind: unlocked, it is
+        // not a holder.
+        let target = Path::new("/work/killed");
+        let path = store.target_lock_path(target);
+        fs::write(
+            &path,
+            r#"{"runId":"gone","pid":999999,"target":"/work/killed"}"#,
+        )
+        .unwrap();
+        let lease = store.lock_target(target, "c").unwrap();
+        assert!(lease.is_ok());
+        assert!(fs::read_to_string(&path).unwrap().contains("\"c\""));
+    }
+
+    #[test]
+    fn without_file_locks_a_target_is_held_while_its_process_lives() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("t.lock");
+        let holder = |run: &str, pid: u32| TargetHolder {
+            run_id: run.into(),
+            pid: Some(pid),
+            target: "/work/app".into(),
+        };
+        // A process that is gone: its lock is cleared.
+        fs::write(
+            &path,
+            serde_json::to_string(&holder("gone", 999_999)).unwrap(),
+        )
+        .unwrap();
+        let lease = LocalStore::lock_target_by_pid(path.clone(), holder("a", std::process::id()))
+            .unwrap()
+            .ok()
+            .unwrap();
+        // One that lives: held.
+        let held = LocalStore::lock_target_by_pid(path.clone(), holder("b", 1)).unwrap();
+        assert_eq!(held.err().unwrap().run_id, "a");
+        drop(lease);
+        assert!(!path.exists());
     }
 
     #[test]
