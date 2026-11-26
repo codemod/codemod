@@ -233,6 +233,28 @@ impl RuffSemanticProvider {
         )
     }
 
+    /// ty's answer, or, when it lands on an import binding (ty only sees
+    /// the files the run told the provider about, so a module outside them
+    /// does not resolve), where that import leads in the workspace: `y`'s
+    /// declaration in `x` for `from x import y`, through re-exports. An
+    /// import whose module is not in the workspace stays the import, as
+    /// an `import` definition.
+    fn past_import(
+        &self,
+        found: Option<DefinitionResult>,
+        options: DefinitionOptions,
+    ) -> Option<DefinitionResult> {
+        let def = found?;
+        if !options.resolve_external {
+            return Some(def);
+        }
+        let past = self
+            .modules("definition")
+            .ok()
+            .and_then(|modules| modules.follow_import(&def.location.file_path, def.location.range));
+        Some(past.unwrap_or(def))
+    }
+
     /// Get the virtual filesystem root used by this provider.
     pub fn fs_root(&self) -> &VfsPath {
         &self.fs_root
@@ -262,9 +284,10 @@ impl SemanticProvider for RuffSemanticProvider {
             AnalyzerKind::FileScope(analyzer) => analyzer
                 .get_definition(file_path, &content, range, options)
                 .map_err(Into::into),
-            AnalyzerKind::WorkspaceScope(analyzer) => analyzer
-                .get_definition(file_path, &content, range, options)
-                .map_err(Into::into),
+            AnalyzerKind::WorkspaceScope(analyzer) => {
+                let found = analyzer.get_definition(file_path, &content, range, options)?;
+                Ok(self.past_import(found, options))
+            }
         }
     }
 
@@ -424,9 +447,10 @@ impl RuffSemanticProvider {
             AnalyzerKind::FileScope(analyzer) => analyzer
                 .get_definition(file_path, content, range, options)
                 .map_err(Into::into),
-            AnalyzerKind::WorkspaceScope(analyzer) => analyzer
-                .get_definition(file_path, content, range, options)
-                .map_err(Into::into),
+            AnalyzerKind::WorkspaceScope(analyzer) => {
+                let found = analyzer.get_definition(file_path, content, range, options)?;
+                Ok(self.past_import(found, options))
+            }
         }
     }
 

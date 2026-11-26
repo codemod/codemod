@@ -183,3 +183,63 @@ export default async function main() {
         .unwrap()
         .contains(&json!("request.GET[\"q\"]")));
 }
+
+/// A signal sent in one module, received in another, both importing it.
+fn signals() -> Harness {
+    let h = Harness::new();
+    h.write("pkg/__init__.py", "");
+    h.write(
+        "pkg/signals.py",
+        "from x import Signal\nplaced = Signal()\n",
+    );
+    h.write(
+        "pkg/checkout.py",
+        "from pkg.signals import placed\n\ndef place():\n    placed.send()\n",
+    );
+    h.write(
+        "pkg/receivers.py",
+        "from x import receiver\nfrom pkg.signals import placed\n\n@receiver(placed)\ndef on_placed():\n    pass\n",
+    );
+    h
+}
+
+#[test]
+fn definition_of_an_imported_name_lands_in_the_module_that_declares_it() {
+    let report = signals().start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, symbols } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "pkg/checkout.py", semanticAnalysis: "workspace" }, (file) => {
+    const [def] = symbols("python").definition.get(parse(file).root().find("placed.send()").field("function").field("object")) ?? [];
+    return `${def.node.getRoot().filename().split("/").pop()}:${def.node.range().start.line + 1} ${def.kind}`;
+  }));
+  return found.outputs;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(["signals.py:2 external"]));
+}
+
+#[test]
+fn join_by_default_joins_a_send_to_the_receiver_of_the_same_imported_signal() {
+    let report = signals().start(
+        r#"
+import { step } from "codemod/workflow";
+import { join } from "codemod/ast-grep";
+export default async function main() {
+  return await step("join", () => {
+    const sent = join({
+      language: "python",
+      from: { find: "$S.send($$$)", anchor: "function", on: "$S" },
+      to: { find: { rule: { kind: "function_definition", inside: { kind: "decorated_definition", has: { kind: "decorator", has: { pattern: "receiver($S)" } } } } }, on: "$S" },
+    });
+    return [...sent].flatMap(([from, edges]) => edges.map((e) => `${from.field("name").text()} -> ${e.node.field("name").text()}`));
+  });
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(["place -> on_placed"]));
+}

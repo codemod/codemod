@@ -155,46 +155,7 @@ where
             .map(|parsed| module_bindings(&parsed.syntax().body))
             .unwrap_or_default();
         if let Some(binding) = bindings.named(name) {
-            let found = match &binding.what {
-                What::Defined(kind) => Some(definition(
-                    module,
-                    &content,
-                    binding.range,
-                    *kind,
-                    name,
-                    DefinitionKind::External,
-                )),
-                What::From {
-                    module: from,
-                    name: imported,
-                } => {
-                    // `from . import mod`, `from pkg import mod`: the submodule.
-                    let submodule = self.resolve_module(module, &join_specifier(from, imported));
-                    match (submodule, self.resolve_module(module, from)) {
-                        (Some(sub), _) => self.module_definition(&sub),
-                        (None, Some(next)) => self.export_in(&next, imported, seen),
-                        (None, None) => Some(definition(
-                            module,
-                            &content,
-                            binding.range,
-                            SymbolKind::Import,
-                            name,
-                            DefinitionKind::Import,
-                        )),
-                    }
-                }
-                What::Module(specifier) => match self.resolve_module(module, specifier) {
-                    Some(target) => self.module_definition(&target),
-                    None => Some(definition(
-                        module,
-                        &content,
-                        binding.range,
-                        SymbolKind::Import,
-                        name,
-                        DefinitionKind::Import,
-                    )),
-                },
-            };
+            let found = self.landing(module, &content, binding, seen);
             if found.is_some() {
                 return found;
             }
@@ -217,6 +178,74 @@ where
             }
         }
         None
+    }
+
+    /// Where `binding`, bound at the top of `module`, lands: its own name
+    /// for a definition; for an import, what the import names, or the
+    /// import itself when its module does not resolve.
+    fn landing(
+        &self,
+        module: &Path,
+        content: &str,
+        binding: &Binding,
+        seen: &mut HashSet<(PathBuf, String)>,
+    ) -> Option<DefinitionResult> {
+        match &binding.what {
+            What::Defined(kind) => Some(definition(
+                module,
+                content,
+                binding.range,
+                *kind,
+                &binding.name,
+                DefinitionKind::External,
+            )),
+            What::From {
+                module: from,
+                name: imported,
+            } => {
+                // `from . import mod`, `from pkg import mod`: the submodule.
+                let submodule = self.resolve_module(module, &join_specifier(from, imported));
+                match (submodule, self.resolve_module(module, from)) {
+                    (Some(sub), _) => self.module_definition(&sub),
+                    (None, Some(next)) => self.export_in(&next, imported, seen),
+                    (None, None) => Some(definition(
+                        module,
+                        content,
+                        binding.range,
+                        SymbolKind::Import,
+                        &binding.name,
+                        DefinitionKind::Import,
+                    )),
+                }
+            }
+            What::Module(specifier) => match self.resolve_module(module, specifier) {
+                Some(target) => self.module_definition(&target),
+                None => Some(definition(
+                    module,
+                    content,
+                    binding.range,
+                    SymbolKind::Import,
+                    &binding.name,
+                    DefinitionKind::Import,
+                )),
+            },
+        }
+    }
+
+    /// Where the import binding whose bound name is at `range` in `file`
+    /// leads, anywhere in the file (a function's own imports too). None
+    /// when no import binds a name there.
+    pub(crate) fn follow_import(&self, file: &Path, range: ByteRange) -> Option<DefinitionResult> {
+        let file = self.flow.canonical(file);
+        let content = (self.read)(&file)?;
+        let parsed = ruff_python_parser::parse_module(&content).ok()?;
+        let mut finder = ImportAt {
+            range: TextRange::new(range.start.into(), range.end.into()),
+            found: None,
+        };
+        finder.visit_body(&parsed.syntax().body);
+        let binding = finder.found?;
+        self.landing(&file, &content, &binding, &mut HashSet::new())
     }
 
     /// A module as a definition: the whole file.
@@ -981,4 +1010,28 @@ fn absolutize(relative: &str, package: &str) -> Option<String> {
         parts.push(rest);
     }
     (!parts.is_empty()).then(|| parts.join("."))
+}
+
+/// The binding an import statement makes whose bound name is at `range`.
+struct ImportAt {
+    range: TextRange,
+    found: Option<Binding>,
+}
+
+impl<'a> Visitor<'a> for ImportAt {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if self.found.is_some() {
+            return;
+        }
+        if let Stmt::Import(_) | Stmt::ImportFrom(_) = stmt {
+            let mut bound = Bindings::default();
+            collect_bindings(std::slice::from_ref(stmt), false, &mut bound);
+            self.found = bound
+                .bindings
+                .into_iter()
+                .find(|binding| binding.range == self.range);
+            return;
+        }
+        walk_stmt(self, stmt);
+    }
 }
