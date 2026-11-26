@@ -686,8 +686,9 @@ async function forEachFile(
   // when it failed on some.
   const [first] = allFailures;
   if (first && allFailures.length === total) {
-    throw new Error(
-      `the callback failed on every file; first error: ${first.path}: ${first.error}`,
+    throw Object.assign(
+      new Error(`${total} of ${total} files failed; first error: ${first.path}: ${first.error}`),
+      { files: { failed: total, total } },
     );
   }
   const result: Outcome = {

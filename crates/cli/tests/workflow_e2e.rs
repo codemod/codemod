@@ -161,6 +161,37 @@ fn text(output: &Output) -> String {
     )
 }
 
+#[test]
+fn inspect_marks_step_kinds_it_cannot_determine_statically() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { step, sleep, approval } from "codemod/workflow";
+export default async function main({ params }) {
+  throw new Error("inspect must not run the workflow");
+  await step("Wait", sleep(1));
+  await step("Choose", params.wait ? sleep(1) : approval("Continue?"));
+}
+"#,
+    );
+    let workflow = fixture.package.path().join("workflow.ts");
+    let args = ["workflow", "inspect", "-w", workflow.to_str().unwrap()];
+    let output = fixture.codemod(&[&args[..], &["--format", "json"]].concat());
+    assert!(output.status.success(), "{}", text(&output));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["steps"],
+        serde_json::json!([
+            { "label": "Wait", "kind": "sleep" },
+            { "label": "Choose", "kind": "dynamic" },
+        ])
+    );
+    let output = fixture.codemod(&args);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("Choose (dynamic)"));
+}
+
 /// The run id from `workflow list`, most recent first.
 fn latest_run_id(fixture: &Fixture) -> String {
     let output = fixture.codemod(&["workflow", "list"]);
@@ -190,6 +221,80 @@ nodes:
 
 const YAML_PACKAGE_MANIFEST: &str =
     "schema_version: \"1.0\"\nname: test\nversion: 0.1.0\ndescription: test\nauthor: test\n";
+
+fn assert_file_failure(fixture: &Fixture, file: &str) -> String {
+    let output = fixture.run(&["--format", "jsonl"]);
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{shown}");
+    let finished = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "run_finished")
+        .unwrap_or_else(|| panic!("{shown}"));
+    assert_eq!(finished["status"], "failed", "{shown}");
+    assert_eq!(finished["steps"][0]["status"], "failed", "{shown}");
+    assert_eq!(finished["failed_files"], 1, "{shown}");
+    let error = finished["error"].as_str().unwrap();
+    assert!(error.contains(file), "{shown}");
+    error.to_owned()
+}
+
+fn assert_parse_failure(fixture: &Fixture, file: &str) {
+    let error = assert_file_failure(fixture, file);
+    assert!(error.to_ascii_lowercase().contains("parse"), "{error}");
+}
+
+#[test]
+fn a_malformed_transform_module_fails_the_workflow_step_and_counts_the_file() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.target.path().join("src/b.ts")).unwrap();
+    fixture.package_file("scripts/bad.js", "export default function transform( {;");
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import transform from "./scripts/bad.js";
+export default async function main() {
+  await step("Transform", forEachFile("src/a.ts", transform));
+}
+"#,
+    );
+    assert_parse_failure(&fixture, "bad.js");
+    assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
+}
+
+#[test]
+fn a_malformed_legacy_transform_module_fails_the_workflow_step_and_counts_the_file() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.target.path().join("src/b.ts")).unwrap();
+    fixture.package_file("scripts/bad.js", "export default function transform( {;");
+    fixture.package_file("workflow.yaml", &YAML.replace("codemod.ts", "bad.js"));
+    assert_parse_failure(&fixture, "bad.js");
+    assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
+}
+
+#[test]
+fn a_missing_legacy_transform_dependency_fails_the_step_and_counts_the_file() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.target.path().join("src/b.ts")).unwrap();
+    fixture.package_file("workflow.yaml", YAML);
+    fixture.package_file(
+        "scripts/codemod.ts",
+        r#"export { default } from "./missing.js";"#,
+    );
+    let error = assert_file_failure(&fixture, "missing.js");
+    assert!(error.contains("codemod.ts"), "{error}");
+    assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
+}
+
+#[test]
+fn a_legacy_transform_does_not_treat_malformed_input_as_a_noop() {
+    let fixture = Fixture::new();
+    fixture.target_file("src/bad.js", "foo({;\n");
+    fixture.package_file("workflow.yaml", &YAML.replace("**/*.ts", "**/*.js"));
+    assert_parse_failure(&fixture, "bad.js");
+    assert_eq!(fixture.read("src/bad.js"), "foo({;\n");
+}
 
 #[test]
 fn a_workflow_yaml_package_runs() {
@@ -1245,4 +1350,28 @@ export default async function main() {
     dirty_repo(&fixture);
     let output = run_strict(&fixture, &[]);
     assert!(output.status.success(), "{}", text(&output));
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_current_directory_is_reported_without_panicking() {
+    let fixture = Fixture::new();
+    fixture.package_file("workflow.ts", "export default function main() {}");
+    let cwd = TempDir::new().unwrap();
+    let output = Command::new("sh")
+        .args([
+            "-c",
+            "cd \"$1\" && rmdir \"$1\" && shift && exec \"$@\"",
+            "sh",
+        ])
+        .arg(cwd.path())
+        .arg(env!("CARGO_BIN_EXE_codemod"))
+        .args(["workflow", "run", "--no-interactive", "-w"])
+        .arg(fixture.package.path().join("workflow.ts"))
+        .env("DISABLE_ANALYTICS", "true")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(text(&output).contains("the current directory is unavailable"));
+    assert!(!text(&output).contains("panicked"));
 }

@@ -96,7 +96,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         },
         "steps": inspection.steps.iter().map(|step| json!({
             "label": step.label,
-            "kind": step.kind,
+            "kind": step.kind.as_deref().unwrap_or("dynamic"),
         })).collect::<Vec<_>>(),
     });
     if args.format == ListFormat::Json {
@@ -168,7 +168,7 @@ fn print_text(described: &Value) {
             println!(
                 "  {} ({})",
                 step["label"].as_str().unwrap_or("(no label)"),
-                step["kind"].as_str().unwrap_or("?")
+                step["kind"].as_str().unwrap_or("dynamic")
             );
         }
     }

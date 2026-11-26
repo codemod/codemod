@@ -353,21 +353,19 @@ pub struct FileCount {
 }
 
 impl StepRecord {
-    /// How many of the step's files failed: none unless it is partial.
+    /// How many of the step's files failed, including hard failures.
     /// Records from before the count was kept have it in `error` only
     /// ("2 of 10 files failed").
     pub fn failed_files(&self) -> usize {
-        if self.status != StepStatus::Partial {
-            return 0;
-        }
         match self.files {
             Some(files) => files.failed,
-            None => self
+            None if self.status == StepStatus::Partial => self
                 .error
                 .as_deref()
                 .and_then(|error| error.split(' ').next())
                 .and_then(|count| count.parse().ok())
                 .unwrap_or(1),
+            None => 0,
         }
     }
 }

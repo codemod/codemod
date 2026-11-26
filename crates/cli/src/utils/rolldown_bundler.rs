@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use codemod_llrt_capabilities::module_builder::supported_runtime_external_modules;
 use rolldown::{BundleOutput, Bundler, BundlerOptions, InputItem, IsExternal, SourceMapType};
 use std::collections::HashSet;
@@ -104,7 +104,7 @@ impl RolldownBundler {
         let result = bundler
             .generate()
             .await
-            .map_err(|e| anyhow::anyhow!("Rolldown bundling failed: {:?}", e))?;
+            .context("Rolldown bundling failed")?;
         if self.config.fail_on_unresolved_imports {
             if let Some(warning) = result
                 .warnings
@@ -191,6 +191,24 @@ mod tests {
 
         assert_eq!(bundler.config.entry_path, config.entry_path);
         assert_eq!(bundler.config.source_maps, config.source_maps);
+    }
+
+    #[tokio::test]
+    async fn bundling_error_displays_the_diagnostic_not_debug_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundler = RolldownBundler::new(RolldownBundlerConfig {
+            entry_path: dir.path().join("missing-entry.ts"),
+            base_dir: None,
+            output_path: None,
+            source_maps: false,
+            fail_on_unresolved_imports: false,
+            externals: Vec::new(),
+        });
+        let error = bundler.bundle().await.unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("Rolldown bundling failed"), "{message}");
+        assert!(message.contains("missing-entry.ts"), "{message}");
+        assert!(!message.contains("BuildDiagnostic"), "{message}");
     }
 
     #[cfg(windows)]

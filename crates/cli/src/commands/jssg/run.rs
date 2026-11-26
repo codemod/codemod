@@ -262,14 +262,14 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         }
     };
 
-    let executed = config.execute(|file_path, _config| {
+    // The walker blocks while its workers drive transforms on the CLI runtime.
+    let runtime = tokio::runtime::Handle::current();
+    let execute_file = |file_path: &Path, _config: &CodemodExecutionConfig| {
         // Only process files
         if !file_path.is_file() {
             return;
         }
 
-        // Use a tokio runtime to handle the async execution within the sync callback
-        let rt = tokio::runtime::Runtime::new().unwrap();
         let mut attempts = 0;
         loop {
             let runtime_event_buffer = super::RuntimeEventBuffer::new();
@@ -317,7 +317,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 target_directory: &target_directory,
                 pending_files: Some(pending.clone()),
             };
-            let result = rt.block_on(execute_codemod_with_quickjs(options));
+            let result = runtime.block_on(execute_codemod_with_quickjs(options));
 
             // It gave way to another file's transform that was waiting for a
             // file it held, so what it did is incomplete: drop it and run it
@@ -345,10 +345,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                     if let ExecutionResult::Modified(modified) = primary {
                         taken.set(modified.content);
                         if let Some(to) = modified.rename_to {
-                            file_renames.push((
-                                taken.path().to_path_buf(),
-                                (file_path.to_path_buf(), to),
-                            ));
+                            file_renames
+                                .push((taken.path().to_path_buf(), (file_path.to_path_buf(), to)));
                         }
                     }
                     // What `jssgTransform` made of other files is in
@@ -402,7 +400,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             runtime_event_output.flush(&runtime_event_buffer);
             return;
         }
-    });
+    };
+    let executed = tokio::task::block_in_place(|| config.execute(execute_file));
     // Nothing ran (a capability was refused, the target can't be read):
     // the run failed.
     if let Err(error) = executed {

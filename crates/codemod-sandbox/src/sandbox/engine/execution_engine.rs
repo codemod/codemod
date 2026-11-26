@@ -376,6 +376,11 @@ pub async fn execute_codemod_with_quickjs<'a, R>(
 where
     R: ModuleResolver + 'static,
 {
+    if let Some(error) = crate::utils::js_syntax::parse_error(options.language, options.content) {
+        return Err(ExecutionError::Configuration {
+            message: format!("Cannot parse {}: {error}", options.file_path.display()),
+        });
+    }
     let script_name = options
         .script_path
         .file_name()

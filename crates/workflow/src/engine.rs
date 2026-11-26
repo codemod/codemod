@@ -209,7 +209,7 @@ pub struct RunReport {
 }
 
 impl RunReport {
-    /// How many files failed in the run's partial steps.
+    /// How many files failed in the run's steps.
     pub fn failed_files(&self) -> usize {
         self.steps.iter().map(StepRecord::failed_files).sum()
     }
@@ -415,7 +415,7 @@ impl Execution {
             error: self.record.error.clone(),
             awaiting: self.record.awaiting.clone(),
             question: self.record.question.clone(),
-            failed_files: partial_steps.iter().map(|step| step.failed_files).sum(),
+            failed_files: steps.iter().map(StepRecord::failed_files).sum(),
             partial_steps,
             output,
             output_omitted,

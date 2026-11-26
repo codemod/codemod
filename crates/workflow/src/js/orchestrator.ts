@@ -1205,11 +1205,20 @@ export function createRuntime(host: Host) {
     let outcome: Outcome;
     for (;;) {
       let error: Error;
+      let failedFiles: StepRecord["files"];
       try {
         outcome = await host.start(request);
         break;
       } catch (cause) {
         error = asError(cause);
+        if (
+          isRecord(cause) &&
+          isRecord(cause.files) &&
+          typeof cause.files.failed === "number" &&
+          typeof cause.files.total === "number"
+        ) {
+          failedFiles = { failed: cause.files.failed, total: cause.files.total };
+        }
       }
       // A failed step runs again while it has attempts left and the run is
       // still going.
@@ -1245,7 +1254,11 @@ export function createRuntime(host: Host) {
         record({ status: interrupted, error: messageOf(error) });
         throw error;
       }
-      record({ status: "failed", error: messageOf(error) });
+      record({
+        status: "failed",
+        error: messageOf(error),
+        ...(failedFiles && { files: failedFiles }),
+      });
       throw new StepError(name, error);
     }
     const result = outcome.result ?? null;
