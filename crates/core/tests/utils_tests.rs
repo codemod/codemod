@@ -420,6 +420,25 @@ fn test_parse_params() {
 }
 
 #[test]
+fn test_parse_params_keeps_declared_strings_as_text() {
+    let params = vec![
+        "version=4".to_string(),
+        "flag=true".to_string(),
+        "count=4".to_string(),
+        "enabled=true".to_string(),
+    ];
+
+    let result =
+        utils::parse_params_keeping_text(&params, |key| key == "version" || key == "flag").unwrap();
+
+    assert_eq!(result.get("version"), Some(&serde_json::json!("4")));
+    assert_eq!(result.get("flag"), Some(&serde_json::json!("true")));
+    // Undeclared ones are still read as JSON when they parse.
+    assert_eq!(result.get("count"), Some(&serde_json::json!(4)));
+    assert_eq!(result.get("enabled"), Some(&serde_json::json!(true)));
+}
+
+#[test]
 fn test_parse_params_invalid() {
     // Test parsing invalid parameters
     let params = vec![

@@ -15,7 +15,6 @@ use butterflow_core::registry::{RegistryError, RegistryPackageMetadata};
 use butterflow_core::report::{convert_diffs, ExecutionReport};
 use butterflow_core::structured_log::OutputFormat;
 use butterflow_core::utils::generate_execution_id;
-use butterflow_core::utils::parse_params;
 use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
 use console::{strip_ansi_codes, style};
@@ -274,8 +273,10 @@ pub async fn handler(
         return Err(error);
     }
 
-    let mut params = parse_params(args.params.as_deref().unwrap_or(&[]))
-        .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
+    let mut params = crate::commands::workflow::run::parse_workflow_params(
+        &workflow_path,
+        args.params.as_deref().unwrap_or(&[]),
+    )?;
 
     let dry_run_only_dependency = if resolved_package.dry_run_only {
         Some(args.package.clone())

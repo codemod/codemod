@@ -461,6 +461,8 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 <ResponseField name="--param <KEY=VALUE>" type="string">
   Pass key=value pairs to your workflow. Parameters reach the workflow as `params` (and the jssg transforms of a `workflow.yaml` as `options.params`).
 
+  A value that parses as JSON arrives as that value (`strict=true` is `true`, `level=4` is `4`), and anything else as text. A parameter your workflow's `Params` type declares as `string` (or as string literals) always arrives as text: `version=4` is `"4"`.
+
   ```bash
   # Single parameter:
   npx codemod workflow run -w workflow.ts --param format=cjs

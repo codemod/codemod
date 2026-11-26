@@ -94,6 +94,37 @@ pub fn declared_params(source: &str) -> Vec<DeclaredParam> {
     Vec::new()
 }
 
+/// Whether every value of the type is text: `string`, a string literal, or a
+/// union of those. A `--param` for such a parameter is kept as given rather
+/// than read as JSON, so `--param version=4` stays `"4"`.
+pub fn is_string_type(type_text: &str) -> bool {
+    let members: Vec<&str> = type_text
+        .trim()
+        .trim_start_matches('|')
+        .split('|')
+        .map(str::trim)
+        .collect();
+    !type_text.trim().is_empty()
+        && members.iter().all(|member| {
+            *member == "string"
+                || [('"', '"'), ('\'', '\''), ('`', '`')]
+                    .iter()
+                    .any(|(open, close)| {
+                        member.len() >= 2 && member.starts_with(*open) && member.ends_with(*close)
+                    })
+        })
+}
+
+/// The names of the parameters `source` declares as text (see
+/// [`is_string_type`]).
+pub fn string_params(source: &str) -> Vec<String> {
+    declared_params(source)
+        .into_iter()
+        .filter(|param| is_string_type(&param.type_text))
+        .map(|param| param.name)
+        .collect()
+}
+
 /// The name in the first `WorkflowContext<Name>` of the source.
 fn context_type_name(source: &str) -> Option<String> {
     let name = extract_context_type(source)?;
@@ -257,6 +288,18 @@ export { x } from "codemod/git";
             imported_modules(source),
             ["codemod/workflow", "./scripts/replace.ts", "codemod/git"]
         );
+    }
+
+    #[test]
+    fn string_types_are_text_only() {
+        for text in ["string", "\"a\" | \"b\"", "| 'x' | string", "`v${number}`"] {
+            assert!(is_string_type(text), "{text}");
+        }
+        for text in ["", "number", "boolean | string", "string[]", "any"] {
+            assert!(!is_string_type(text), "{text}");
+        }
+        let source = "interface Params {\n  version: string;\n  count?: number;\n  mode?: \"a\" | \"b\";\n  flag: boolean | string;\n}\nexport default async function main() {}";
+        assert_eq!(string_params(source), ["version", "mode"]);
     }
 
     #[test]

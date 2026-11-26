@@ -163,6 +163,39 @@ fn a_dry_run_changes_nothing() {
 }
 
 #[test]
+fn a_param_declared_as_string_arrives_as_text() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import type { WorkflowContext } from "codemod/workflow";
+interface Params {
+  version: string;
+  count?: number;
+}
+export default async function main({ params }: WorkflowContext<Params>) {
+  return { version: params.version, count: params.count, extra: params.extra };
+}
+"#,
+    );
+    let output = fixture.run(&[
+        "--format",
+        "jsonl",
+        "--param",
+        "version=4",
+        "--param",
+        "count=4",
+        "--param",
+        "extra=true",
+    ]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        run_finished(&output)["output"],
+        serde_json::json!({ "version": "4", "count": 4, "extra": true })
+    );
+}
+
+#[test]
 fn jsonl_output_has_one_event_per_line() {
     let fixture = Fixture::new();
     fixture.package_file("workflow.yaml", YAML);

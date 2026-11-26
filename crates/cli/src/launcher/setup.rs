@@ -369,8 +369,15 @@ impl SetupState {
             .filter(|p| !p.value.is_empty())
             .map(|p| format!("{}={}", p.name, p.value))
             .collect();
-        let params =
-            butterflow_core::utils::parse_params(&given).map_err(|error| error.to_string())?;
+        let params = butterflow_core::utils::parse_params_keeping_text(&given, |key| {
+            self.params.iter().any(|p| {
+                p.name == key
+                    && p.type_text
+                        .as_deref()
+                        .is_some_and(codemod_workflow::params::is_string_type)
+            })
+        })
+        .map_err(|error| error.to_string())?;
         Ok(SetupChoices {
             target,
             params,
@@ -470,6 +477,18 @@ pub(crate) mod tests {
         );
         assert_eq!(choices.agent.as_deref(), Some("codex"));
         assert_eq!(choices.decision_model.id(), "systemone/jev-latest");
+    }
+
+    #[test]
+    fn a_declared_string_param_stays_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = SetupState::new(input(dir.path().to_path_buf()));
+        state.params[0].value = "4".into();
+        state.params[1].value = "true".into();
+        let choices = state.choices().unwrap();
+        assert_eq!(choices.params.get("package"), Some(&json!("4")));
+        // `boolean | string` may be either, so it is read as JSON.
+        assert_eq!(choices.params.get("agent"), Some(&json!(true)));
     }
 
     #[test]
