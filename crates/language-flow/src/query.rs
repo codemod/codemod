@@ -80,6 +80,18 @@ pub trait FlowHost: Sync {
     ) -> Option<FunctionRef> {
         None
     }
+    /// The workspace functions a call calls, when the host's own analyzer
+    /// resolves calls (Rust: rust-analyzer resolves paths, methods and
+    /// trait dispatch). `Some(vec![])` means resolved to something outside
+    /// the workspace (a library function). None: follow values instead.
+    fn resolve_call(
+        &self,
+        _path: &Path,
+        _flow: &FileFlow,
+        _call: &CallFact,
+    ) -> Option<Vec<(PathBuf, u32, CallEdgeKind)>> {
+        None
+    }
     /// Why the function at index `function` of `path` is called from outside
     /// the workspace's code: its package exports it, or a rule on the
     /// selector declares it. Empty without either.
@@ -979,6 +991,10 @@ fn call_targets_with(
     call: &CallFact,
     typed: bool,
 ) -> Vec<(PathBuf, u32, CallEdgeKind)> {
+    if let Some(mut resolved) = host.resolve_call(path, flow, call) {
+        resolved.dedup();
+        return resolved;
+    }
     let mut functions = Vec::new();
     let mut seen = HashSet::new();
     let via = match &call.callee {

@@ -1,0 +1,34 @@
+[package]
+name = "language-rust"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Rust semantic analysis for JSSG, on rust-analyzer's library crates"
+
+[dependencies]
+language-core = { workspace = true }
+language-flow = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+parking_lot = "0.12"
+rustc-hash = "2"
+vfs = { workspace = true }
+
+# rust-analyzer as a library (one exact release: these crates change every week)
+ra_ap_ide = "=0.0.349"
+ra_ap_ide_db = "=0.0.349"
+ra_ap_hir = "=0.0.349"
+ra_ap_syntax = "=0.0.349"
+ra_ap_load-cargo = "=0.0.349"
+ra_ap_project_model = "=0.0.349"
+ra_ap_paths = "=0.0.349"
+ra_ap_vfs = "=0.0.349"
+# rust-analyzer 0.0.349 is generated against salsa 0.28.2; later 0.28.x
+# patch releases change the macro output it expands to, so pin it here.
+# (ty uses its own salsa from git; the two never meet.)
+ra-salsa = { package = "salsa", version = "=0.28.2" }
+ra-salsa-macro-rules = { package = "salsa-macro-rules", version = "=0.28.2" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -16,6 +16,7 @@ members = [
     "crates/language-flow",
     "crates/language-javascript",
     "crates/language-python",
+    "crates/language-rust",
     "crates/semantic-factory",
     "crates/tree-sitter-loader",
     "crates/workflow",
@@ -57,6 +58,7 @@ language-core = { path = "crates/language-core" }
 language-flow = { path = "crates/language-flow" }
 language-javascript = { path = "crates/language-javascript" }
 language-python = { path = "crates/language-python" }
+language-rust = { path = "crates/language-rust" }
 semantic-factory = { path = "crates/semantic-factory" }
 tree-sitter-loader = { path = "crates/tree-sitter-loader" }
 
