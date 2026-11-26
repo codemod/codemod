@@ -242,6 +242,8 @@ Everything else that reaches outside fails with the step to use instead:
 | `child_process` (`exec`, `spawn`, …) | `child_process.execSync is not available …` | [`shell()`](#shell-commands) |
 | `fs` writes (`writeFileSync`, `mkdirSync`, `unlinkSync`, …), reads outside the target | `fs.writeFileSync is not available …`, `EACCES` | `file.write()`, or a `shell()` or `agent()` step |
 | setting `process.env` | `process.env cannot be changed …` | `shell(command, { env })` |
+| reading `process.env` | every variable is `undefined`: callbacks get none of the machine's environment, and no other `process` API | pass values as [parameters](#parameters); a step takes variables with `shell(command, { env })` or an `http()` header `{ env: "NAME" }` |
+| importing a data file (`.yaml`) from outside the workflow's package | `cannot be imported` | keep the file in the package; JavaScript and TypeScript import from anywhere |
 | `setTimeout`, `setInterval`, `setImmediate` | `setTimeout is not available …` | [`sleep()`](#sleepduration) between steps |
 
 `fetch` and timers written in a workflow file are build errors, in the body and in callbacks, so the workflow fails before a run starts. `--allow-fs`, `--allow-fetch`, `--allow-child-process` and `capabilities` in `codemod.yaml` no longer give callbacks anything: the flags print a deprecation warning, and `codemod.yaml` capabilities are noted when the run starts. `codemod jssg run` and `codemod jssg test` on their own (outside a workflow) still take `--allow-*`.
@@ -518,6 +520,8 @@ const ready = await step("Releases accepting React 19", async () => {
 
 ### Shell commands
 
+A run asks before each command. With nobody to ask (`--no-interactive`, CI), the step fails unless the run was started with `--approve`; see [Approvals](#approvals).
+
 Give `shell` the command as a string, or write it as a tagged template. In a template, each `${}` value is quoted for the shell, so a path with spaces or quotes stays one argument; an array is one argument per item. The rest of the text is taken as written, backslashes included.
 
 ```ts
@@ -559,6 +563,8 @@ If a `codemod()` step resolves a preview-only registry package during an apply r
 
 Callbacks have no network. A workflow that needs one declares the request as a step with `http()`, from `codemod/workflow`. The response is the step's result: it is recorded with the run, so a resumed run gets it back without sending the request again.
 
+A run asks before each request, showing the method, the URL and the names of the environment variables its headers read: the workflow chooses all three. With nobody to ask (`--no-interactive`, CI), the step fails unless the run was started with `--approve`; see [Approvals](#approvals).
+
 ```ts
 import { http, step } from "codemod/workflow";
 
@@ -580,13 +586,13 @@ await step("Notify", http({ url: params.hook, method: "POST", json: { tag } }));
 | `allowErrorStatus` | Return a 4xx or 5xx response as the result. Without it such a response fails the step (with the status and the start of the body), so the step's `retries` apply |
 | `dryRun` | `"skip"` (the default): a dry run logs `would request GET …` and the step gives `{ skipped: true }`. `"perform"`: send it in a dry run too, for requests that only read |
 
-The result is `{ status, statusText, ok, url, headers, body, json? }`: `url` is where it ended after redirects, header names are lower case, `body` is the text (up to 10 MiB; base64 with `bodyEncoding: "base64"` when it is not UTF-8), and `json` is the parsed body when the response says it is JSON. The URL, method, headers and body are the step's content: change one and the step runs again on resume.
+The result is `{ status, statusText, ok, url, headers, body, json? }`: `url` is where it ended after redirects (a request with `{ env }` headers does not follow a redirect to another origin: that response is the result), header names are lower case, `body` is the text (up to 10 MiB; base64 with `bodyEncoding: "base64"` when it is not UTF-8), and `json` is the parsed body when the response says it is JSON. The URL, method, headers and body are the step's content: change one and the step runs again on resume.
 
 ### Coding agents
 
 Some adapters check the installed agent’s help output to detect supported options. That check has its own timeout and falls back to defaults if the help command does not finish.
 
-`agent(prompt, options)` runs a coding agent installed on the machine, without asking it questions, in the run's target directory:
+`agent(prompt, options)` runs a coding agent installed on the machine, without asking it questions, in the run's target directory. The run asks before the agent starts, showing the agent and the prompt: with `autonomy: "full"` the agent runs whatever commands the prompt leads it to. With nobody to ask (`--no-interactive`, CI), the step fails unless the run was started with `--approve`; see [Approvals](#approvals).
 
 ```ts
 const review = await step(
@@ -649,7 +655,7 @@ Without `agent`, the step uses:
 1. the run's agent: `codemod workflow run --agent codex`, or the `LLM_AGENT` environment variable;
 2. the coding agent the workflow itself runs inside, for example when Claude Code runs `codemod run`. The prompt goes back to it in the step's output, and the step succeeds with `handedOff: true`;
 3. an agent you pick from the installed ones, when the run is interactive;
-4. the built-in agent, when `LLM_API_KEY` is set (with `LLM_PROVIDER`, `LLM_MODEL` and `LLM_BASE_URL`).
+4. the built-in agent, when `LLM_API_KEY` is set (with `LLM_PROVIDER`, `LLM_MODEL` and `LLM_BASE_URL`). `LLM_API_KEY` is only sent where the run's environment says: a step that sets `endpoint` or `llmProtocol` must give its own `apiKey`.
 
 Otherwise the prompt is printed as instructions and nothing runs.
 
@@ -838,6 +844,8 @@ export default async function main({ params }: { params: { team?: string } }) {
 - With `--no-interactive`, the run stops at the approval, waiting, and exits with code 3 (see [exit codes](/community/cli#exit-codes)), so a CI job does not pass with the run half done. Continue it with `codemod workflow resume --id <run-id> --approve <question-id>` to give that approval only (the run stops at the next one), or `--approve` alone to give it and every later one. Pass `--approve` to `workflow run` to approve everything up front.
 - A dry run is not saved, so it cannot wait: one that reaches an approval stops, exits with code 1 and says to pass `--approve`.
 - With [`--control stdio`](/community/workflows/control), the run asks the program driving it and waits for the answer, dry runs included.
+
+**Steps that run or send something ask too.** A `shell(...)` step asks before its command, an `agent(...)` step before the agent starts, an `http(...)` step before its request, and a `pullRequest(...)` step before it pushes: a workflow, also one from the registry, decides what they run and where they send it. Answering no fails the step. With nobody to ask (`--no-interactive`, CI) the step fails without running, and says to pass `--approve`, which gives these along with `approval(...)` steps. Their question ids are `shell:<step>`, `agent-run:<step>`, `http:<step>` and `pull-request:<step>`.
 
 Each approval has a **question id** that stays the same across resumes: `approval:<step>`, where `<step>` is the step's key (`approval:3`, or `approval:2/0` inside a codemod that step 2 runs). The run's last lines, `workflow status` and `run_finished` name the one it waits for.
 

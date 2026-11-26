@@ -6,7 +6,7 @@ description: "Run codemod workflows with no person at the terminal: no prompts, 
 
 The CLI has two ways to run:
 
-- **For people**, in a terminal: it prints progress lines and asks before it does something you should approve (an `approval(...)` step, a shell command, writing to a repository with uncommitted changes).
+- **For people**, in a terminal: it prints progress lines and asks before it does something you should approve (an `approval(...)` step, a shell command, a coding agent, an HTTP request, writing to a repository with uncommitted changes).
 - **For programs**, in CI, scripts and coding agents: it never asks. It prints plain text or JSON lines, and its exit code says how the run ended.
 
 This page is about the second. Pass `--no-interactive`, or run where there is no terminal: the CLI also turns prompts off when `CI` is set, when input or output is piped, and with `--format jsonl`.
@@ -26,7 +26,7 @@ npx codemod@alpha @org/my-package --target . --no-interactive
 What changes without a person:
 
 - **Approvals don't block.** A run that reaches an `approval(...)` step stops there, saves itself and exits. The exit code is `3`. Pass `--approve` to give every approval up front.
-- **Shell commands run without asking.**
+- **Nothing a workflow runs or sends is approved for you.** `shell(...)`, `agent(...)`, `http(...)` and `pullRequest(...)` steps ask a person first. With nobody to ask, the step fails and says so. Read what the workflow runs (`codemod workflow inspect`, or its source), then pass `--approve`: its commands run with the job's permissions and environment, secrets included.
 - **A target with uncommitted changes fails the run at its first write**, before anything is written. Commit first, or pass `--allow-dirty`. A run that only reads isn't stopped.
 - **Capabilities are not granted.** A step that needs one the run wasn't given fails. Grant them with `--allow-fs` or `--allow-child-process`, or in the package's `codemod.yaml`.
 

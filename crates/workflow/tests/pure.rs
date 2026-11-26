@@ -127,6 +127,69 @@ export default async function main() {{
     }
 }
 
+/// Callbacks get none of the machine's environment: what a callback reads it
+/// can write into the files it changes, and return to the body.
+#[test]
+fn a_callback_has_no_ambient_environment_or_process() {
+    std::env::set_var("CODEMOD_TEST_CALLBACK_SECRET", "s3cret");
+    let h = Harness::new();
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+export default async function main() {
+  return step("Keys", async () => {
+    let imported;
+    try { await import("process"); imported = true; } catch { imported = false; }
+    return {
+      keys: Object.keys(process.env).length,
+      secret: process.env.CODEMOD_TEST_CALLBACK_SECRET ?? null,
+      exit: typeof process.exit,
+      imported,
+    };
+  });
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "keys": 0, "secret": null, "exit": "undefined", "imported": false })
+    );
+}
+
+/// Imports load code from anywhere, but data (a YAML file loads as its
+/// content) only from the workflow's package.
+#[test]
+fn a_yaml_file_outside_the_package_cannot_be_imported() {
+    let outside = tempfile::tempdir().unwrap();
+    let secret = outside.path().join("hosts.yml");
+    std::fs::write(&secret, "token: s3cret\n").unwrap();
+    let h = Harness::new();
+    h.bundle_file("rules.yaml", "id: mine\n");
+    let report = h.start(
+        &format!(
+            r#"
+import {{ step }} from "codemod/workflow";
+import rules from "./rules.yaml";
+export default async function main() {{
+  let body;
+  try {{ body = (await import("{path}")).default; }} catch {{ body = "refused"; }}
+  const callback = await step("Read", async () => {{
+    try {{ return (await import("{path}")).default; }} catch {{ return "refused"; }}
+  }});
+  return {{ own: rules.id, body, callback }};
+}}
+"#,
+            path = secret.display()
+        ),
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "own": "mine", "body": "refused", "callback": "refused" })
+    );
+}
+
 /// The same in a `forEachFile` callback: the file fails, with the hint.
 #[test]
 fn a_for_each_file_callback_that_fetches_fails_its_file_with_the_hint() {
@@ -275,7 +338,7 @@ export default async function main() {
 #[test]
 fn an_http_step_sends_the_request_and_returns_the_response() {
     let server = server(200);
-    let h = Harness::new();
+    let h = Harness::approving();
     std::env::set_var("CODEMOD_TEST_HTTP_TOKEN", "s3cret");
     let report = h.start(
         &format!(
@@ -323,7 +386,7 @@ export default async function main() {{
 #[test]
 fn a_resumed_run_does_not_send_an_http_request_again() {
     let server = server(200);
-    let h = Harness::new();
+    let h = Harness::approving();
     let source = |fixed: bool| {
         format!(
             r#"
@@ -355,7 +418,7 @@ export default async function main() {{
 #[test]
 fn an_error_status_fails_the_step_unless_it_is_allowed() {
     let server = server(500);
-    let h = Harness::new();
+    let h = Harness::approving();
     let error = output(&h.start(
         &format!(
             r#"
@@ -395,7 +458,7 @@ export default async function main() {{
 #[test]
 fn a_dry_run_skips_http_steps_unless_they_ask_to_perform() {
     let server = server(200);
-    let h = Harness::new();
+    let h = Harness::approving();
     let report = h.dry_run(&format!(
         r#"
 import {{ step, http }} from "codemod/workflow";
@@ -420,7 +483,7 @@ export default async function main() {{
 
 #[test]
 fn http_options_are_checked_when_the_step_is_described() {
-    let h = Harness::new();
+    let h = Harness::approving();
     for (call, message) in [
         (
             "http(\"ftp://x\")",
@@ -449,4 +512,69 @@ fn http_options_are_checked_when_the_step_is_described() {
         .unwrap_err();
         assert!(error.contains(message), "{call}: {error}");
     }
+}
+
+/// The workflow chooses the URL and which environment variables go with it:
+/// nothing is sent, and no variable read, before someone approves. An
+/// unattended run without `--approve` refuses, also in a dry run that asks
+/// to perform the request.
+#[test]
+fn an_http_step_is_not_sent_unattended_without_approval() {
+    let server = server(200);
+    std::env::set_var("CODEMOD_TEST_HTTP_UNAPPROVED", "s3cret");
+    let source = format!(
+        r#"
+import {{ step, http }} from "codemod/workflow";
+export default async function main() {{
+  return step("Send", http("{url}/x", {{
+    headers: {{ "x-token": {{ env: "CODEMOD_TEST_HTTP_UNAPPROVED" }} }},
+    dryRun: "perform",
+  }}));
+}}
+"#,
+        url = server.url
+    );
+    let h = Harness::unattended();
+    for report in [h.start(&source, Value::Null), h.dry_run(&source)] {
+        let error = output(&report).unwrap_err();
+        assert!(error.contains("was not approved"), "{error}");
+        assert!(error.contains("--approve"), "{error}");
+    }
+    assert_eq!(server.hits.load(Ordering::SeqCst), 0, "nothing was sent");
+
+    // The question names the method, the URL and the variable.
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    struct Ask(Arc<Mutex<Vec<String>>>);
+    impl codemod_workflow::interaction::Interaction for Ask {
+        fn is_interactive(&self) -> bool {
+            true
+        }
+        fn approve(
+            &self,
+            approval: &codemod_workflow::interaction::Approval,
+        ) -> codemod_workflow::interaction::Decision {
+            self.0.lock().unwrap().push(approval.prompt());
+            codemod_workflow::interaction::Decision::Denied
+        }
+    }
+    let h = Harness::with(
+        Arc::new(codemod_workflow::MemoryStore::default()),
+        Arc::new(Ask(Arc::clone(&asked))),
+    );
+    let error = output(&h.start(&source, Value::Null)).unwrap_err();
+    assert!(error.contains("was not approved"), "{error}");
+    assert!(!error.contains("--approve"), "a person said no: {error}");
+    assert_eq!(server.hits.load(Ordering::SeqCst), 0, "nothing was sent");
+    assert_eq!(
+        *asked.lock().unwrap(),
+        [format!(
+            "Send GET {}/x, with the environment variable CODEMOD_TEST_HTTP_UNAPPROVED in its headers?",
+            server.url
+        )]
+    );
+
+    // With the approval, it is sent.
+    let report = Harness::approving().start(&source, Value::Null);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(server.hits.load(Ordering::SeqCst), 1);
 }

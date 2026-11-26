@@ -603,6 +603,8 @@ fn approval_modal(frame: &mut Frame, approval: &Approval) {
             " Open a pull request? ",
             format!("Push '{branch}' and open \"{title}\"."),
         ),
+        Approval::Agent { .. } => (" Run a coding agent? ", approval.prompt()),
+        Approval::HttpRequest { .. } => (" Send an HTTP request? ", approval.prompt()),
         Approval::UncommittedChanges {
             path,
             not_a_repository,

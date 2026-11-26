@@ -1399,7 +1399,8 @@ export default async function main({ params }: { params: { url: string } }) {
         report.events.filter((e) => e.event === "run_log").map((e) => JSON.parse(e.line));
       const started = Date.now();
 
-      const first = await runOnHost(path, { ...options, approve: false });
+      // Not approved as a whole, so the run stops at "Go"; its request is.
+      const first = await runOnHost(path, { ...options, approve: false, approved: ["http:0"] });
       assert.equal(first.status, "awaiting-approval", first.error ?? undefined);
       assert.equal(server.hits, 1);
       const fetched = first.steps.find((s) => s.label === "Fetch");

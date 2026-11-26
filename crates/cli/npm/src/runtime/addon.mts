@@ -28,6 +28,7 @@ export interface OpenOptions {
   /** Results for steps that should not run, by label (a test run). */
   given?: Record<string, Json>;
   approve?: boolean;
+  approved?: string[];
   capabilities?: string[];
   store?: string;
   resume?: string;

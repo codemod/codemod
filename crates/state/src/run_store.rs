@@ -712,8 +712,25 @@ impl LocalStore {
         &self.root
     }
 
-    fn run_dir(&self, run_id: &str) -> PathBuf {
-        self.root.join(run_id)
+    fn run_dir(&self, run_id: &str) -> StoreResult<PathBuf> {
+        Self::validate_component(run_id)?;
+        let path = self.root.join(run_id);
+        if path.is_symlink() {
+            return Err(StoreError::NotFound(run_id.into()));
+        }
+        Ok(path)
+    }
+
+    fn validate_component(value: &str) -> StoreResult<()> {
+        if value.is_empty()
+            || value.starts_with('.')
+            || value.ends_with('.')
+            || value.contains(['/', '\\', ':'])
+            || value.chars().any(char::is_control)
+        {
+            return Err(StoreError::NotFound(value.into()));
+        }
+        Ok(())
     }
 
     fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> StoreResult<Option<T>> {
@@ -739,22 +756,28 @@ impl LocalStore {
             source,
         };
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(io)?;
+            let mut dirs = fs::DirBuilder::new();
+            dirs.recursive(true);
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
+            dirs.create(parent).map_err(io)?;
         }
         let text = serde_json::to_string_pretty(value).map_err(|source| StoreError::Json {
             path: path.to_path_buf(),
             source,
         })?;
-        // Named after the process: `workflow cancel` may write the record of a
-        // run another process has just picked up.
-        let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
-        fs::write(&temporary, text).map_err(io)?;
-        fs::rename(&temporary, path).map_err(io)
+        use std::io::Write;
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(path.parent().expect("record has a directory"))
+                .map_err(io)?;
+        temporary.write_all(text.as_bytes()).map_err(io)?;
+        temporary.persist(path).map_err(|err| io(err.error))?;
+        Ok(())
     }
 
     /// The run's lock file, opened; `None` when the run does not exist.
     fn lock_file(&self, run_id: &str) -> StoreResult<Option<(PathBuf, fs::File)>> {
-        let dir = self.run_dir(run_id);
+        let dir = self.run_dir(run_id)?;
         if !dir.join("run.json").exists() {
             return Ok(None);
         }
@@ -842,11 +865,11 @@ impl LocalStore {
 impl RunStore for LocalStore {
     fn put_run(&self, run: &RunRecord) -> StoreResult<()> {
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
-        Self::write_json(&self.run_dir(&run.id).join("run.json"), run)
+        Self::write_json(&self.run_dir(&run.id)?.join("run.json"), run)
     }
 
     fn get_run(&self, run_id: &str) -> StoreResult<Option<RunRecord>> {
-        Self::read_json(&self.run_dir(run_id).join("run.json"))
+        Self::read_json(&self.run_dir(run_id)?.join("run.json"))
     }
 
     fn list_runs(&self, limit: usize) -> StoreResult<Vec<RunRecord>> {
@@ -915,14 +938,14 @@ impl RunStore for LocalStore {
 
     fn put_step(&self, run_id: &str, step: &StepRecord) -> StoreResult<()> {
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let path = self.run_dir(run_id).join("steps.json");
+        let path = self.run_dir(run_id)?.join("steps.json");
         let mut steps: Vec<StepRecord> = Self::read_json(&path)?.unwrap_or_default();
         upsert(&mut steps, step);
         Self::write_json(&path, &steps)
     }
 
     fn load_steps(&self, run_id: &str) -> StoreResult<Vec<StepRecord>> {
-        Ok(Self::read_json(&self.run_dir(run_id).join("steps.json"))?.unwrap_or_default())
+        Ok(Self::read_json(&self.run_dir(run_id)?.join("steps.json"))?.unwrap_or_default())
     }
 
     fn acquire(&self, run_id: &str) -> StoreResult<Option<Box<dyn RunLease>>> {
@@ -1001,7 +1024,7 @@ impl RunStore for LocalStore {
     }
 
     fn request_cancel(&self, run_id: &str) -> StoreResult<()> {
-        let dir = self.run_dir(run_id);
+        let dir = self.run_dir(run_id)?;
         if !dir.join("run.json").exists() {
             return Err(StoreError::NotFound(run_id.to_string()));
         }
@@ -1010,11 +1033,11 @@ impl RunStore for LocalStore {
     }
 
     fn cancel_requested(&self, run_id: &str) -> StoreResult<bool> {
-        Ok(self.run_dir(run_id).join("cancel").exists())
+        Ok(self.run_dir(run_id)?.join("cancel").exists())
     }
 
     fn clear_cancel(&self, run_id: &str) -> StoreResult<()> {
-        let path = self.run_dir(run_id).join("cancel");
+        let path = self.run_dir(run_id)?.join("cancel");
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1023,7 +1046,7 @@ impl RunStore for LocalStore {
     }
 
     fn send_event(&self, run_id: &str, name: &str, data: &Value) -> StoreResult<()> {
-        let dir = self.run_dir(run_id);
+        let dir = self.run_dir(run_id)?;
         if !dir.join("run.json").exists() {
             return Err(StoreError::NotFound(run_id.to_string()));
         }
@@ -1032,13 +1055,16 @@ impl RunStore for LocalStore {
         static SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let sent = Utc::now().timestamp_nanos_opt().unwrap_or_default();
         let count = SENT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if !valid_event_name(name) {
+            return Err(StoreError::NotFound(name.into()));
+        }
         let file = format!("{name}@{sent:020}-{}-{count:06}.json", std::process::id());
         Self::write_json(&dir.join("events").join(file), data)
     }
 
     fn append_journal(&self, run_id: &str, line: &str) -> StoreResult<()> {
         use std::io::Write as _;
-        let dir = self.run_dir(run_id);
+        let dir = self.run_dir(run_id)?;
         if !dir.join("run.json").exists() {
             return Err(StoreError::NotFound(run_id.to_string()));
         }
@@ -1059,7 +1085,7 @@ impl RunStore for LocalStore {
 
     fn read_journal(&self, run_id: &str, cursor: u64) -> StoreResult<(Vec<String>, u64)> {
         use std::io::{Read as _, Seek as _};
-        let path = self.run_dir(run_id).join("journal.jsonl");
+        let path = self.run_dir(run_id)?.join("journal.jsonl");
         let io = |source| StoreError::Io {
             path: path.clone(),
             source,
@@ -1088,7 +1114,7 @@ impl RunStore for LocalStore {
     }
 
     fn take_event(&self, run_id: &str, name: &str) -> StoreResult<Option<Value>> {
-        let dir = self.run_dir(run_id).join("events");
+        let dir = self.run_dir(run_id)?.join("events");
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),

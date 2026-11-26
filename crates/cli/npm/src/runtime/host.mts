@@ -112,6 +112,13 @@ export interface HostRunOptions {
   /** Give every approval the workflow asks for. Default `true`. */
   approve?: boolean;
   /**
+   * With `approve: false`: the questions to approve all the same, by id
+   * (`"http:0"`, `"shell:2"`: the kind and the step's key), as
+   * `codemod workflow resume --approve <id>` does. Steps that run or send
+   * something (`shell`, `agent`, `http`, `pullRequest`) fail unapproved.
+   */
+  approved?: string[];
+  /**
    * @deprecated Capabilities for host tasks' transforms, on top of those
    * codemod.yaml declares. Workflow callbacks get none of them: they are
    * pure, whatever this says.
@@ -232,6 +239,7 @@ export async function runWorkflow(
     until: options.until,
     given: options.given,
     approve: options.approve ?? true,
+    approved: options.approved,
     capabilities: options.capabilities ?? [],
     store: options.store,
     resume: options.resume,

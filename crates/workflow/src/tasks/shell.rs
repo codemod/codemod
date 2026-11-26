@@ -12,7 +12,7 @@ use butterflow_runners::Runner;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{block_on, child_env, TaskContext, TaskError, TaskOutcome, TaskResult};
+use super::{block_on, child_env, not_approved, TaskContext, TaskError, TaskOutcome, TaskResult};
 use crate::interaction::{Approval, Decision};
 
 #[derive(Deserialize)]
@@ -38,11 +38,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         command: request.command.clone(),
     }) {
         Decision::Approved => {}
-        Decision::Denied => {
-            return Err(TaskError::Failed(
-                "the shell command was not approved".into(),
-            ))
-        }
+        Decision::Denied => return Err(TaskError::Failed(not_approved(task, "the shell command"))),
         Decision::Deferred => {
             return Err(TaskError::AwaitingApproval(format!(
                 "approve running: {}",

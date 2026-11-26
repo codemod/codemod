@@ -28,6 +28,9 @@ pub struct OpenOptions {
     pub given: Option<Map<String, Value>>,
     /// Give every approval the workflow asks for.
     pub approve: Option<bool>,
+    /// Give these questions only, by id (`http:0`, `shell:2`), as
+    /// `codemod workflow resume --approve <id>` does.
+    pub approved: Option<Vec<String>>,
     /// Capabilities for host tasks' transforms, on top of codemod.yaml's.
     pub capabilities: Option<Vec<String>>,
     /// `"memory"` (the default for tests and dry runs) or `"local"`.
@@ -115,8 +118,11 @@ impl Run {
         let engine = Engine::new(
             store,
             events.clone(),
-            Arc::new(NonInteractive {
-                approve_all: options.approve.unwrap_or(true),
+            Arc::new(Approvals {
+                all: NonInteractive {
+                    approve_all: options.approve.unwrap_or(true),
+                },
+                ids: options.approved.unwrap_or_default(),
             }),
             Services {
                 capabilities,
@@ -315,6 +321,36 @@ impl Run {
             "filesWithErrors": count(&stats.files_with_errors),
         });
         Ok(report)
+    }
+}
+
+/// `approve` for every question, or `approved` for some, by id.
+struct Approvals {
+    all: NonInteractive,
+    ids: Vec<String>,
+}
+
+impl codemod_workflow::interaction::Interaction for Approvals {
+    fn is_interactive(&self) -> bool {
+        false
+    }
+
+    fn approve(
+        &self,
+        approval: &codemod_workflow::interaction::Approval,
+    ) -> codemod_workflow::interaction::Decision {
+        self.all.approve(approval)
+    }
+
+    fn ask(
+        &self,
+        ask: &codemod_workflow::interaction::Ask,
+        approval: &codemod_workflow::interaction::Approval,
+    ) -> codemod_workflow::interaction::Decision {
+        if approval.given_by_approve_all() && self.ids.contains(&ask.id) {
+            return codemod_workflow::interaction::Decision::Approved;
+        }
+        self.all.approve(approval)
     }
 }
 

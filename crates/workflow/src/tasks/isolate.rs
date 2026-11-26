@@ -67,6 +67,7 @@ pub(crate) struct StepIsolates {
 impl StepIsolates {
     pub fn new(task: &TaskContext<'_>) -> Result<Self, String> {
         let resolver = OxcResolver::new(task.run.bundle_dir.clone(), None)
+            .and_then(|resolver| resolver.data_within(&task.run.package_dir))
             .map_err(|e| format!("cannot resolve imports from the workflow directory: {e}"))?;
         Ok(Self {
             resolver: Arc::new(resolver),

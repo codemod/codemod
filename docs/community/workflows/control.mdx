@@ -49,6 +49,8 @@ A question looks like this:
 | --- | --- |
 | `approval:<step>` | an `approval(...)` step runs |
 | `shell:<step>` | a `shell` step is about to run a command |
+| `agent-run:<step>` | an `agent` step is about to run a coding agent; `approval` has the agent, the prompt and its autonomy |
+| `http:<step>` | an `http` step is about to send a request; `approval` has the method, the URL and the environment variables its headers read |
 | `pull-request:<step>` | a `pullRequest` step is about to push and open a pull request |
 | `capabilities:<step>` | a step's code asks for capabilities the run was not given |
 | `uncommitted-changes` | the run is about to change a target with uncommitted changes (unless `--allow-dirty`) |

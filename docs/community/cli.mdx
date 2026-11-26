@@ -394,7 +394,7 @@ Package runs use the 2.0 engine by default. `codemod run --v1 <package>` (or `CO
 </ResponseField>
 
 <ResponseField name="--approve" type="boolean">
-  Give every approval the workflow asks for (`approval(...)` steps, manual nodes in `workflow.yaml`, pull requests). Without it, a run nobody can answer for pauses at the first approval and can be continued with `workflow resume --approve`.
+  Give every approval the workflow asks for: `approval(...)` steps and manual nodes in `workflow.yaml`, and the steps that run or send something (shell commands, coding agents, HTTP requests, pull requests). Without it, a run nobody can answer for pauses at the first `approval(...)` and can be continued with `workflow resume --approve`, and its shell, agent, HTTP and pull request steps fail without running. Read what a workflow runs before you pass it: its commands get the job's permissions and environment.
 
   ```bash
   npx codemod workflow run -w ./my-codemod --approve --no-interactive

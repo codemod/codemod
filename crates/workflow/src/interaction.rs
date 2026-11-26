@@ -15,6 +15,28 @@ pub enum Approval {
     Capabilities { modules: Vec<String> },
     /// A pull request is about to be opened.
     PullRequest { title: String, branch: String },
+    /// An `agent(...)` step is about to hand its prompt to a coding agent
+    /// (or to the built-in one, at `endpoint`): with full autonomy the agent
+    /// edits files and runs commands without asking.
+    #[serde(rename_all = "camelCase")]
+    Agent {
+        /// The agent's label ("Claude Code", "the built-in agent").
+        agent: String,
+        prompt: String,
+        /// `"full"` or `"read-only"`.
+        autonomy: String,
+        /// Where the built-in agent sends the prompt and its API key.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+    },
+    /// An `http(...)` step is about to send a request. `env` names the
+    /// environment variables its headers read.
+    HttpRequest {
+        method: String,
+        url: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        env: Vec<String>,
+    },
     /// The run is about to change the target for the first time, and the
     /// target has uncommitted changes (or is not in a git repository).
     #[serde(rename_all = "camelCase")]
@@ -35,6 +57,9 @@ impl Approval {
             Approval::ShellCommand { .. } => format!("shell:{step}"),
             Approval::Capabilities { .. } => format!("capabilities:{step}"),
             Approval::PullRequest { .. } => format!("pull-request:{step}"),
+            // `agent:<step>` is the question that picks the agent.
+            Approval::Agent { .. } => format!("agent-run:{step}"),
+            Approval::HttpRequest { .. } => format!("http:{step}"),
             Approval::UncommittedChanges { .. } => "uncommitted-changes".to_string(),
         }
     }
@@ -49,6 +74,37 @@ impl Approval {
             }
             Approval::PullRequest { title, branch } => {
                 format!("Push '{branch}' and open pull request '{title}'?")
+            }
+            Approval::Agent {
+                agent,
+                prompt,
+                autonomy,
+                endpoint,
+            } => {
+                let access = if autonomy == "read-only" {
+                    "read-only"
+                } else {
+                    "it edits files and runs commands without asking"
+                };
+                let at = endpoint
+                    .as_ref()
+                    .map(|endpoint| format!(" at {endpoint}"))
+                    .unwrap_or_default();
+                format!(
+                    "Run {agent}{at} ({access}) with this prompt: {}?",
+                    excerpt(prompt, PROMPT_EXCERPT)
+                )
+            }
+            Approval::HttpRequest { method, url, env } => {
+                if env.is_empty() {
+                    format!("Send {method} {url}?")
+                } else {
+                    format!(
+                        "Send {method} {url}, with the environment variable{} {} in its headers?",
+                        if env.len() == 1 { "" } else { "s" },
+                        env.join(", ")
+                    )
+                }
             }
             Approval::UncommittedChanges {
                 path,
@@ -80,6 +136,20 @@ impl Approval {
             Approval::Capabilities { .. } | Approval::UncommittedChanges { .. }
         )
     }
+}
+
+/// How much of an agent's prompt a question shows.
+const PROMPT_EXCERPT: usize = 300;
+
+/// The first `limit` characters of `text` on one line, with `…` when cut.
+pub fn excerpt(text: &str, limit: usize) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= limit {
+        return line;
+    }
+    let mut cut: String = line.chars().take(limit).collect();
+    cut.push('…');
+    cut
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,8 +212,10 @@ pub trait Interaction: Send + Sync {
     }
 }
 
-/// Answers without asking: manual approvals are deferred, capability
-/// requests denied, and shell commands and pull requests allowed.
+/// Answers without asking: manual approvals are deferred, and everything
+/// else is refused: capability requests, and what a workflow would do to the
+/// machine or send from it (shell commands, coding agents, HTTP requests,
+/// pull requests). `approve_all` gives the latter and manual approvals.
 pub struct NonInteractive {
     /// Treat approvals as given (`--approve`, or pro dry runs). Capabilities
     /// are the exception: they are granted up front, never by a blanket yes.
@@ -156,12 +228,13 @@ impl Interaction for NonInteractive {
     }
 
     fn approve(&self, approval: &Approval) -> Decision {
-        match approval {
-            Approval::Capabilities { .. } | Approval::UncommittedChanges { .. } => Decision::Denied,
-            Approval::Manual { .. } if !self.approve_all => Decision::Deferred,
-            Approval::Manual { .. }
-            | Approval::ShellCommand { .. }
-            | Approval::PullRequest { .. } => Decision::Approved,
+        // Nobody is here to see what a package's workflow is about to run:
+        // without `--approve`, a registry package must not get to run
+        // commands or send requests on a CI machine.
+        if self.approve_all && approval.given_by_approve_all() {
+            Decision::Approved
+        } else {
+            approval.unanswered()
         }
     }
 }
@@ -217,11 +290,75 @@ mod tests {
             Decision::Deferred
         );
         assert_eq!(none.approve(&capabilities()), Decision::Denied);
+        for approval in [
+            Approval::ShellCommand {
+                command: "ls".into(),
+            },
+            Approval::PullRequest {
+                title: "Update".into(),
+                branch: "update".into(),
+            },
+            Approval::Agent {
+                agent: "Claude Code".into(),
+                prompt: "Migrate".into(),
+                autonomy: "full".into(),
+                endpoint: None,
+            },
+            Approval::HttpRequest {
+                method: "POST".into(),
+                url: "https://example.com/".into(),
+                env: vec!["TOKEN".into()],
+            },
+        ] {
+            // What a package would run or send is never done unattended
+            // without `--approve`.
+            assert_eq!(none.approve(&approval), Decision::Denied, "{approval:?}");
+            assert_eq!(
+                NonInteractive { approve_all: true }.approve(&approval),
+                Decision::Approved,
+                "{approval:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_and_http_questions_say_what_would_run() {
+        let agent = Approval::Agent {
+            agent: "the built-in agent".into(),
+            prompt: format!("Do\n  this {}", "x".repeat(400)),
+            autonomy: "full".into(),
+            endpoint: Some("https://llm.example".into()),
+        };
+        assert_eq!(agent.question_id(Some("2")), "agent-run:2");
+        let prompt = agent.prompt();
+        assert!(
+            prompt.starts_with("Run the built-in agent at https://llm.example (it edits files and runs commands without asking) with this prompt: Do this xxx"),
+            "{prompt}"
+        );
+        assert!(prompt.ends_with("…?"), "{prompt}");
         assert_eq!(
-            none.approve(&Approval::ShellCommand {
-                command: "ls".into()
-            }),
-            Decision::Approved
+            serde_json::to_value(&agent).unwrap()["kind"],
+            serde_json::json!("agent")
+        );
+
+        let http = Approval::HttpRequest {
+            method: "POST".into(),
+            url: "https://example.com/hook".into(),
+            env: vec!["GITHUB_TOKEN".into()],
+        };
+        assert_eq!(http.question_id(Some("0")), "http:0");
+        assert_eq!(
+            http.prompt(),
+            "Send POST https://example.com/hook, with the environment variable GITHUB_TOKEN in its headers?"
+        );
+        assert_eq!(
+            serde_json::to_value(&http).unwrap(),
+            serde_json::json!({
+                "kind": "http-request",
+                "method": "POST",
+                "url": "https://example.com/hook",
+                "env": ["GITHUB_TOKEN"],
+            })
         );
     }
 }

@@ -169,6 +169,10 @@ async fn clear_cache(package: Option<&str>, all: bool) -> Result<()> {
         let package_spec = parse_package_name(package_name)?;
         let package_dir = get_package_dir(&cache_dir, &package_spec);
 
+        if package_dir.parent().is_some_and(Path::is_symlink) {
+            return Err(anyhow!("Refusing to clear a linked cache scope"));
+        }
+
         if package_dir.exists() {
             info!("Clearing cache for package: {package_name}");
             fs::remove_dir_all(&package_dir)?;
@@ -384,22 +388,14 @@ fn calculate_dir_size(dir: &Path) -> Result<u64> {
 }
 
 fn parse_package_name(package: &str) -> Result<PackageSpec> {
-    if package.starts_with('@') {
-        let parts: Vec<&str> = package.splitn(2, '/').collect();
-        if parts.len() == 2 {
-            Ok(PackageSpec {
-                scope: Some(parts[0].to_string()),
-                name: parts[1].to_string(),
-            })
-        } else {
-            Err(anyhow!("Invalid scoped package name: {}", package))
-        }
-    } else {
-        Ok(PackageSpec {
-            scope: None,
-            name: package.to_string(),
-        })
+    let spec = butterflow_core::registry::parse_package_spec(package)?;
+    if spec.version.is_some() {
+        return Err(anyhow!("Specify a package name without a version"));
     }
+    Ok(PackageSpec {
+        scope: spec.scope,
+        name: spec.name.replace('/', "%2F"),
+    })
 }
 
 fn get_package_dir(cache_dir: &Path, spec: &PackageSpec) -> PathBuf {

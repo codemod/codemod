@@ -138,6 +138,16 @@ declare module "codemod/protocol" {
     | { kind: "shell-command"; command: string }
     | { kind: "capabilities"; modules: string[] }
     | { kind: "pull-request"; title: string; branch: string }
+    /** An `agent(...)` step is about to run a coding agent; `endpoint` is the built-in agent's. */
+    | {
+        kind: "agent";
+        agent: string;
+        prompt: string;
+        autonomy: "full" | "read-only";
+        endpoint?: string;
+      }
+    /** An `http(...)` step is about to send a request; `env` names the variables its headers read. */
+    | { kind: "http-request"; method: string; url: string; env?: string[] }
     | { kind: "uncommitted-changes"; path: string; notARepository: boolean };
 
   export interface AgentChoice {
@@ -234,8 +244,8 @@ declare module "codemod/protocol" {
         event: "question";
         /**
          * Stable across resumes: `approval:<step>`, `shell:<step>`,
-         * `pull-request:<step>`, `capabilities:<step>`, `agent:<step>`, or
-         * `uncommitted-changes`.
+         * `agent-run:<step>`, `http:<step>`, `pull-request:<step>`,
+         * `capabilities:<step>`, `agent:<step>`, or `uncommitted-changes`.
          */
         id: string;
         kind: "approval" | "agent";

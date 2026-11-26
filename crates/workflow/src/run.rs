@@ -721,6 +721,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             .builder
             .build();
     let packages = OxcResolver::new(run.bundle_dir.clone(), None)
+        .and_then(|resolver| resolver.data_within(&run.package_dir))
         .map_err(|e| RunError::Runtime(format!("cannot resolve imports: {e}")))?;
     runtime.set_loader(
         (

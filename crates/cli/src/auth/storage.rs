@@ -181,7 +181,9 @@ impl TokenStorage {
         let auth: StoredAuth =
             serde_json::from_str(&content).context("Failed to parse auth file")?;
 
-        Ok(Some(auth))
+        // The legacy filename encoding is not injective. Never return another
+        // registry's credentials, even if its file has the same name.
+        Ok((auth.registry == registry).then_some(auth))
     }
 
     pub fn save_auth(&self, auth: &StoredAuth) -> Result<()> {
@@ -609,6 +611,20 @@ mod tests {
             },
             registry: registry.to_string(),
         }
+    }
+
+    #[test]
+    fn load_auth_checks_the_stored_identity_not_only_the_filename() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::with_config_dir(temp.path().to_path_buf()).unwrap();
+        let registry = "https://example.test/a/b";
+        let other = "https://example.test/a_b";
+        assert_eq!(
+            storage.get_auth_path(registry),
+            storage.get_auth_path(other)
+        );
+        storage.save_auth(&stored_auth(registry)).unwrap();
+        assert!(storage.load_auth(other).unwrap().is_none());
     }
 
     #[test]

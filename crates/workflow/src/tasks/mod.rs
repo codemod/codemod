@@ -287,6 +287,18 @@ impl Globs {
     }
 }
 
+/// What a step says when `what` ("the shell command") was not approved. An
+/// unattended run was not asked: it says how to allow it.
+pub(crate) fn not_approved(task: &TaskContext<'_>, what: &str) -> String {
+    if task.run.interaction.is_interactive() {
+        format!("{what} was not approved")
+    } else {
+        format!(
+            "{what} was not approved: nobody can be asked in an unattended run. Read what the workflow runs, then pass --approve to allow it"
+        )
+    }
+}
+
 /// Parent environment plus the variables every child process gets.
 pub(crate) fn child_env(task: &TaskContext<'_>) -> std::collections::HashMap<String, String> {
     let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();

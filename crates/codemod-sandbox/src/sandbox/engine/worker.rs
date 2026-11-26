@@ -143,7 +143,16 @@ impl Worker {
         let read_only_fs = options.read_only_fs.filter(|_| {
             options.dry_run || !options.capabilities.contains(&LlrtSupportedModules::Fs)
         });
-        let mut module_builder = LlrtModuleBuilder::build();
+        // Do not install native process or timer bindings in a workflow callback.
+        // Replacing globals later cannot revoke module exports.
+        let mut module_builder = if read_only_fs.is_some() {
+            LlrtModuleBuilder::build_with_exclusions(&[
+                LlrtSupportedModules::Process,
+                LlrtSupportedModules::Timers,
+            ])
+        } else {
+            LlrtModuleBuilder::build()
+        };
         for capability in &options.capabilities {
             match capability {
                 LlrtSupportedModules::Fetch => {

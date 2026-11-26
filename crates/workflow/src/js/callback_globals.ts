@@ -25,24 +25,12 @@ import { unavailable } from "codemod-internal:orchestrator";
     globals[name] = refuse(name);
   }
 
-  const process = globals.process as { env?: Record<string, string> } | undefined;
-  if (process && typeof process.env === "object" && process.env !== null) {
-    const env = process.env;
-    const readOnly = new Proxy(env, {
-      set() {
-        throw new Error(unavailable("process.env", "callback"));
-      },
-      deleteProperty() {
-        throw new Error(unavailable("process.env", "callback"));
-      },
-      defineProperty() {
-        throw new Error(unavailable("process.env", "callback"));
-      },
-    });
-    try {
-      Object.defineProperty(process, "env", { value: readOnly, writable: false });
-    } catch {
-      // A process object that keeps its env: leave it.
-    }
-  }
+  // No ambient host environment in this isolate. Keep a compatibility object
+  // for reads and give writes the same diagnostic as the other effect guards.
+  const env = new Proxy(Object.freeze(Object.create(null)), {
+    set: refuse("process.env"),
+    deleteProperty: refuse("process.env"),
+    defineProperty: refuse("process.env"),
+  });
+  Object.defineProperty(globals, "process", { value: Object.freeze({ env }) });
 })();
