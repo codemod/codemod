@@ -124,3 +124,30 @@ export default async function main() {
         ])
     );
 }
+
+#[test]
+fn crawling_from_python_entry_points_reaches_what_routes_call_and_not_dead_code() {
+    let h = Harness::new();
+    h.write(
+        "api/main.py",
+        "from fastapi import FastAPI\n\napp = FastAPI()\n\n\n@app.get(\"/orders\")\ndef list_orders():\n    return load_orders()\n\n\ndef load_orders():\n    return []\n\n\ndef unused():\n    return load_orders()\n",
+    );
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { callGraph, crawl, entryPoints } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "api/main.py" }, async () => {
+    const live = await crawl(callGraph("python").callees, entryPoints("python"));
+    return [...live.keys()].map((node) => node.text().match(/def (\w+)/)[1]);
+  }));
+  return found.outputs.flat();
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!(["list_orders", "load_orders"])
+    );
+}
