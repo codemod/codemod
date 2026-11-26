@@ -732,8 +732,8 @@ fn specifier_for_rjs<'js>(
     specifier_from(&ctx, &*provider, &path, &target, options)
 }
 
-/// `types(lang)`: `{ typeOf }`. JavaScript and TypeScript types come from
-/// the TypeScript 7 checker; Python's are its annotations, as written.
+/// `types(lang)`: `{ typeOf }`. A step that imports `types` gets them: the
+/// TypeScript 7 checker for JavaScript and TypeScript, ty for Python.
 pub(crate) fn types_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Object<'js>> {
     let family = family_of(&ctx, "types", &lang)?;
     pair(&ctx, family, &[("typeOf", Builtin::TypeOf)])

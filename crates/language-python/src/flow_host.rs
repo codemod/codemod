@@ -7,13 +7,14 @@
 //! them are unresolved.
 
 use crate::flow::build_file_flow;
+use crate::ty::TySession;
 use language_core::{
-    ByteRange, CallGraphOptions, CallGraphResult, EntryPoint, EntryPointRule, FlowEdgeKind,
-    FlowNodeKind, FlowOptions, FlowResult, FunctionEntry, MutationOptions, MutationsResult,
-    SemanticResult, UnparsedFile,
+    ByteRange, CallGraphOptions, CallGraphResult, EntryPoint, EntryPointRule, FileSnapshot,
+    FlowEdgeKind, FlowNodeKind, FlowOptions, FlowResult, FunctionEntry, FunctionRef,
+    MutationOptions, MutationsResult, SemanticResult, UnparsedFile,
 };
 use language_flow::query::{self, CallerIndexSlot, FlowHost, QueryKind};
-use language_flow::FileFlow;
+use language_flow::{CallFact, CalleeFact, FileFlow};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -57,6 +58,11 @@ pub struct PyFlow {
     callers: CallerIndexSlot,
     /// The selector's `semanticAnalysis.entryPoints`.
     entry_point_rules: RwLock<Vec<EntryPointRule>>,
+    /// File texts as the step started. None: read each file once, as is.
+    snapshot: Option<Arc<FileSnapshot>>,
+    /// ty, for types and member calls the values leave unresolved.
+    /// Workspace scope on a real file system only.
+    ty: Option<TySession>,
 }
 
 impl std::fmt::Debug for PyFlow {
@@ -75,7 +81,31 @@ impl PyFlow {
             files: RwLock::default(),
             callers: CallerIndexSlot::default(),
             entry_point_rules: RwLock::default(),
+            snapshot: None,
+            ty: None,
         }
+    }
+
+    /// A workspace's facts, reading files through `snapshot` (shared with
+    /// the provider, so both see the same texts).
+    pub fn with_snapshot(root: PathBuf, snapshot: Arc<FileSnapshot>) -> Self {
+        PyFlow {
+            snapshot: Some(snapshot),
+            ..PyFlow::new(Some(root))
+        }
+    }
+
+    /// Types from ty: `type_of` infers, and member calls the values leave
+    /// unresolved resolve by the receiver's type. Needs a workspace read
+    /// through a snapshot ([`PyFlow::with_snapshot`]).
+    pub fn with_types(mut self, on: bool) -> Self {
+        self.ty = match (on, &self.root, &self.snapshot) {
+            (true, Some(root), Some(snapshot)) => {
+                Some(TySession::new(root.clone(), Arc::clone(snapshot)))
+            }
+            _ => None,
+        };
+        self
     }
 
     pub fn clear(&self) {
@@ -174,11 +204,14 @@ impl PyFlow {
         Ok(query::mutations(self, path, range, options))
     }
 
-    /// The declared or evident type of the value at `range`, from
-    /// annotations and literals only (there is no type checker behind it).
+    /// The type of the value at `range`: what ty infers, else the declared
+    /// or evident one, from annotations and literals.
     pub fn type_of(&self, path: &Path, content: &str, range: ByteRange) -> Option<String> {
         self.update(path, content);
         let path = self.canonical(path);
+        if let Some(found) = self.ty.as_ref().and_then(|ty| ty.type_at(&path, range)) {
+            return Some(found);
+        }
         let flow = self.flow(&path)?;
         let node = flow.exact(range).or_else(|| flow.locate(range))?;
         self.type_of_node(&path, &flow, node, 0)
@@ -324,10 +357,15 @@ impl PyFlow {
         if self.files.read().contains_key(path) {
             return Some(());
         }
-        let content = std::fs::read_to_string(path).ok()?;
+        let content: Arc<str> = match &self.snapshot {
+            Some(snapshot) => snapshot
+                .get_or_read(path, || std::fs::read_to_string(path))
+                .ok()?,
+            None => std::fs::read_to_string(path).ok()?.into(),
+        };
         let cached = match build_file_flow(&content) {
             Ok(flow) => Cached::Parsed {
-                content: content.into(),
+                content,
                 flow: Arc::new(flow),
             },
             Err(message) => Cached::Failed { message },
@@ -337,6 +375,48 @@ impl PyFlow {
             .entry(path.to_path_buf())
             .or_insert(cached);
         Some(())
+    }
+
+    /// ty's declarations for the member a call names: `call` must be
+    /// `object.property(…)` with a ty session behind this host.
+    fn member_declarations(
+        &self,
+        path: &Path,
+        flow: &FileFlow,
+        call: &CallFact,
+    ) -> Vec<(PathBuf, ByteRange)> {
+        let (Some(ty), CalleeFact::Member { object, property }) = (&self.ty, &call.callee) else {
+            return Vec::new();
+        };
+        let Some(content) = self.content(path) else {
+            return Vec::new();
+        };
+        // The property's name: the first time it is written after the
+        // object (only `.`, spaces and comments come between).
+        let after = flow.nodes[*object as usize].range.end as usize;
+        let end = (call.range.end as usize).min(content.len());
+        let Some(offset) = content
+            .get(after..end)
+            .and_then(|between| between.find(&**property))
+        else {
+            return Vec::new();
+        };
+        ty.member_declarations(path, (after + offset) as u32)
+    }
+
+    /// Whether `path` is the workspace's own code: under the root, outside
+    /// virtual environments and other skipped directories.
+    fn in_workspace(&self, path: &Path) -> bool {
+        let Some(root) = &self.root else {
+            return true;
+        };
+        let Ok(relative) = path.strip_prefix(root) else {
+            return false;
+        };
+        !relative.components().any(|part| {
+            let part = part.as_os_str().to_string_lossy();
+            SKIPPED_DIRS.contains(&part.as_ref()) || part.starts_with('.')
+        })
     }
 
     /// Places an absolute module name is looked up from.
@@ -535,6 +615,56 @@ impl FlowHost for PyFlow {
 
     fn caller_index(&self) -> Option<&CallerIndexSlot> {
         Some(&self.callers)
+    }
+
+    /// `repo.save()` the values left unresolved (`repo` is a parameter, a
+    /// field, a call's result): the workspace methods ty says `save` is.
+    fn typed_method_targets(
+        &self,
+        path: &Path,
+        flow: &FileFlow,
+        call: &CallFact,
+    ) -> Vec<(PathBuf, u32)> {
+        let mut found = Vec::new();
+        for (target, range) in self.member_declarations(path, flow, call) {
+            if !self.in_workspace(&target) {
+                continue;
+            }
+            let target = self.canonical(&target);
+            let Some(target_flow) = self.flow(&target) else {
+                continue;
+            };
+            let function = target_flow
+                .functions
+                .iter()
+                .position(|f| f.name_range == Some(range));
+            if let Some(function) = function {
+                found.push((target, function as u32));
+            }
+        }
+        found
+    }
+
+    /// Where ty says the member a still-unresolved call names is declared,
+    /// in the workspace or a library (`QuerySet.filter` in Django's code).
+    fn typed_declaration(
+        &self,
+        path: &Path,
+        flow: &FileFlow,
+        call: &CallFact,
+    ) -> Option<FunctionRef> {
+        let CalleeFact::Member { property, .. } = &call.callee else {
+            return None;
+        };
+        let (file_path, range) = self
+            .member_declarations(path, flow, call)
+            .into_iter()
+            .next()?;
+        Some(FunctionRef {
+            file_path,
+            range,
+            name: Some(property.to_string()),
+        })
     }
 
     /// Rules only: a top-level function counts as exported under its name.

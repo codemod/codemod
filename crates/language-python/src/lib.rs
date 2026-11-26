@@ -43,6 +43,7 @@ mod error;
 pub mod flow;
 mod flow_host;
 mod provider;
+mod ty;
 
 pub use error::PySemanticError;
 pub use flow_host::PyFlow;

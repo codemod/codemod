@@ -8,6 +8,7 @@ use language_core::{
     ReferencesResult, SemanticProvider, SemanticResult,
 };
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use vfs::VfsPath;
 
 /// Inner analyzer type for the provider.
@@ -41,7 +42,7 @@ pub struct RuffSemanticProvider {
     /// Value flow, mutations, the call graph and annotation types.
     flow: PyFlow,
     /// File texts as they were when the step started.
-    snapshot: FileSnapshot,
+    snapshot: Arc<FileSnapshot>,
 }
 
 impl RuffSemanticProvider {
@@ -60,7 +61,7 @@ impl RuffSemanticProvider {
             analyzer: AnalyzerKind::FileScope(FileScopeAnalyzer::new()),
             fs_root: filesystem::physical_path(&cwd),
             physical_root: Some(cwd),
-            snapshot: FileSnapshot::new(),
+            snapshot: Arc::default(),
             flow: PyFlow::new(None),
         }
     }
@@ -79,7 +80,7 @@ impl RuffSemanticProvider {
             analyzer: AnalyzerKind::FileScope(FileScopeAnalyzer::new()),
             fs_root,
             physical_root: None, // MemoryFS or other VFS - paths are virtual
-            snapshot: FileSnapshot::new(),
+            snapshot: Arc::default(),
             flow: PyFlow::new(None),
         }
     }
@@ -98,14 +99,15 @@ impl RuffSemanticProvider {
             .canonicalize()
             .unwrap_or_else(|_| workspace_root.clone());
         let fs_root = filesystem::physical_path(&canonical_root);
+        let snapshot = Arc::new(FileSnapshot::new());
         Self {
             analyzer: AnalyzerKind::WorkspaceScope(WorkspaceScopeAnalyzer::new(
                 canonical_root.clone(),
             )),
             fs_root,
             physical_root: Some(canonical_root.clone()),
-            snapshot: FileSnapshot::new(),
-            flow: PyFlow::new(Some(canonical_root)),
+            flow: PyFlow::with_snapshot(canonical_root, Arc::clone(&snapshot)),
+            snapshot,
         }
     }
 
@@ -122,9 +124,18 @@ impl RuffSemanticProvider {
             )),
             fs_root,
             physical_root: None, // Custom VFS - paths handled by VFS implementation
-            snapshot: FileSnapshot::new(),
+            snapshot: Arc::default(),
             flow: PyFlow::new(Some(workspace_root)),
         }
+    }
+
+    /// Turn on types from ty, Ruff's type checker (workspace scope on the
+    /// real file system): `get_type` infers, and method calls the values
+    /// leave unresolved resolve by the receiver's type. A step turns them on
+    /// by importing `types("python")`.
+    pub fn with_types(mut self, on: bool) -> Self {
+        self.flow = self.flow.with_types(on);
+        self
     }
 
     /// Clear all cached data.
@@ -260,8 +271,8 @@ impl SemanticProvider for RuffSemanticProvider {
         }
     }
 
-    /// The declared type, from annotations (and literals) only: there is no
-    /// type checker behind it.
+    /// The type ty infers (with types on), else the declared one, from
+    /// annotations and literals.
     fn get_type(&self, file_path: &Path, range: ByteRange) -> SemanticResult<Option<String>> {
         let content = self.read_file(file_path)?;
         Ok(self.flow.type_of(file_path, &content, range))

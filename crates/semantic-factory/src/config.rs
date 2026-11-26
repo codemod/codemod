@@ -55,14 +55,16 @@ pub struct SemanticConfig {
 }
 
 /// Where a provider gets types from (`typeInfo()`, method calls resolved
-/// by the receiver's type). Workspace scope, JavaScript/TypeScript only.
+/// by the receiver's type). Workspace scope only. A step that imports
+/// `types` turns them on for every language it asks about.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SemanticTypes {
     /// No types (the default).
     #[default]
     Off,
-    /// The TypeScript 7 checker: the binary `CODEMOD_TS_API` names, else the
-    /// workspace's own `typescript@7.0` install.
+    /// On: the TypeScript 7 checker for JavaScript and TypeScript (the
+    /// binary `CODEMOD_TS_API` names, else the workspace's own
+    /// `typescript@7.0` install), and ty, Ruff's checker, for Python.
     Ts7,
 }
 

@@ -1059,9 +1059,10 @@ declare module "codemod:ast-grep" {
   export type ModuleFile = string | { readonly path: string } | SgRoot | SgNode;
 
   /**
-   * `types(lang)`: an expression's type, or `undefined`. For JavaScript and
-   * TypeScript, from the TypeScript 7 checker, which importing `types` turns
-   * on for the step; for Python, the annotation as written.
+   * `types(lang)`: an expression's type, or `undefined`: from the
+   * TypeScript 7 checker for JavaScript and TypeScript, from ty (Ruff's
+   * checker) for Python. Importing `types` turns them on for the step, and
+   * `callGraph(lang)` then also resolves method calls by the receiver's type.
    */
   export function types(language: AnalysisLanguage): {
     typeOf: ReadonlyMap<SgNode, string>;
