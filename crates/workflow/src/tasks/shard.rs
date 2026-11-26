@@ -56,6 +56,7 @@ enum Method {
 }
 
 pub(crate) fn run(task: &TaskContext<'_>, content: Value) -> TaskResult {
+    task.run.needs_disk("shard").map_err(TaskError::Failed)?;
     if task.run.services.skip_shard_steps {
         task.log("skipped: shard steps are disabled for this run");
         return Ok(TaskOutcome::new(json!([])));

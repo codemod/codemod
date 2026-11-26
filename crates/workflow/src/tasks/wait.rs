@@ -67,6 +67,15 @@ pub(crate) struct ForEvent {
 
 pub(crate) fn for_event(task: &TaskContext<'_>, request: ForEvent) -> TaskResult {
     let run = task.run;
+    // A run on a snapshot measures what the workflow does to it: nothing
+    // will be sent, and the steps after the wait still count.
+    if run.snapshot().is_some() {
+        task.log(format!(
+            "skipped: a run on a snapshot is not sent the event '{}'",
+            request.name
+        ));
+        return Ok(TaskOutcome::new(serde_json::json!({ "skipped": true })));
+    }
     if run.dry_run {
         return Err(TaskError::Failed(format!(
             "a dry run is not saved, so it cannot be sent the event '{}' it waits for here",

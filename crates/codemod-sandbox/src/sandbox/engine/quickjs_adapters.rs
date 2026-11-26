@@ -171,6 +171,31 @@ impl Loader for QuickJSLoader {
     }
 }
 
+/// [`QuickJSLoader`] for code that may only load files under `root` (a
+/// package): imports that resolve anywhere else, through `..`, an absolute
+/// path or a link, fail to load. Without `root`, any file loads.
+pub struct RootedLoader {
+    pub root: Option<std::path::PathBuf>,
+}
+
+impl Loader for RootedLoader {
+    fn load<'js>(&mut self, ctx: &Ctx<'js>, name: &str) -> Result<Module<'js, module::Declared>> {
+        if let Some(root) = &self.root {
+            let inside = std::fs::canonicalize(name)
+                .ok()
+                .zip(std::fs::canonicalize(root).ok())
+                .is_some_and(|(path, root)| path.starts_with(root));
+            if !inside {
+                return Err(Error::new_loading_message(
+                    name,
+                    "imports must stay inside the package",
+                ));
+            }
+        }
+        QuickJSLoader.load(ctx, name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

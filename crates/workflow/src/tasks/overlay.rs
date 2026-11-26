@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
 use butterflow_core::execution::glob_overrides;
@@ -21,6 +21,7 @@ use codemod_sandbox::sandbox::engine::PendingFiles;
 use ignore::Match;
 
 use super::changes::{under, Change, PlannedChange};
+use crate::target::TargetFiles;
 
 pub(crate) struct Overlay {
     /// The run's target, as the run gives it.
@@ -31,6 +32,8 @@ pub(crate) struct Overlay {
     /// By path relative to the target, with `/`: the file's text now, or
     /// `None` when it is gone (deleted, or renamed away).
     files: Mutex<BTreeMap<String, Option<String>>>,
+    /// The snapshot the run reads instead of the disk, when it has one.
+    snapshot: Option<Arc<dyn TargetFiles>>,
 }
 
 impl Overlay {
@@ -39,7 +42,73 @@ impl Overlay {
             target: target.to_path_buf(),
             root: std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf()),
             files: Mutex::default(),
+            snapshot: None,
         }
+    }
+
+    /// The overlay of a run whose target is `snapshot`: nothing is read from
+    /// disk, and `target` is only the name its paths are kept under.
+    pub fn on_snapshot(target: &Path, snapshot: Arc<dyn TargetFiles>) -> Self {
+        Self {
+            target: target.to_path_buf(),
+            root: target.to_path_buf(),
+            files: Mutex::default(),
+            snapshot: Some(snapshot),
+        }
+    }
+
+    pub fn snapshot(&self) -> Option<&Arc<dyn TargetFiles>> {
+        self.snapshot.as_ref()
+    }
+
+    /// `path` as the run started with it: from the snapshot, else the disk.
+    fn read_base(&self, path: &str, file: &Path) -> io::Result<String> {
+        match &self.snapshot {
+            Some(snapshot) => snapshot
+                .read(&[path])
+                .pop()
+                .flatten()
+                .map(|text| text.to_string())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.to_string())),
+            None => std::fs::read_to_string(file),
+        }
+    }
+
+    fn base_is_file(&self, path: &str) -> bool {
+        match &self.snapshot {
+            Some(snapshot) => snapshot.is_file(path),
+            None => under(&self.target, path).is_file(),
+        }
+    }
+
+    fn base_exists(&self, path: &str) -> bool {
+        match &self.snapshot {
+            Some(snapshot) => snapshot.is_file(path) || snapshot.is_dir(path),
+            None => under(&self.target, path).exists(),
+        }
+    }
+
+    fn base_is_dir(&self, path: &str) -> bool {
+        match &self.snapshot {
+            Some(snapshot) => snapshot.is_dir(path),
+            None => under(&self.target, path).is_dir(),
+        }
+    }
+
+    /// The snapshot's files that `include` and `exclude` select, as the
+    /// walk selects them on disk; `None` for a run on disk.
+    pub fn select_snapshot(
+        &self,
+        include: &[String],
+        exclude: &[String],
+    ) -> Option<Result<Vec<String>, String>> {
+        let snapshot = self.snapshot.as_ref()?;
+        Some(glob_filter(
+            &self.target,
+            snapshot.paths().to_vec(),
+            include,
+            exclude,
+        ))
     }
 
     fn files(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Option<String>>> {
@@ -63,7 +132,7 @@ impl Overlay {
         match self.get(path) {
             Some(Some(text)) => Ok(text),
             Some(None) => Err(gone(path)),
-            None => std::fs::read_to_string(file),
+            None => self.read_base(path, file),
         }
     }
 
@@ -71,6 +140,10 @@ impl Overlay {
     pub fn read_file(&self, file: &Path) -> io::Result<String> {
         match self.relative(file) {
             Some(path) => self.read(&path, file),
+            None if self.snapshot.is_some() => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("'{}' is outside the snapshot", file.display()),
+            )),
             None => std::fs::read_to_string(file),
         }
     }
@@ -79,7 +152,7 @@ impl Overlay {
     pub fn exists(&self, path: &str) -> bool {
         match self.get(path) {
             Some(text) => text.is_some(),
-            None => under(&self.target, path).exists(),
+            None => self.base_exists(path),
         }
     }
 
@@ -90,7 +163,7 @@ impl Overlay {
         let files = self.files();
         let is_file = |path: &str| match files.get(path) {
             Some(text) => text.is_some(),
-            None => under(&self.target, path).is_file(),
+            None => self.base_is_file(path),
         };
         for to in destinations {
             let parts: Vec<&str> = to.split('/').collect();
@@ -107,7 +180,7 @@ impl Overlay {
                 .range(inside.clone()..)
                 .take_while(|(path, _)| path.starts_with(&inside))
                 .any(|(_, text)| text.is_some());
-            if has_files || under(&self.target, to).is_dir() {
+            if has_files || self.base_is_dir(to) {
                 return Err(format!("cannot move a file to '{to}': it is a directory"));
             }
         }
@@ -158,39 +231,16 @@ impl Overlay {
             None => self.target.clone(),
         };
         let prefix = dir.map(|dir| format!("{dir}/"));
-        let overrides = glob_overrides(&root, include, exclude)?;
         let created: Vec<String> = self
             .files()
             .iter()
-            .filter(|(path, text)| text.is_some() && !under(&self.target, path).exists())
+            .filter(|(path, text)| text.is_some() && !self.base_exists(path))
             .filter_map(|(path, _)| match &prefix {
                 Some(prefix) => path.strip_prefix(prefix.as_str()).map(String::from),
                 None => Some(path.clone()),
             })
             .collect();
-        let Some(overrides) = overrides else {
-            return Ok(created);
-        };
-        Ok(created
-            .into_iter()
-            .filter(|path| {
-                let full = under(&root, path);
-                // An excluded directory leaves out what is in it.
-                let excluded_dir = full
-                    .ancestors()
-                    .skip(1)
-                    .take_while(|dir| dir.starts_with(&root) && *dir != root)
-                    .any(|dir| matches!(overrides.matched(dir, true), Match::Ignore(_)));
-                if excluded_dir {
-                    return false;
-                }
-                match overrides.matched(&full, false) {
-                    Match::Whitelist(_) => true,
-                    Match::Ignore(_) => false,
-                    Match::None => include.is_empty(),
-                }
-            })
-            .collect())
+        glob_filter(&root, created, include, exclude)
     }
 
     /// `path` (absolute, as [`PendingFiles`] keeps it) relative to the
@@ -221,9 +271,12 @@ impl Overlay {
         let overlay = std::sync::Arc::clone(self);
         PendingFiles::with_base(move |path| {
             let relative = overlay.relative(path)?;
-            match overlay.get(&relative)? {
-                Some(text) => Some(Ok(text)),
-                None => Some(Err(gone(&relative))),
+            match overlay.get(&relative) {
+                Some(Some(text)) => Some(Ok(text)),
+                Some(None) => Some(Err(gone(&relative))),
+                // A snapshot's files are never on disk.
+                None if overlay.snapshot.is_some() => Some(overlay.read_base(&relative, path)),
+                None => None,
             }
         })
     }
@@ -235,7 +288,7 @@ impl Overlay {
         self.files()
             .iter()
             .filter_map(|(path, after)| {
-                let before = std::fs::read_to_string(under(&self.target, path)).ok();
+                let before = self.read_base(path, &under(&self.target, path)).ok();
                 (before != *after).then(|| (path.clone(), before, after.clone()))
             })
             .collect()
@@ -261,6 +314,39 @@ impl Overlay {
             })
             .collect()
     }
+}
+
+/// The `paths` (relative to `root`, with `/`) that `include` and `exclude`
+/// select, as the walk's overrides would: an excluded directory leaves out
+/// what is in it, and without `include` every path not excluded is kept.
+fn glob_filter(
+    root: &Path,
+    paths: Vec<String>,
+    include: &[String],
+    exclude: &[String],
+) -> Result<Vec<String>, String> {
+    let Some(overrides) = glob_overrides(root, include, exclude)? else {
+        return Ok(paths);
+    };
+    Ok(paths
+        .into_iter()
+        .filter(|path| {
+            let full = under(root, path);
+            let excluded_dir = full
+                .ancestors()
+                .skip(1)
+                .take_while(|dir| dir.starts_with(root) && *dir != root)
+                .any(|dir| matches!(overrides.matched(dir, true), Match::Ignore(_)));
+            if excluded_dir {
+                return false;
+            }
+            match overrides.matched(&full, false) {
+                Match::Whitelist(_) => true,
+                Match::Ignore(_) => false,
+                Match::None => include.is_empty(),
+            }
+        })
+        .collect())
 }
 
 fn gone(path: &str) -> io::Error {

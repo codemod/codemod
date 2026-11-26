@@ -32,6 +32,7 @@ export default async function main() {
 | `src/js/deps.ts`, `src/deps_host.rs`, `src/js/dependencies.ts`, `src/js/semver.ts` | `codemod/deps`: `dependencyGraph`, `registry` and `semver` in the body (`deps.ts`) and in isolates (`dependencies.ts`), batching lookups started together; the host side over `Services::package_registry` |
 | `src/assess/`, `src/js/assess.ts` | `codemod/assess`: typed questions about a file in callbacks and function steps (`questions.rs`), the context assembled from its imports through re-exports and its dependents (`context.rs`), System One and OpenAI Decisions over HTTP with retries (`http.rs`), and which model answers (`config.rs`); the run's model is `Services::decision` |
 | `src/tasks/changes.rs` | One commit path for every task that edits files: conflict checks, dry run, diffs |
+| `src/target.rs`, `src/tasks/overlay.rs` | Runs on a read-only snapshot a host keeps (`Engine::start_on_snapshot`, `TargetFiles`): steps select and read through the dry-run overlay, never the disk; tasks that only read the disk (`dependencyGraph`, `shard`, workspace semantic analysis) refuse; the host's per-file outcome cache (`FileCache`) and output sink (`FileOutputs`) |
 | `src/compat/` | workflow.yaml to TypeScript; `${{ }}` expressions become TypeScript or fall back to `evaluate()`, which uses the YAML engine's evaluator |
 | `src/events.rs`, `src/interaction.rs` | What the engine reports, and the questions it asks; the CLI implements both |
 
@@ -39,6 +40,11 @@ The engine never writes to the terminal: the CLI (`crates/cli/src/workflow_exec.
 renders events and answers prompts.
 
 ## Not done yet
+
+- On a snapshot: `dependencyGraph`, `shard` and workspace semantic analysis,
+  and the dependents `assess()` adds to a file's context.
+- The per-file cache for jssg transforms run through the workflow.yaml
+  translation's adapter (`jssgFile`).
 
 - A TUI on top of step events.
 - Step results captured by reference: captures are copied into each step's
