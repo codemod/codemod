@@ -10,6 +10,7 @@ description = "Factory for creating semantic analysis providers"
 language-core.workspace = true
 language-javascript.workspace = true
 language-python.workspace = true
+language-rust.workspace = true
 thiserror.workspace = true
 log.workspace = true
 vfs.workspace = true

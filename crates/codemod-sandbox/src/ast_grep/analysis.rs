@@ -43,6 +43,7 @@ use crate::sandbox::engine::execution_engine::{JssgFileChanges, TargetDirectory}
 pub(crate) enum Family {
     JavaScript,
     Python,
+    Rust,
 }
 
 impl Family {
@@ -50,6 +51,7 @@ impl Family {
         match lang.to_ascii_lowercase().as_str() {
             "javascript" | "typescript" | "tsx" | "jsx" | "js" | "ts" => Some(Self::JavaScript),
             "python" | "py" => Some(Self::Python),
+            "rust" | "rs" => Some(Self::Rust),
             _ => None,
         }
     }
@@ -58,6 +60,7 @@ impl Family {
         match self {
             Self::JavaScript => "typescript",
             Self::Python => "python",
+            Self::Rust => "rust",
         }
     }
 
@@ -65,6 +68,7 @@ impl Family {
         match self {
             Self::JavaScript => "JavaScript/TypeScript",
             Self::Python => "Python",
+            Self::Rust => "Rust",
         }
     }
 }
@@ -628,7 +632,7 @@ fn family_of(ctx: &Ctx<'_>, method: &str, lang: &str) -> Result<Family> {
             ctx,
             &format!(
                 "{method}(\"{lang}\"): semantic analysis covers \"typescript\", \"tsx\", \
-                 \"javascript\" and \"python\"."
+                 \"javascript\", \"python\" and \"rust\"."
             ),
         )
     })
@@ -733,7 +737,8 @@ fn specifier_for_rjs<'js>(
 }
 
 /// `types(lang)`: `{ typeOf }`. JavaScript and TypeScript types come from
-/// the TypeScript 7 checker; Python's are its annotations, as written.
+/// the TypeScript 7 checker; Python's are its annotations, as written;
+/// Rust's are what rust-analyzer infers.
 pub(crate) fn types_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Object<'js>> {
     let family = family_of(&ctx, "types", &lang)?;
     pair(&ctx, family, &[("typeOf", Builtin::TypeOf)])
@@ -1229,6 +1234,7 @@ fn source_extensions(family: Family) -> &'static [&'static str] {
     match family {
         Family::JavaScript => &["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"],
         Family::Python => &["py"],
+        Family::Rust => &["rs"],
     }
 }
 

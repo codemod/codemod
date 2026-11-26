@@ -2086,11 +2086,12 @@ impl<'js> SgNodeRjs<'js> {
                     | ast_grep_language::SupportLang::TypeScript
                     | ast_grep_language::SupportLang::Tsx
                     | ast_grep_language::SupportLang::Python
+                    | ast_grep_language::SupportLang::Rust
             )
         );
         if !supported {
             return Err(format!(
-                "{method}() supports JavaScript, TypeScript and Python only, and this file is parsed as {lang}."
+                "{method}() supports JavaScript, TypeScript, Python and Rust only, and this file is parsed as {lang}."
             ));
         }
         let Some(filename) = self.root.filename.as_ref() else {
@@ -2637,6 +2638,7 @@ fn detect_language_from_path(path: &std::path::Path) -> String {
         Some("js") | Some("mjs") | Some("cjs") => "javascript".to_string(),
         Some("jsx") => "jsx".to_string(),
         Some("py") | Some("pyi") => "python".to_string(),
+        Some("rs") => "rust".to_string(),
         _ => "typescript".to_string(), // Default to typescript
     }
 }

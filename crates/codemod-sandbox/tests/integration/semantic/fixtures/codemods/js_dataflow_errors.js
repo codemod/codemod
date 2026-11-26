@@ -97,18 +97,18 @@ export default async function transform(root) {
     "resolveModule(file): this root was parsed from a string and has no file",
     "string root, resolveModule",
   );
-  const rust = parse("rust", "fn a() { b(); }")
+  const go = parse("go", "package a\nfunc a() { b() }")
     .root()
     .find({ rule: { kind: "identifier" } });
   expectThrow(
-    () => callers.get(rust),
-    "callers.get(node): this lookup is for JavaScript/TypeScript, and the node is Rust",
-    "rust",
+    () => callers.get(go),
+    "callers.get(node): this lookup is for JavaScript/TypeScript, and the node is Go",
+    "go",
   );
   expectThrow(
-    () => callGraph("rust"),
-    'callGraph("rust"): semantic analysis covers "typescript", "tsx", "javascript" and "python"',
-    "rust lookup",
+    () => callGraph("go"),
+    'callGraph("go"): semantic analysis covers "typescript", "tsx", "javascript", "python" and "rust"',
+    "go lookup",
   );
 
   return null;

@@ -156,6 +156,7 @@ impl LazySemanticProvider {
             Some("jsx") => "jsx",
             Some("tsx") => "tsx",
             Some("py" | "pyi") => "python",
+            Some("rs") => "rust",
             Some("css") => "css",
             Some("html" | "htm") => "html",
             Some("json") => "json",

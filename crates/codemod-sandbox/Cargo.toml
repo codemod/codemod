@@ -52,6 +52,7 @@ codemod-llrt-capabilities = { workspace = true, optional = true, features = ["na
 language-core = { workspace = true, optional = true }
 language-javascript = { workspace = true, optional = true }
 language-python = { workspace = true, optional = true }
+language-rust = { workspace = true, optional = true }
 tree-sitter-loader = { workspace = true, optional = true }
 ast-grep-dynamic = { workspace = true, optional = true }
 
@@ -87,6 +88,7 @@ native = [
   "language-core",
   "language-javascript",
   "language-python",
+  "language-rust",
   "tree-sitter-loader",
   "ast-grep-dynamic",
   "vfs",

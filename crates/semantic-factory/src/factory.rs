@@ -5,6 +5,7 @@ use std::sync::Arc;
 use language_core::SemanticProvider;
 use language_javascript::OxcSemanticProvider;
 use language_python::RuffSemanticProvider;
+use language_rust::RaSemanticProvider;
 
 use crate::config::{SemanticConfig, SemanticScope, SemanticTypes, WorkspaceWalker};
 
@@ -89,6 +90,20 @@ impl SemanticFactory {
                     RuffSemanticProvider::workspace_scope_with_fs(root.clone(), fs_root)
                 }
             })),
+            // Rust: rust-analyzer reads the Cargo project from disk, so a
+            // virtual filesystem has no Rust analysis.
+            "rust" | "rs" => match (&config.scope, config.fs_root) {
+                (SemanticScope::FileScope, None) => {
+                    Some(Arc::new(RaSemanticProvider::file_scope()))
+                }
+                (SemanticScope::WorkspaceScope { root }, None) => {
+                    Some(Arc::new(RaSemanticProvider::workspace_scope(root.clone())))
+                }
+                (_, Some(_)) => {
+                    log::debug!("Rust semantic analysis needs the real filesystem");
+                    None
+                }
+            },
             // Languages without semantic support
             "css" | "html" | "json" | "yaml" | "markdown" | "md" => None,
             // Unknown languages - no semantic support
@@ -113,6 +128,8 @@ impl SemanticFactory {
                 | "cjs"
                 | "python"
                 | "py"
+                | "rust"
+                | "rs"
         )
     }
 }

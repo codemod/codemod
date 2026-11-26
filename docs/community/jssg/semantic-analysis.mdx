@@ -27,10 +27,11 @@ Also prefer [`@jssg/utils` binding helpers](/community/jssg/utils/javascript) (`
 | --------------------- | ------------------------------------ | ----------------------------------------------------------------------------------- |
 | JavaScript/TypeScript | [oxc](https://oxc.rs/)               | Definitions, references, cross-file resolution                                      |
 | Python                | [ruff](https://docs.astral.sh/ruff/) | Definitions, references, cross-file resolution                                      |
+| Rust                  | [rust-analyzer](https://rust-analyzer.github.io/) | Definitions, references, cross-file and cross-crate resolution, inferred types |
 | Other languages       | Codemod                              | Enterprise features available.<br />For JSSG open-source, it returns no-op results. |
 
 <Info>
-  **Enterprise customers** can get semantic analysis for Go, Rust, Java, C, C++, C Sharp, Ruby, PHP, Swift, Kotlin, Haskell, and Elixir. [Contact us](https://codemod.com/contact) to learn more.
+  **Enterprise customers** can get semantic analysis for Go, Java, C, C++, C Sharp, Ruby, PHP, Swift, Kotlin, Haskell, and Elixir. [Contact us](https://codemod.com/contact) to learn more.
 </Info>
 
 ## Analysis Modes
@@ -85,7 +86,7 @@ const [def] = definition.get(node) ?? [];
 const refs = references.get(def?.nameNode ?? node) ?? [];
 ```
 
-<ParamField path="lang" type='"typescript" | "tsx" | "javascript" | "jsx" | "python"'>
+<ParamField path="lang" type='"typescript" | "tsx" | "javascript" | "jsx" | "python" | "rust"'>
   The language of the nodes you will ask about. A lookup throws a `TypeError` when the node's
   language family doesn't match.
 </ParamField>
@@ -197,6 +198,13 @@ inside a re-export, it answers for the declaration being re-exported.
 
 **Python.** Use `symbols("python")`. Definitions and references work the same way, with the
 same edge shape. In workspace scope they resolve across modules.
+
+**Rust.** Use `symbols("rust")`. In workspace scope the Cargo workspace is loaded, so a name
+resolves across modules and crates (`use crate::tax::vat`, a dependency's item), and
+`references` includes the `use` items that import it. In file scope each file stands alone, so a
+name from another module has no definition. `resolveModule(file, "crate::tax")` gives the file
+of a module path, and `specifierFor(file, target)` the path back (`crate::tax`, or the crate's
+name from another crate). See [Rust](/community/jssg/dataflow#rust).
 
 **Grouping by file.** References come as one flat list. To group them, key on the file:
 
@@ -987,7 +995,7 @@ for (const { node } of refs) {
 **Possible causes:**
 - The node is not a name. Ask on an identifier (for example a declarator's `field("name")`), not on a whole statement
 - Semantic analysis is turned off for the step (`semanticAnalysis: "none"`), or the symbol is in another file and the step uses the default file scope (use `semanticAnalysis: "workspace"`, or `semantic_analysis: workspace` in `workflow.yaml`)
-- The language isn't supported (only JavaScript/TypeScript and Python)
+- The language isn't supported (only JavaScript/TypeScript, Python and Rust)
 - The symbol couldn't be resolved (external library, syntax error)
 
 **Debug steps:**

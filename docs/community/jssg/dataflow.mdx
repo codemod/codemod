@@ -1,12 +1,12 @@
 ---
 title: "Data Flow and Call Graph"
-description: "Ask where a value comes from, where it goes, who calls a function, what it calls, and whether a variable changes, in JavaScript, TypeScript and Python JSSG codemods."
+description: "Ask where a value comes from, where it goes, who calls a function, what it calls, and whether a variable changes, in JavaScript, TypeScript, Python and Rust JSSG codemods."
 ---
 
 <Warning>
   Experimental. The API can change between releases. JavaScript and TypeScript (JSX and TSX
   syntax included; types only when you turn on the [TypeScript 7 checker](#types-the-typescript-7-checker)),
-  and Python with less precision (see [Python](#python)).
+  Python with less precision (see [Python](#python)), and Rust (see [Rust](#rust)).
 </Warning>
 
 These analyses answer questions about **values and calls**, so a codemod can decide whether a
@@ -649,6 +649,59 @@ for (const call of root.root().findAll({ rule: { pattern: "$C.execute($SQL)" } }
   if ([...origins.values()].some((e) => e?.kind === "parameter" && e.name === "request")) {
     // parameterize it
   }
+}
+```
+
+## Rust
+
+The same lookups work on `.rs` files, with `"rust"` as the language. Rust is answered by
+[rust-analyzer](https://rust-analyzer.github.io/)'s own crates, run inside the CLI: no editor and
+no compiler process.
+
+- **Loading.** In workspace scope the Cargo workspace at the target is loaded with
+  `cargo metadata --offline`; if that fails, without dependencies; without a `Cargo.toml`, each
+  `.rs` file stands alone. Build scripts are not run and procedural macros (derives, attribute
+  macros) are not expanded, so code they generate is not seen.
+- **Calls** resolve the way the compiler would: paths through `use`, methods by the receiver's
+  type, `Type::new()` and trait methods. A call on a trait object or a generic (`item.price()`
+  with `item: &dyn Item`) has an edge to every impl in the workspace, with `via: "type"`. A
+  function passed as a value (`.map(parse)`) is a `callback` callee. Calls into `std` and
+  dependencies have no callee edge.
+- **`types("rust").typeOf`** answers what rust-analyzer infers, with no extra setup:
+  `Vec<String>`, `Option<&User>`, and for a function its signature. Importing `types` does not
+  turn on the TypeScript checker for Rust.
+- **`entryPoints("rust")`** gives each function called from outside the workspace's code and why:
+  `main` (a binary's `fn main`), `test` and `bench` (`#[test]`, `#[tokio::test]`, `#[bench]`),
+  `ffi` (`#[no_mangle]`, `#[export_name]`), `trait-impl` (a method implementing a trait from
+  outside the workspace, such as `Display::fmt for Money`, which library code calls), and
+  `export` (a `pub` item of a library crate reachable through `pub mod`s, labeled with its path,
+  `shop::tax::vat`). Declared rules match attributes as `decorators`.
+- **Flow** follows `let`, patterns (`let Some(x) = …`, struct and tuple patterns), `?`, closures and
+  returns. A tuple's positions are not told apart: in `let (a, b) = (x, y)`, `b`'s sources include
+  `x`.
+- **`mutations()`** knows that a method taking `&mut self` changes its receiver
+  (`v.push(x)`, `method-call`, `likely`), and assignments through fields and indexes.
+- **Cost.** The first query in a step loads the workspace, the standard library included: about
+  two seconds for a small crate, more for a large workspace. Each step that asks loads its own.
+
+Finding dead code, before and after. Before, a codemod could only match text: it could not tell
+which `price` a call `item.price()` runs, or that `vat(1)` in an unused function is the only other
+caller. Now it walks the real call graph from everything called from outside:
+
+```ts
+import { step, forEachFile } from "codemod/workflow";
+import { parse, callGraph, crawl, entryPoints } from "codemod/ast-grep";
+
+export default async function main() {
+  return await step(forEachFile({ include: "src/**/*.rs" }, async (file) => {
+    const root = parse(file).root();
+    const reached = await crawl(callGraph("rust").callees, entryPoints("rust").keys());
+    const live = new Set([...reached.keys()].map((node) => node.key()));
+    return root
+      .findAll({ rule: { kind: "function_item" } })
+      .filter((fn) => !live.has(fn.key()))
+      .map((fn) => fn.field("name").text()); // unused functions: flag them, don't delete blindly
+  }));
 }
 ```
 
