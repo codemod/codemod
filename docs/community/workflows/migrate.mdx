@@ -147,20 +147,25 @@ node --test "tests/**/*.test.ts"
 
 `fixtures` reads the same layouts as `codemod jssg test`; point it at the directory that holds your fixtures. See [Testing workflows](/community/workflows/testing).
 
-## Running 1.x packages
+## Running a package with codemod 1.x
 
-`codemod run <package>` runs a package written for codemod 1.x with codemod 1.18.7, the last 1.x release, so it behaves exactly as it did. It prints one line saying so:
+`codemod run` runs 1.x packages on this version. If one doesn't run here, for example because it uses `runtime: docker` steps, you can run it with codemod 1.18.7, the last 1.x release, until you convert it:
 
-```text
-Running with codemod 1.18.7: it is a 1.x package (workflow.yaml workflow, no workflow.ts). Set CODEMOD_V1=off to run it on this version.
+```bash
+codemod run --v1 <package>
 ```
 
-A package counts as 1.x when:
+In CI, set `CODEMOD_V1=on` instead of passing the flag. Each such run starts with:
 
-- the workflow it runs is a `.yaml` or `.yml` file (codemod 1.x never ran `workflow.ts`), and
-- none of its scripts import a module spelled `codemod/<name>`, which only 2.0 has (`codemod:<name>` is the 1.x spelling).
+```text
+--v1 runs codemod 1.18.7 and will be removed in a future release.
+```
 
-It runs on this version instead when you pass `--control`, or set `CODEMOD_V1=off`. Converting a package with `codemod workflow upgrade` makes it a 2.0 package.
+<Warning>
+`--v1` is deprecated and will be removed. Convert the package with `codemod workflow upgrade` so it runs on this version.
+</Warning>
+
+`--v1` only runs packages written for 1.x: the workflow it runs is a `.yaml` or `.yml` file, and none of its scripts import a module spelled `codemod/<name>` (1.x knows only `codemod:<name>`). For any other package it stops with an error that says why. With `CODEMOD_V1=on`, other packages run on this version as usual. `--v1` can't be combined with `--control`.
 
 The first such run downloads the codemod 1.18.7 binary for your platform from npm (about 135–160 MB), checks it against a hash built into this CLI, and keeps it in the codemod cache. Set `CODEMOD_V1_BIN` to use a binary you already have, for example on a machine without network access.
 

@@ -1,12 +1,13 @@
-//! Run 1.x packages with codemod 1.x (experiment, approach A).
+//! `codemod run --v1 <pkg>`: run a 1.x package with codemod 1.x. Opt-in and
+//! deprecated; to be removed in a future release.
 //!
-//! `codemod run <pkg>` hands a package written for codemod 1.x to a pinned
-//! codemod 1.x binary instead of translating its `workflow.yaml` for the 2.0
-//! engine.
+//! By default 1.x packages run on this version (through the compatibility
+//! modules). Only when the user asks, with `--v1` or `CODEMOD_V1=on` (for CI),
+//! is the package handed to a pinned codemod 1.x binary instead.
 //!
 //! # Which packages are 1.x
 //!
-//! A package is run with codemod 1.x when all of these hold:
+//! A package can run with codemod 1.x when both hold:
 //!
 //! 1. the workflow `codemod run` would run is a `.yaml`/`.yml` file. codemod
 //!    1.x only ever ran `workflow.yaml`, and a package with a `workflow.ts`
@@ -15,11 +16,11 @@
 //! 2. no JavaScript/TypeScript file in the package imports a module with the
 //!    2.0-only spelling `codemod/<name>` (`codemod/ast-grep`, ...). 1.x knows
 //!    only `codemod:<name>`, so a YAML package that uses the new spelling was
-//!    written for 2.0;
-//! 3. the run doesn't ask for something only 2.0 has: `--control`;
-//! 4. `CODEMOD_V1` isn't `off`.
+//!    written for 2.0.
 //!
-//! Anything else runs natively on 2.0.
+//! With `--v1`, a package that isn't 1.x, or a run that also asks for
+//! `--control`, is an error. With only `CODEMOD_V1=on` (set for a whole CI
+//! job), a package that isn't 1.x just runs on this version.
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
@@ -44,53 +45,93 @@ const V1_PLATFORMS: &[(&str, &str)] = &[
     ("win32-x64-msvc", "sha512-DnKzYRDXah1q3qH2WOST47dLndapje3qAqc6lI6RJwPw4oZhrM7lBBKWbDkMRJPKe3rtf6q1cYT3m/CsypB5Jw=="),
 ];
 
+/// Printed (dim, on stderr) on every run handed to codemod 1.x.
+pub const DEPRECATION_NOTE: &str =
+    "--v1 runs codemod 1.18.7 and will be removed in a future release.";
+
+/// The hint for an error that refuses to run a 1.x package on this version.
+/// `{package}` is replaced with what the user ran.
+///
+/// TODO(v1-hint): the compatibility path (T-79) should end its refusal
+/// message (docker/podman steps, transforms that need real side effects, ...)
+/// with `v1_hint(package)`. Nothing calls it yet; wire it where that refusal
+/// is built.
+pub const V1_HINT: &str =
+    "To run it with codemod 1.18.7 instead (deprecated): codemod run --v1 {package}";
+
+/// [`V1_HINT`] for a package.
+pub fn v1_hint(package: &str) -> String {
+    V1_HINT.replace("{package}", package)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Engine {
-    /// Run on the 2.0 engine.
+    /// Run on this version.
     V2,
-    /// Run with codemod 1.x; the reason is shown to the user.
-    V1 { reason: String },
+    /// Run with codemod 1.x.
+    V1,
 }
 
 /// What the run asked for that decides the engine, besides the package.
 #[derive(Debug, Clone, Default)]
 pub struct RunAsks {
+    /// `--v1`.
+    pub flag: bool,
     pub control: bool,
     /// The value of `CODEMOD_V1`.
     pub env: Option<String>,
 }
 
-/// Decides which engine runs a package, by the rule in the module docs.
-pub fn detect(package_dir: &Path, workflow: &Path, asks: &RunAsks) -> Engine {
-    if asks
-        .env
-        .as_deref()
-        .is_some_and(|v| matches!(v.trim(), "off" | "0" | "false" | "never"))
-    {
-        return Engine::V2;
+impl RunAsks {
+    fn env_on(&self) -> bool {
+        self.env.as_deref().is_some_and(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "on" | "1" | "true" | "yes"
+            )
+        })
     }
+}
+
+/// Decides which engine runs a package, by the rule in the module docs.
+/// Never picks codemod 1.x unless `--v1` or `CODEMOD_V1=on` asked for it.
+pub fn detect(package_dir: &Path, workflow: &Path, asks: &RunAsks) -> Result<Engine> {
+    if !asks.flag && !asks.env_on() {
+        return Ok(Engine::V2);
+    }
+    let asked_by = if asks.flag { "--v1" } else { "CODEMOD_V1=on" };
+    if asks.control {
+        bail!("{asked_by} can't be combined with --control: codemod 1.x has no control channel");
+    }
+    match why_not_v1(package_dir, workflow) {
+        None => Ok(Engine::V1),
+        // CI may set CODEMOD_V1=on for every run; packages written for this
+        // version just run on it.
+        Some(_) if !asks.flag => Ok(Engine::V2),
+        Some(why) => bail!("--v1 only runs packages written for codemod 1.x: {why}"),
+    }
+}
+
+/// Why a package isn't a 1.x package, or `None` when it is.
+fn why_not_v1(package_dir: &Path, workflow: &Path) -> Option<String> {
     let is_yaml = workflow
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("yaml") || e.eq_ignore_ascii_case("yml"));
     if !is_yaml {
-        return Engine::V2;
-    }
-    if asks.control {
-        return Engine::V2;
-    }
-    if first_v2_import(package_dir).is_some() {
-        return Engine::V2;
-    }
-    Engine::V1 {
-        reason: format!(
-            "it is a 1.x package ({} workflow, no workflow.ts)",
+        return Some(format!(
+            "its workflow is {}, and codemod 1.x only runs workflow.yaml",
             workflow
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "YAML".into())
-        ),
+                .unwrap_or_default()
+        ));
     }
+    let file = first_v2_import(package_dir)?;
+    Some(format!(
+        "{} imports a `codemod/<name>` module, which codemod 1.x doesn't have",
+        file.strip_prefix(package_dir).unwrap_or(&file).display()
+    ))
 }
 
 /// The first script in the package that imports a `codemod/<name>` module.
@@ -378,46 +419,81 @@ mod tests {
         dir
     }
 
-    fn engine(files: &[(&str, &str)], workflow: &str, asks: RunAsks) -> Engine {
+    const V1_PACKAGE: &[(&str, &str)] = &[
+        ("workflow.yaml", "version: \"1\"\nnodes: []\n"),
+        (
+            "scripts/codemod.ts",
+            "import type { Transform } from \"codemod:ast-grep\";\n",
+        ),
+    ];
+
+    fn flag() -> RunAsks {
+        RunAsks {
+            flag: true,
+            ..Default::default()
+        }
+    }
+
+    fn env(value: &str) -> RunAsks {
+        RunAsks {
+            env: Some(value.into()),
+            ..Default::default()
+        }
+    }
+
+    fn engine(files: &[(&str, &str)], workflow: &str, asks: RunAsks) -> Result<Engine> {
         let dir = package(files);
         detect(dir.path(), &dir.path().join(workflow), &asks)
     }
 
     #[test]
-    fn yaml_package_with_1x_imports_runs_on_v1() {
-        let e = engine(
-            &[
-                ("workflow.yaml", "version: \"1\"\nnodes: []\n"),
-                (
-                    "scripts/codemod.ts",
-                    "import type { Transform } from \"codemod:ast-grep\";\n",
-                ),
-            ],
-            "workflow.yaml",
-            RunAsks::default(),
+    fn never_delegates_without_asking() {
+        let e = engine(V1_PACKAGE, "workflow.yaml", RunAsks::default()).unwrap();
+        assert_eq!(e, Engine::V2);
+        for off in ["off", "0", "", "maybe"] {
+            assert_eq!(
+                engine(V1_PACKAGE, "workflow.yaml", env(off)).unwrap(),
+                Engine::V2
+            );
+        }
+    }
+
+    #[test]
+    fn flag_runs_1x_package_on_v1() {
+        assert_eq!(
+            engine(V1_PACKAGE, "workflow.yaml", flag()).unwrap(),
+            Engine::V1
         );
-        assert!(matches!(e, Engine::V1 { .. }), "{e:?}");
+        assert_eq!(
+            engine(&[("wf.yml", "")], "wf.yml", flag()).unwrap(),
+            Engine::V1
+        );
     }
 
     #[test]
-    fn yml_extension_counts() {
-        let e = engine(&[("wf.yml", "")], "wf.yml", RunAsks::default());
-        assert!(matches!(e, Engine::V1 { .. }));
+    fn env_on_runs_1x_package_on_v1() {
+        for on in ["on", "1", "true", "ON"] {
+            assert_eq!(
+                engine(V1_PACKAGE, "workflow.yaml", env(on)).unwrap(),
+                Engine::V1
+            );
+        }
     }
 
     #[test]
-    fn typescript_workflow_runs_on_v2() {
-        let e = engine(
+    fn flag_on_typescript_workflow_is_an_error() {
+        let err = engine(
             &[("workflow.ts", ""), ("workflow.yaml", "")],
             "workflow.ts",
-            RunAsks::default(),
-        );
-        assert_eq!(e, Engine::V2);
+            flag(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("workflow.ts"), "{err}");
     }
 
     #[test]
-    fn yaml_package_with_2x_imports_runs_on_v2() {
-        let e = engine(
+    fn flag_on_yaml_with_2x_imports_is_an_error() {
+        let err = engine(
             &[
                 ("workflow.yaml", ""),
                 (
@@ -426,8 +502,15 @@ mod tests {
                 ),
             ],
             "workflow.yaml",
-            RunAsks::default(),
-        );
+            flag(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("scripts/codemod.ts"), "{err}");
+    }
+
+    #[test]
+    fn env_on_leaves_2x_packages_on_v2() {
+        let e = engine(&[("workflow.ts", "")], "workflow.ts", env("on")).unwrap();
         assert_eq!(e, Engine::V2);
     }
 
@@ -442,34 +525,37 @@ mod tests {
                 ),
             ],
             "workflow.yaml",
-            RunAsks::default(),
-        );
-        assert!(matches!(e, Engine::V1 { .. }));
+            flag(),
+        )
+        .unwrap();
+        assert_eq!(e, Engine::V1);
     }
 
     #[test]
-    fn env_off_and_control_keep_v2() {
-        let files = [("workflow.yaml", "")];
-        for v in ["off", "0", "false", "never"] {
-            let asks = RunAsks {
-                env: Some(v.into()),
-                ..Default::default()
-            };
-            assert_eq!(engine(&files, "workflow.yaml", asks), Engine::V2);
+    fn control_with_v1_is_an_error() {
+        for mut asks in [flag(), env("on")] {
+            asks.control = true;
+            let err = engine(V1_PACKAGE, "workflow.yaml", asks).unwrap_err();
+            assert!(err.to_string().contains("--control"), "{err}");
         }
         let asks = RunAsks {
             control: true,
             ..Default::default()
         };
-        assert_eq!(engine(&files, "workflow.yaml", asks), Engine::V2);
-        let asks = RunAsks {
-            env: Some("on".into()),
-            ..Default::default()
-        };
-        assert!(matches!(
-            engine(&files, "workflow.yaml", asks),
-            Engine::V1 { .. }
-        ));
+        assert_eq!(
+            engine(V1_PACKAGE, "workflow.yaml", asks).unwrap(),
+            Engine::V2
+        );
+    }
+
+    #[test]
+    fn hint_names_the_package() {
+        assert_eq!(
+            v1_hint("@scope/pkg"),
+            "To run it with codemod 1.18.7 instead (deprecated): codemod run --v1 @scope/pkg"
+        );
+        assert!(V1_HINT.contains(V1_VERSION));
+        assert!(DEPRECATION_NOTE.contains(V1_VERSION));
     }
 
     #[test]

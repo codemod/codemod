@@ -124,6 +124,11 @@ pub struct Command {
     #[arg(long, value_name = "NAME")]
     workflow: Option<String>,
 
+    /// Run a 1.x package with codemod 1.18.7 (deprecated, will be removed).
+    /// Also CODEMOD_V1=on
+    #[arg(long = "v1")]
+    v1: bool,
+
     #[command(flatten)]
     start: crate::workflow_exec::StartFlags,
 
@@ -275,14 +280,21 @@ pub async fn handler(
         return Err(error);
     }
 
+    // codemod 1.x runs a package only when asked: `--v1` or CODEMOD_V1=on.
     let asks = v1_delegate::RunAsks {
+        flag: args.v1,
         control: args.flags.control.is_some(),
         env: std::env::var("CODEMOD_V1").ok(),
     };
-    if let v1_delegate::Engine::V1 { reason } =
-        v1_delegate::detect(&resolved_package.package_dir, &workflow_path, &asks)
-    {
-        return run_on_v1(args, &resolved_package, &reason, disable_analytics).await;
+    match v1_delegate::detect(&resolved_package.package_dir, &workflow_path, &asks) {
+        Ok(v1_delegate::Engine::V1) => {
+            return run_on_v1(args, &resolved_package, disable_analytics).await;
+        }
+        Ok(v1_delegate::Engine::V2) => {}
+        Err(error) => {
+            send_failure_event(&telemetry, &canonical_codemod_name, &error.to_string()).await;
+            return Err(error);
+        }
     }
 
     let mut params = parse_params(args.params.as_deref().unwrap_or(&[]))
@@ -478,11 +490,10 @@ pub async fn handler(
     outcome.result()
 }
 
-/// Runs a 1.x package with codemod 1.x, passing its exit code on.
+/// Runs a 1.x package with codemod 1.x (`--v1`), passing its exit code on.
 async fn run_on_v1(
     args: &Command,
     resolved: &butterflow_core::registry::ResolvedPackage,
-    reason: &str,
     disable_analytics: bool,
 ) -> Result<()> {
     let is_local = ["./", "../", "/"]
@@ -497,14 +508,7 @@ async fn run_on_v1(
         butterflow_core::registry::format_package_spec(&spec)
     };
     // One line, on stderr so `--format jsonl` stays clean.
-    eprintln!(
-        "{}",
-        style(format!(
-            "Running with codemod {}: {reason}. Set CODEMOD_V1=off to run it on this version.",
-            v1_delegate::V1_VERSION
-        ))
-        .dim()
-    );
+    eprintln!("{}", style(v1_delegate::DEPRECATION_NOTE).yellow());
     let (binary, downloaded) = v1_delegate::resolve_binary().await?;
     if downloaded {
         info!(
