@@ -3,15 +3,14 @@
 //! `codemod jssg test --callback` tests. The callback runs as a
 //! `forEachFile` step runs it, in an isolate with the same modules, the same
 //! `file` object and the same `parse(file)`; what it did through `file`
-//! (`write`, `rename`, `delete`) is returned, not committed. A callback
-//! granted `fs` writes with it at once, as in a workflow.
+//! (`write`, `rename`, `delete`) is returned, not committed. As in a
+//! workflow, it has no network, processes or other writes.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::sandbox::runtime_module::RuntimeEventCallback;
 use codemod_sandbox::{SemanticProvider, WorkerOptions};
@@ -36,7 +35,6 @@ pub struct CallbackFileRequest {
     pub language: Option<String>,
     /// Semantic analysis for roots `parse(file)` makes.
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
-    pub capabilities: HashSet<LlrtSupportedModules>,
     /// Receives `console` output and `codemod/runtime` events.
     pub runtime_event_callback: Option<RuntimeEventCallback>,
 }
@@ -65,7 +63,6 @@ pub async fn run_callback_file(request: CallbackFileRequest) -> Result<CallbackF
         text,
         language,
         semantic_provider,
-        capabilities,
         runtime_event_callback,
     } = request;
     // Imports resolve from the module's name: it must be absolute.
@@ -84,7 +81,7 @@ pub async fn run_callback_file(request: CallbackFileRequest) -> Result<CallbackF
         .into_owned();
 
     let options = WorkerOptions {
-        capabilities,
+        capabilities: HashSet::new(),
         resolver,
         modules: isolate::isolate_modules(),
         codemod_modules: isolate::isolate_codemod_modules(),
@@ -96,6 +93,7 @@ pub async fn run_callback_file(request: CallbackFileRequest) -> Result<CallbackF
         default_language: language.clone(),
         semantic_provider,
         pending_files: None,
+        read_only_fs: Some(isolate::READ_ONLY_FS.to_string()),
     };
     let worker = isolate::start(options, None, None).await?;
     let sandbox = &worker;

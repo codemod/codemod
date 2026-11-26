@@ -1,10 +1,9 @@
 //! The setup screen's state: what runs, where, with which agent and model.
 //! Pure: keys in, choices out.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_workflow::params::DeclaredParam;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
@@ -20,14 +19,6 @@ pub struct ParamField {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CapabilityField {
-    pub module: LlrtSupportedModules,
-    pub granted: bool,
-    /// The package's manifest asks for it.
-    pub requested: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentOption {
     /// `None` asks when a step needs an agent.
     pub id: Option<String>,
@@ -40,7 +31,6 @@ pub enum Field {
     Target,
     DryRun,
     Param(usize),
-    Capability(usize),
     Agent,
     Model,
     Start,
@@ -62,7 +52,6 @@ pub struct SetupState {
     /// The run must be a dry run (a pro codemod).
     pub dry_run_locked: bool,
     pub params: Vec<ParamField>,
-    pub capabilities: Vec<CapabilityField>,
     pub agents: Vec<AgentOption>,
     pub agent: usize,
     pub provider: String,
@@ -85,8 +74,6 @@ pub struct SetupInput {
     pub declared: Vec<DeclaredParam>,
     pub dry_run: bool,
     pub dry_run_locked: bool,
-    pub granted: HashSet<LlrtSupportedModules>,
-    pub requested: HashSet<LlrtSupportedModules>,
     /// Installed coding agents: (id, label).
     pub installed_agents: Vec<(String, String)>,
     pub agent: Option<String>,
@@ -100,16 +87,9 @@ pub struct SetupChoices {
     pub target: PathBuf,
     pub params: HashMap<String, Value>,
     pub dry_run: bool,
-    pub granted: HashSet<LlrtSupportedModules>,
     pub agent: Option<String>,
     pub decision_model: DecisionModel,
 }
-
-const CAPABILITIES: [LlrtSupportedModules; 3] = [
-    LlrtSupportedModules::Fs,
-    LlrtSupportedModules::Fetch,
-    LlrtSupportedModules::ChildProcess,
-];
 
 fn value_text(value: &Value) -> String {
     match value {
@@ -148,15 +128,6 @@ impl SetupState {
             type_text: None,
             description: None,
         }));
-
-        let capabilities = CAPABILITIES
-            .iter()
-            .map(|module| CapabilityField {
-                module: *module,
-                granted: input.granted.contains(module),
-                requested: input.requested.contains(module),
-            })
-            .collect();
 
         let mut agents = vec![AgentOption {
             id: None,
@@ -206,7 +177,6 @@ impl SetupState {
             dry_run: input.dry_run || input.dry_run_locked,
             dry_run_locked: input.dry_run_locked,
             params,
-            capabilities,
             agents,
             agent,
             provider: input.decision_model.provider.clone(),
@@ -241,7 +211,6 @@ impl SetupState {
     pub fn fields(&self) -> Vec<Field> {
         let mut fields = vec![Field::Target, Field::DryRun];
         fields.extend((0..self.params.len()).map(Field::Param));
-        fields.extend((0..self.capabilities.len()).map(Field::Capability));
         fields.extend([Field::Agent, Field::Model, Field::Start]);
         fields
     }
@@ -291,9 +260,6 @@ impl SetupState {
         };
         match field {
             Field::DryRun if !self.dry_run_locked => self.dry_run = !self.dry_run,
-            Field::Capability(i) => {
-                self.capabilities[i].granted = !self.capabilities[i].granted;
-            }
             Field::Agent => self.agent = step(self.agent, self.agents.len()),
             Field::Model => self.model = step(self.model, self.models.len()),
             _ => {}
@@ -382,12 +348,6 @@ impl SetupState {
             target,
             params,
             dry_run: self.dry_run,
-            granted: self
-                .capabilities
-                .iter()
-                .filter(|c| c.granted)
-                .map(|c| c.module)
-                .collect(),
             agent: self.agents.get(self.agent).and_then(|a| a.id.clone()),
             decision_model: DecisionModel {
                 provider: self.provider.clone(),
@@ -433,8 +393,6 @@ pub(crate) mod tests {
             ],
             dry_run: false,
             dry_run_locked: false,
-            granted: HashSet::from([LlrtSupportedModules::Fetch]),
-            requested: HashSet::from([LlrtSupportedModules::ChildProcess]),
             installed_agents: vec![
                 ("claude-code".into(), "Claude Code".into()),
                 ("codex".into(), "Codex".into()),
@@ -471,10 +429,6 @@ pub(crate) mod tests {
         assert_eq!(choices.params.get("extra"), Some(&json!(3)));
         assert_eq!(choices.params.get("package"), Some(&json!("api")));
         assert!(!choices.params.contains_key("agent"));
-        assert_eq!(
-            choices.granted,
-            HashSet::from([LlrtSupportedModules::Fetch])
-        );
         assert_eq!(choices.agent.as_deref(), Some("codex"));
         assert_eq!(choices.decision_model.id(), "systemone/jev-latest");
     }
@@ -526,9 +480,6 @@ pub(crate) mod tests {
         state.key(key(KeyCode::Char(' ')));
         assert!(state.dry_run);
 
-        focus(&mut state, Field::Capability(2));
-        state.key(key(KeyCode::Enter));
-
         focus(&mut state, Field::Agent);
         state.key(key(KeyCode::Left));
         state.key(key(KeyCode::Left));
@@ -541,9 +492,6 @@ pub(crate) mod tests {
         let choices = state.choices().unwrap();
         assert_eq!(choices.params.get("agent"), Some(&json!(true)));
         assert!(choices.dry_run);
-        assert!(choices
-            .granted
-            .contains(&LlrtSupportedModules::ChildProcess));
         assert_eq!(choices.agent, None);
         assert_eq!(choices.decision_model.model, "jev-preview");
 

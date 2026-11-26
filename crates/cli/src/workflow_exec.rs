@@ -31,16 +31,16 @@ use serde_json::Value;
 /// The flags every command that runs or resumes a workflow takes.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct RunFlags {
-    /// Allow fs access
-    #[arg(long)]
+    /// Deprecated, does nothing: workflow callbacks read the target without it
+    #[arg(long, hide = true)]
     pub allow_fs: bool,
 
-    /// Allow fetch access
-    #[arg(long)]
+    /// Deprecated, does nothing: declare requests as steps with http()
+    #[arg(long, hide = true)]
     pub allow_fetch: bool,
 
-    /// Allow child process access
-    #[arg(long)]
+    /// Deprecated, does nothing: run commands as steps with shell()
+    #[arg(long, hide = true)]
     pub allow_child_process: bool,
 
     /// Allow codemod/assess to send files to the decision model (System One
@@ -94,40 +94,68 @@ pub struct StartFlags {
 }
 
 impl RunFlags {
-    /// Capabilities granted with `--allow-*` flags.
-    pub fn granted(&self) -> HashSet<LlrtSupportedModules> {
-        [
-            (self.allow_fs, LlrtSupportedModules::Fs),
-            (self.allow_fetch, LlrtSupportedModules::Fetch),
-            (self.allow_child_process, LlrtSupportedModules::ChildProcess),
-        ]
-        .into_iter()
-        .filter_map(|(allowed, module)| allowed.then_some(module))
-        .collect()
+    /// The `--allow-*` flags no longer give workflows anything: callbacks
+    /// are pure, and reach the network and run commands through declared
+    /// steps. Says so for each one given; they are accepted until 2.0.
+    pub fn warn_deprecated_capabilities(&self) {
+        let given = [
+            (
+                self.allow_fetch,
+                "--allow-fetch",
+                "callbacks have no network; declare requests as steps: await step(\"label\", http(url))",
+            ),
+            (
+                self.allow_child_process,
+                "--allow-child-process",
+                "callbacks cannot run commands; run them as steps: await step(\"label\", shell(command))",
+            ),
+            (
+                self.allow_fs,
+                "--allow-fs",
+                "callbacks read the target without it and change files with file.write(), file.rename() and file.delete()",
+            ),
+        ];
+        for (_, flag, instead) in given.iter().filter(|(set, _, _)| *set) {
+            eprintln!(
+                "{} {flag} is deprecated and does nothing now: {instead}",
+                style("warning:").yellow().bold()
+            );
+        }
     }
 
-    /// The capabilities a run gets: the flags', and those the package asks
-    /// for (in its codemod.yaml, given or found in `workflow_dir`) that the
-    /// person grants when asked.
+    /// The capabilities a run's callbacks get: none. The deprecated
+    /// `--allow-*` flags are warned about, and capabilities the package asks
+    /// for (in its codemod.yaml, given or found in `workflow_dir`) noted.
     pub fn capabilities(
         &self,
         manifest: Option<crate::utils::manifest::CodemodManifest>,
         workflow_dir: Option<PathBuf>,
-        dry_run: bool,
+        _dry_run: bool,
     ) -> HashSet<LlrtSupportedModules> {
-        use crate::utils::resolve_capabilities::{
-            prompt_capabilities, resolve_capabilities, ResolveCapabilitiesArgs,
-        };
-        let requested = resolve_capabilities(
+        use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+        self.warn_deprecated_capabilities();
+        let mut requested: Vec<&str> = resolve_capabilities(
             ResolveCapabilitiesArgs {
-                allow_fs: self.allow_fs,
-                allow_fetch: self.allow_fetch,
-                allow_child_process: self.allow_child_process,
+                allow_fs: false,
+                allow_fetch: false,
+                allow_child_process: false,
             },
             manifest,
             workflow_dir,
-        );
-        prompt_capabilities(requested, &self.granted(), self.no_interactive, dry_run)
+        )
+        .into_iter()
+        .filter(|module| codemod_llrt_capabilities::module_builder::UNSAFE_MODULES.contains(module))
+        .map(LlrtSupportedModules::as_str)
+        .collect();
+        requested.sort();
+        if !requested.is_empty() && self.format == OutputFormat::Text {
+            eprintln!(
+                "{} codemod.yaml asks for {}, which workflow callbacks no longer get: steps that need the network or commands use http() and shell()",
+                style("note:").cyan().bold(),
+                requested.join(", ")
+            );
+        }
+        HashSet::new()
     }
 
     /// Settings for a run with these flags and nothing else special.

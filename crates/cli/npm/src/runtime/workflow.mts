@@ -28,6 +28,7 @@ export const {
   __importedCallback,
   forEachFile,
   shell,
+  http,
   astGrep,
   shard,
   codemod,

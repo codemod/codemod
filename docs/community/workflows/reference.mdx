@@ -108,7 +108,7 @@ const config = await step("Read config", async () => JSON.parse(await readFile("
 ```
 
 - Write the function inline, so the build can extract it. Outside variables arrive as frozen copies, with the same rules as [forEachFile callbacks](#using-outside-variables).
-- Inside, `Date`, `Math.random`, `fetch`, `fs` and `child_process` are real, as far as the run allows (`--allow-fs`, `--allow-fetch`, `--allow-child-process`).
+- Inside, `Date` and `Math.random` are real, and `fs` reads the target. The function is [pure](#callbacks-are-pure): no network, commands or other writes.
 - The result must be JSON. On resume, a finished function step is replayed from its record; if you changed it, it runs again.
 
 ## `forEachFile(selector?, callback)`
@@ -135,7 +135,7 @@ Object fields:
 | `containing` | Only files whose text contains this string |
 | `concurrency` | Files each worker keeps in flight (default `1`). Raise it for async callbacks that wait on the network or `codemod/llm` |
 | `semanticAnalysis` | What `definition()` and `references()` on roots `parse(file)` makes can find: `"file"` (the default) within each file, `"workspace"` across the selected files of the target (or `{ mode: "workspace", root: "src" }`), `"none"` nothing. The analysis only runs when they are called |
-| `capabilities` | What the callback needs besides the run's capabilities: `["fs"]`, `["fetch"]`, `["child_process"]`. An interactive run asks for those it does not grant (`--allow-fs`, ..., or `codemod.yaml`); a non-interactive run goes without them. A dry run never has `fs` or `child_process` |
+| `capabilities` | Deprecated: callbacks no longer get capabilities (see [Callbacks are pure](#callbacks-are-pure)). Still accepted; the step's log says it is ignored |
 
 Files are selected as `astGrep` selects them: `.gitignore` is respected, hidden files and directories (`.github/`) are included, and a `language` means the same extensions for both (`"typescript"` also takes `.js` files, which that parser reads). A selector is plain data, so you can reuse and refine it: `{ ...sources, containing: "moment" }`.
 
@@ -226,13 +226,33 @@ reduced; // { "app": 12, "ui": 3 }
 - A reducer that throws fails the step, and nothing the step's callbacks changed is written.
 - `astGrep(...)` returns nothing per file, so `forEachFile(selector, astGrep(rules), reducer, initial)` is a build and type error.
 
+### Callbacks are pure
+
+Function steps, `forEachFile` callbacks and reducers, `dependencyGraph` callbacks and the jssg transforms they run change the world only through what the run records. Inside them you get:
+
+- the `file` object: `file.write()`, `file.rename()` and `file.delete()` for the current file, and `jssgTransform` for others;
+- `fs`, read-only and limited to the target (`readFileSync`, `existsSync`, `readdirSync`, `statSync` and their promise forms);
+- parsing and analysis (`codemod/ast-grep`, `codemod/assess`, `registry` and `semver` from `codemod/deps`).
+
+Everything else that reaches outside fails with the step to use instead:
+
+| In a callback | Fails with | Use instead |
+|---|---|---|
+| `fetch`, `XMLHttpRequest`, `WebSocket` | `fetch is not available in workflow callbacks …` | [`http()`](#http-requests) |
+| `child_process` (`exec`, `spawn`, …) | `child_process.execSync is not available …` | [`shell()`](#shell-commands) |
+| `fs` writes (`writeFileSync`, `mkdirSync`, `unlinkSync`, …), reads outside the target | `fs.writeFileSync is not available …`, `EACCES` | `file.write()`, or a `shell()` or `agent()` step |
+| setting `process.env` | `process.env cannot be changed …` | `shell(command, { env })` |
+| `setTimeout`, `setInterval`, `setImmediate` | `setTimeout is not available …` | [`sleep()`](#sleepduration) between steps |
+
+`fetch` and timers written in a workflow file are build errors, in the body and in callbacks, so the workflow fails before a run starts. `--allow-fs`, `--allow-fetch`, `--allow-child-process` and `capabilities` in `codemod.yaml` no longer give callbacks anything: the flags print a deprecation warning, and `codemod.yaml` capabilities are noted when the run starts. `codemod jssg run` and `codemod jssg test` on their own (outside a workflow) still take `--allow-*`.
+
 ### Using outside variables
 
 A callback (or function step) runs in its own isolate, so the build copies in what it needs:
 
 - **Module-level constants, functions and classes** it uses are copied in.
 - **Local variables of the surrounding function** are passed in as frozen copies when the step starts. They must be JSON values.
-- **Imports** it uses are available: `codemod/ast-grep`, `codemod/runtime`, `codemod/assess`, Node-style modules (`path`, `fs` with `--allow-fs`, ...), npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
+- **Imports** it uses are available: `codemod/ast-grep`, `codemod/runtime`, `codemod/assess`, Node-style modules (`path`, `fs` to read the target, ...), npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
 
 These are build errors, reported with the file, line and column:
 
@@ -381,6 +401,7 @@ export default async function main() {
 | `forEachFile(selector, callback, reducer, initial)` | Run a callback on every selected file and fold what it returns into one value. Result: `{ reduced, changes, failures }`. See [Reducing outputs](#reducing-outputs). |
 | `forEachFile(selector?, astGrep(rules, { repeat }?))` | Apply ast-grep rules, written in the workflow or imported from YAML, to the selected files; `repeat` runs them until nothing changes. Result: `{ changes, matches, failures }`. See [ast-grep rules](#ast-grep-rules). |
 | `shell(command, { env, cwd, allowFailure })`, ``shell`command` `` | Run a shell command. Result: `{ stdout, stderr, exitCode }`. See [Shell commands](#shell-commands). |
+| `http(url, options?)`, `http({ url, ... })` | Send an HTTP request. Result: `{ status, statusText, ok, url, headers, body, json? }`. See [HTTP requests](#http-requests). |
 | `shard(options)` | Split files into groups. See [Sharding](/community/workflows/sharding). |
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
 | `agent(prompt, options)` | Hand a prompt to a coding agent. See [Coding agents](#coding-agents). |
@@ -528,11 +549,38 @@ const { major } = JSON.parse(stdout.trim().split("\n").at(-1)!);
 
 A command that exits with an error fails the step, and the error ends with what it printed on stderr. Pass `allowFailure: true` to get the result instead and check `exitCode` yourself. Each stream keeps its last 1 MiB of bytes. The result preserves line endings and replaces invalid UTF-8 with `�`.
 
-Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
+Shell commands, HTTP requests, agents and skill installs are skipped in a dry run (an `http()` step with `dryRun: "perform"` is sent), and callbacks never write but through `file`: a dry run changes nothing.
 
 A dry run keeps what each step would change in memory, and later steps read that instead of the disk: `forEachFile` callbacks, `astGrep` rules, `jssgTransform` in function steps, the files `shard` picks and its `filter`, and nested `codemod()` runs see the text earlier steps left, renamed files at their new paths, and not the files they deleted. Shell commands don't run in a dry run, so they see none of it. When the run ends, the CLI prints a unified diff of everything the run would change (with `--format jsonl`, one `run_diff` event per file, with `path`, `diff`, `additions` and `deletions`). A renamed file shows as its old path removed and its new path added.
 
 If a `codemod()` step resolves a preview-only registry package during an apply run, the step fails before starting that package. Rerun the workflow with `--dry-run` to preview it. This also applies to packages called by nested workflows.
+
+### HTTP requests
+
+Callbacks have no network. A workflow that needs one declares the request as a step with `http()`, from `codemod/workflow`. The response is the step's result: it is recorded with the run, so a resumed run gets it back without sending the request again.
+
+```ts
+import { http, step } from "codemod/workflow";
+
+const release = await step("Latest release", http("https://api.github.com/repos/org/repo/releases/latest", {
+  headers: { authorization: { env: "GITHUB_TOKEN" } },
+}));
+const tag = release.json?.tag_name;
+
+await step("Notify", http({ url: params.hook, method: "POST", json: { tag } }));
+```
+
+| Option | Meaning |
+|---|---|
+| `method` | `"GET"` (the default), `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, … |
+| `headers` | Header names to values. A value `{ env: "NAME" }` is read from the environment when the request is sent; the run records the name, never the value |
+| `body` | The body, as text |
+| `json` | A JSON body; sets `content-type: application/json`. Not with `body` |
+| `timeout` | How long the request may take, in milliseconds or as `"30s"`. Default 30 seconds |
+| `allowErrorStatus` | Return a 4xx or 5xx response as the result. Without it such a response fails the step (with the status and the start of the body), so the step's `retries` apply |
+| `dryRun` | `"skip"` (the default): a dry run logs `would request GET …` and the step gives `{ skipped: true }`. `"perform"`: send it in a dry run too, for requests that only read |
+
+The result is `{ status, statusText, ok, url, headers, body, json? }`: `url` is where it ended after redirects, header names are lower case, `body` is the text (up to 10 MiB; base64 with `bodyEncoding: "base64"` when it is not UTF-8), and `json` is the parsed body when the response says it is JSON. The URL, method, headers and body are the step's content: change one and the step runs again on resume.
 
 ### Coding agents
 

@@ -134,16 +134,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let mut target_path = target_path;
 
     if crate::launcher::enabled(&flags) {
-        use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
-        let requested = resolve_capabilities(
-            ResolveCapabilitiesArgs {
-                allow_fs: false,
-                allow_fetch: false,
-                allow_child_process: false,
-            },
-            None,
-            Some(workflow_dir.clone()),
-        );
         let Some(choices) = crate::launcher::setup(crate::launcher::Plan {
             title: workflow_label.clone(),
             workflow: &workflow_path,
@@ -151,7 +141,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             params,
             dry_run,
             dry_run_locked: pro_dry_run,
-            requested,
             flags: &flags,
         })
         .await?

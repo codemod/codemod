@@ -1239,7 +1239,9 @@ fn a_yaml_transform_that_does_not_await_jssg_transform_fails() {
         "  let edit = text;",
         r#"  if (text.includes("// late")) {
     jssgTransform(async (r: any) => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Timers fail in callbacks: reads wait for the event loop instead.
+      const fs = await import("fs");
+      for (let i = 0; i < 50; i++) await fs.promises.readFile(`${options.targetDir}/shared/index.ts`, "utf8");
       return r.root().text() + "// late\n";
     }, `${options.targetDir}/shared/index.ts`, "typescript");
   }

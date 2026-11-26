@@ -60,7 +60,7 @@ export default async function main() {
     { include: "*.txt", concurrency: 4 },
     async (file) => {
       // Later files finish first.
-      await new Promise((resolve) => setTimeout(resolve, 400 - Number(file.path.slice(1, 5))));
+      for (let i = 0; i < 400 - Number(file.path.slice(1, 5)); i++) await null;
       return file.path;
     },
     (acc, path) => [...acc, path],

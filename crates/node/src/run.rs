@@ -91,7 +91,11 @@ impl Run {
         };
         let store: Arc<dyn RunStore> = match options.store.as_deref() {
             None | Some("memory") => Arc::new(MemoryStore::default()),
-            Some("local") => Arc::new(LocalStore::default_location()),
+            // `CODEMOD_RUN_STORE_DIR` moves it, as for the CLI.
+            Some("local") => Arc::new(match std::env::var_os("CODEMOD_RUN_STORE_DIR") {
+                Some(dir) => LocalStore::new(dir),
+                None => LocalStore::default_location(),
+            }),
             Some(other) => {
                 return Err(Error::from_reason(format!(
                     "unknown store '{other}'; use \"memory\" or \"local\""
@@ -156,6 +160,19 @@ impl Run {
     #[napi(getter)]
     pub fn dry_run(&self) -> bool {
         self.inner.run.dry_run()
+    }
+
+    /// The run's id: the workflow body's random numbers are seeded by it.
+    #[napi(getter)]
+    pub fn run_id(&self) -> String {
+        self.inner.run.run_id().to_string()
+    }
+
+    /// When the run started (ms since the epoch), also on a resume: where
+    /// the workflow body's clock starts.
+    #[napi(getter)]
+    pub fn started_at(&self) -> f64 {
+        self.inner.run.started_at() as f64
     }
 
     /// Steps recorded by earlier executions of this run.

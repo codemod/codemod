@@ -22,6 +22,7 @@ mod dependency_graph;
 pub(crate) mod for_each_file;
 mod function;
 mod git;
+mod http;
 mod install_skill;
 pub(crate) mod isolate;
 pub(crate) mod overlay;
@@ -220,6 +221,7 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         "function" => function::run(task, content).map_err(TaskError::from),
         "dependencyGraph" => dependency_graph::run(task, content).map_err(TaskError::from),
         "shell" => shell::run(task, parse(content)?),
+        "http" => http::run(task, parse(content)?),
         "astGrep" => ast_grep::run(task, parse(content)?),
         "shard" => shard::run(task, content),
         "codemod" => codemod::run(task, parse(content)?),

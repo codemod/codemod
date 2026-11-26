@@ -84,6 +84,15 @@ javascript! {
     pub(crate) fn jssg_compat_module = include_str!("js/jssg_compat.ts"), "jssg_compat.ts"
 }
 javascript! {
+    /// Globals of steps' and callbacks' isolates: the network, timers and
+    /// environment changes as errors naming the step to use instead.
+    pub(crate) fn callback_globals_module = include_str!("js/callback_globals.ts"), "callback_globals.ts"
+}
+javascript! {
+    /// `child_process` in isolates: its functions as errors naming `shell()`.
+    pub(crate) fn child_process_module = include_str!("js/child_process.ts"), "child_process.ts"
+}
+javascript! {
     /// Replay-safe globals of the workflow body; a script, not a module.
     pub(crate) fn body_globals = include_str!("js/body_globals.ts"), "body_globals.ts"
 }
@@ -111,6 +120,8 @@ mod tests {
             super::isolate_workflow_module(),
             super::jssg_compat_module(),
             super::assess_module(),
+            super::callback_globals_module(),
+            super::child_process_module(),
         ] {
             assert!(!js.is_empty());
             assert!(!js.contains("interface "), "types are left in:\n{js}");
