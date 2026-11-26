@@ -6,6 +6,7 @@
 //! importing file's package. Installed packages are not looked at: calls into
 //! them are unresolved.
 
+use crate::entry_points::BuiltinEntryPoints;
 use crate::flow::build_file_flow;
 use crate::ty::TySession;
 use language_core::{
@@ -65,6 +66,8 @@ pub struct PyFlow {
     ty: Option<TySession>,
     /// The importers table of the module queries.
     pub(crate) modules: crate::modules::PyModules,
+    /// Packaging, `__main__` and framework entry points.
+    builtin: BuiltinEntryPoints,
 }
 
 impl std::fmt::Debug for PyFlow {
@@ -86,6 +89,7 @@ impl PyFlow {
             snapshot: None,
             ty: None,
             modules: Default::default(),
+            builtin: BuiltinEntryPoints::default(),
         }
     }
 
@@ -115,6 +119,7 @@ impl PyFlow {
         self.files.write().clear();
         self.callers.clear();
         self.modules.clear();
+        self.builtin.clear();
     }
 
     /// Use `content` for `path` from now on (the file as the codemod sees it).
@@ -136,6 +141,7 @@ impl PyFlow {
         };
         self.files.write().insert(path, cached);
         self.callers.clear();
+        self.builtin.invalidate();
     }
 
     pub fn data_flow(
@@ -165,8 +171,8 @@ impl PyFlow {
     }
 
     /// Why the function at `range` is called from outside the workspace's
-    /// code: a selector rule declares it. Python has no package exports
-    /// that mark a function public, so only rules count.
+    /// code: packaging metadata, a `__main__` guard or a framework calls it
+    /// ([`crate::entry_points`]), or a selector rule declares it.
     pub fn entry_points(
         &self,
         path: &Path,
@@ -676,14 +682,18 @@ impl FlowHost for PyFlow {
         })
     }
 
-    /// Rules only: a top-level function counts as exported under its name.
+    /// Built-in entry points, then the selector's rules (a top-level
+    /// function counts as exported under its name).
     fn entry_points_of(&self, path: &Path, flow: &FileFlow, function: u32) -> Vec<EntryPoint> {
+        let mut found = self
+            .builtin
+            .of(self, self.root.as_deref(), path, flow, function);
         let rules = self.entry_point_rules.read();
         if rules.is_empty() {
-            return Vec::new();
+            return found;
         }
         let Some(fact) = flow.functions.get(function as usize) else {
-            return Vec::new();
+            return found;
         };
         let exports: Vec<String> = match (&fact.name, fact.parent, fact.class_node) {
             (Some(name), None, None) => vec![name.to_string()],
@@ -695,7 +705,7 @@ impl FlowHost for PyFlow {
             .map(|names| names.iter().map(|n| n.to_string()).collect())
             .unwrap_or_default();
         let file = self.relative_path(path);
-        language_core::declared_entry_points(
+        found.extend(language_core::declared_entry_points(
             &rules,
             &FunctionEntry {
                 file: &file,
@@ -703,7 +713,8 @@ impl FlowHost for PyFlow {
                 exports: &exports,
                 decorators: &decorators,
             },
-        )
+        ));
+        found
     }
 
     fn relative_path(&self, path: &Path) -> String {

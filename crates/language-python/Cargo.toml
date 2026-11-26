@@ -13,6 +13,8 @@ rustc-hash = "2"
 thiserror.workspace = true
 log.workspace = true
 anyhow.workspace = true
+# Packaging metadata (pyproject.toml) for entry points
+toml = "0.9"
 
 # Ruff ty_ide for semantic analysis (goto-definition, find-references)
 ty_ide.workspace = true
