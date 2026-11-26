@@ -11,13 +11,35 @@ Workflow v2 is the 2.0 Codemod CLI: workflows are TypeScript (`workflow.ts`), an
 
 ```bash
 npx codemod@alpha workflow run -w workflow.ts --target .
-npx codemod@2.0.0-alpha.8 workflow run -w workflow.ts --target .
+npx codemod@2.0.0-alpha.9 workflow run -w workflow.ts --target .
 ```
 
 To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha workflow upgrade ./my-package --dry-run`. See [Migrate from workflow.yaml](/community/workflows/migrate).
 </Note>
 
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
+
+{/* A10: fill in from the merged PRs (T-73, T-74, T-75, T-76) and the publish date when alpha.10 ships. */}
+<Update label="2.0.0-alpha.10" description="Unreleased">
+**Breaking changes**
+
+- **A run waiting at an approval exits `3`.** Before, a `--no-interactive` run that stopped at an approval exited `0`. `1` is still an error, and `2` still means failed files or `fail()`. See [Exit codes](/community/workflows/exit-codes).
+- **Callbacks only compute.** `forEachFile` callbacks, function steps and reducers can't call `fetch`, use `child_process` or set environment variables. Use `shell()`, `agent()` or the new `http()` step. `--allow-fetch` is deprecated.
+- **Declared `string` params arrive as strings.** Before, `--param n=4` gave the number `4` even when `n` was declared `string`.
+- **`runtime: docker` and `runtime: podman` steps are refused**, with an error that names the step. Before, they ran on the host without a warning.
+
+**New**
+
+- An `http()` step.
+- `codemod run <1.x package>` upgrades the package on the fly.
+- Runs record the CLI version that started them, and only one run at a time works on a repository.
+- A paused run keeps the question it stopped at.
+- `DO_NOT_TRACK=1` turns off telemetry.
+
+**Docs**
+
+- New pages: [Upgrade from 1.x](/community/workflows/upgrade-from-1x), [Running in CI and from agents](/community/workflows/ci-and-agents), [Exit codes](/community/workflows/exit-codes), and five tutorials, starting with [Your first workflow](/community/workflows/tutorials/first-workflow).
+</Update>
 
 <Update label="2.0.0-alpha.9" description="November 25, 2026">
 ```bash

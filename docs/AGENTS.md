@@ -10,6 +10,9 @@ Docs are Mintlify MDX. Follow the existing navigation in `docs/docs.json` and th
 - Use Mintlify components only when they clarify the page: `Note`, `Tip`, `Warning`, `Info`, `Check`,
   `Steps`, `Tabs`, `AccordionGroup`, `RequestExample`, and `ResponseExample`.
 - When adding or moving pages, update `docs/docs.json` in the same change.
+- Mark an experimental page or section with the shared callout: `import Experimental from "/snippets/experimental.mdx";`
+  then `<Experimental />` at the top of the page or section. For a whole page, also add `tag: "Experimental"`
+  to its frontmatter so the sidebar shows the badge. Don't decide what is experimental in a docs change.
 - Verify code snippets against current CLI names and package paths.
 
 ## Mintlify vs Wish skill-docs (MECE)

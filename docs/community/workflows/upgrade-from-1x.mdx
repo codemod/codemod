@@ -1,0 +1,146 @@
+---
+title: "Upgrade from Codemod 1.x to 2.0"
+sidebarTitle: "Upgrade from 1.x"
+description: "What changes when you move from the 1.x CLI to 2.0: commands and flags, running 1.x packages, exit codes, resuming runs, and the changes for codemod authors."
+---
+
+Codemod 2.0 runs workflows written in TypeScript (`workflow.ts`). Packages written for 1.x, with a `workflow.yaml`, keep running: you don't have to change them. This page lists what changes for the people who **run** codemods and for the people who **write** them.
+
+<Note>
+Until 2.0 is stable, `npx codemod` is still 1.x. Use `npx codemod@alpha` (or pin a version, such as `npx codemod@2.0.0-alpha.9`) to get 2.0.
+</Note>
+
+## If you run codemods
+
+### Running 1.x packages
+
+A registry package or a local package with a `workflow.yaml` runs as before:
+
+```bash
+npx codemod@alpha @org/my-1x-package --target .
+npx codemod@alpha workflow run -w ./my-1x-package --target .
+```
+
+{/* A10: T-76 */}
+The CLI upgrades the package to `workflow.ts` in memory each time it runs it and runs the result. Nothing in the package changes. On alpha.9 a run ends with this tip:
+
+```
+Tip: workflow.yaml runs as before. To move this codemod to workflow.ts, run `codemod workflow upgrade my-codemod`.
+```
+
+A few 1.x features run differently. The full list is in [What behaves differently](/community/workflows/migrate#what-behaves-differently). The ones you are most likely to notice:
+
+- {/* A10: T-73 */}**Steps with `runtime: docker` or `runtime: podman` are refused.** The run stops before that step with an error that names it. Earlier 2.0 alphas ran those steps directly on your machine without a warning.
+- **Semantic analysis is on by default** in `js-ast-grep` steps, so `definition()` and `references()` now return results in workflows.
+- **`$STATE_OUTPUTS` in shell steps needs a POSIX shell.** On Windows, a workflow that uses it fails before any step runs.
+
+### Commands and flags that changed
+
+| 1.x | 2.0 |
+| --- | --- |
+| `codemod workflow resume -w <workflow> -i <id>` | `codemod workflow resume --id <id>`. The run knows its workflow and target. |
+| `workflow resume --trigger-all` | `workflow resume --id <id> --approve`. `--trigger-all` still works as an alias. |
+| `workflow resume -t <task-uuid>` / `--tasks_ids` | `workflow resume --id <id> --approve <question-id>`, for example `--approve approval:1`. `workflow status --id <id>` shows the question id. |
+| `workflow resume --dry-run`, `workflow resume --target` | Removed. A dry run is never saved, so there is nothing to resume. |
+| `codemod workflow tui` | Removed. Use `workflow list`, `workflow status --id <id>` and `workflow attach --id <id>`. |
+| `codemod init --with-skill` | Removed. Use `codemod init --skill`. |
+| `codemod jssg run --verbose` | Accepted, but has no effect. |
+| `--no-color` | Now turns off color in all output, not only in dry-run diffs. |
+| `workflow resume --allow-dirty` | Only applies to a run that stopped before it wrote anything. |
+| `--allow-fetch` | {/* A10: T-75 */}Deprecated. Callbacks can't make network requests in 2.0; use an `http()` step. The flag is accepted and does nothing. |
+
+New in 2.0: `workflow status --format json`, `workflow list --format json`, `workflow inspect`, `workflow attach`, `workflow send`, `workflow upgrade`, `--approve` on `workflow run`, `--control stdio`, and `--managed-git` for git steps. See the [CLI reference](/community/cli#codemod-workflow).
+
+### Exit codes
+
+2.0 tells you how a run ended with its exit code. A script that only checked for `0` keeps working, but it can now tell a run that is waiting for someone apart from one that failed.
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The run finished. |
+| `1` | The run failed, or was paused, canceled or rejected. |
+| `2` | The run finished but some files failed, or the workflow called `fail()`. |
+| `3` | {/* A10: T-74 */}The run stopped at an approval and is waiting (`--no-interactive`). On alpha.9 this exits `0`. |
+
+See [Exit codes](/community/workflows/exit-codes) for the details.
+
+### Resuming runs
+
+- Resume a run by its id: `codemod workflow resume --id <id>`. Find the id in the run's output or with `codemod workflow list`.
+- Runs started by the 1.x CLI can't be resumed by 2.0. Finish them with 1.x, or start them again with 2.0.
+- {/* A10: T-74 */}Each run records the CLI version that started it. Resume with the same version when you can: after an upgrade, a finished step whose code the new CLI builds differently runs again.
+- {/* A10: T-74 */}Only one run at a time can work on a repository. Starting a second run on a target while another run is working on it fails with an error that names the other run.
+- Runs are saved under your data directory (`~/Library/Application Support/codemod/runs` on macOS). Set `CODEMOD_RUN_STORE_DIR` to keep them somewhere else.
+
+### Telemetry
+
+The CLI sends anonymous usage data, as 1.x did. Turn it off with `--disable-analytics`, `DISABLE_ANALYTICS=1`, or {/* A10: T-73 */}`DO_NOT_TRACK=1`. See [Telemetry](/community/cli#telemetry).
+
+## If you write codemods
+
+Your `workflow.yaml` package keeps working and you can keep publishing it. When you want TypeScript workflows, tests that run the whole workflow, and step results you can pass around, convert it:
+
+```bash
+npx codemod@alpha workflow upgrade --dry-run
+npx codemod@alpha workflow upgrade
+```
+
+[Upgrade a 1.x package](/community/workflows/tutorials/upgrade-a-1x-package) walks through it, and [Migrate from workflow.yaml](/community/workflows/migrate) shows how each YAML feature maps to TypeScript.
+
+### Metrics are now return values
+
+`codemod:metrics` and `useMetricAtom` were removed. Return what you counted from the callback, and add it up in the workflow, with a reducer when there are many files:
+
+```ts
+// 1.x transform
+import { useMetricAtom } from "codemod:metrics";
+const calls = useMetricAtom("console-calls");
+calls.increment();
+
+// 2.0 workflow
+const { reduced } = await step("Count console calls", forEachFile(
+  "src/**/*.ts",
+  (file) => file.text.split("console.log(").length - 1,
+  (total, count) => total + count,
+  0,
+));
+```
+
+What the workflow returns is the run's output: `Output: …` in the text output and `output` in `workflow status --format json`. See [Build a report that fails CI](/community/workflows/tutorials/reports) and [Metrics](/community/jssg/metrics).
+
+### Fail the run with `fail()`
+
+To fail the whole run and keep a report, call `fail()` from the workflow body. The run ends as `failed`, keeps its output, and the CLI exits `2`:
+
+```ts
+import { fail } from "codemod/workflow";
+
+if (problems.length) fail(`${problems.length} files need a manual fix`, { output: { problems } });
+```
+
+`failStep()` from `codemod/runtime` still exists: it fails the step it is called in, and the error ends the run unless the workflow catches it. Use `fail()` when you want CI to see a report.
+
+### Callbacks don't reach the outside world
+
+{/* A10: T-75 */}
+`forEachFile` callbacks, function steps and reducers only compute: they read the files they are given and return values. They can't call `fetch`, start processes with `child_process`, or set environment variables. Do that with steps the run can show, ask about and replay:
+
+| You did this in a transform or script | Use this step |
+| --- | --- |
+| Ran a command (`child_process`, `execSync`) | `shell` |
+| Called an API (`fetch`) | `http` |
+| Asked an AI model to edit code | `agent` |
+
+`--allow-fetch` and `capabilities: [fetch]` in `codemod.yaml` are deprecated. `--allow-child-process` and `capabilities: [child_process]` no longer give callbacks access to processes.
+
+### `runtime: docker`
+
+{/* A10: T-73 */}
+2.0 doesn't run steps in containers. A `workflow.yaml` step with `runtime: docker` or `runtime: podman` is refused when the workflow runs, and `workflow upgrade` reports it. Run the container yourself from a `shell` step (`docker run …`), or drop the runtime and run the command directly.
+
+### Other changes
+
+- Import modules as `codemod/workflow`, `codemod/ast-grep` and so on. The `codemod:` spelling still works.
+- There is no workflow state: `getState`, `setState` and `$STATE_OUTPUTS` are replaced by passing step results to later steps. See [Values between steps](/community/workflows/reference#values-between-steps).
+- {/* A10: T-73 */}A parameter you declare as `string` arrives as a string, even when it looks like a number (`--param version=19` gives `"19"`). Earlier alphas parsed it as JSON.
+- Add `codemod` as a dev dependency (`npm install --save-dev codemod@alpha`) so your editor knows the workflow types.

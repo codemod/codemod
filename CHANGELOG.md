@@ -2,6 +2,139 @@
 
 All notable changes to this project will be documented in this file.
 
+The 2.0 alphas are tagged `cli-2.0.0-alpha.N` and published to npm under the `alpha` tag. Each entry below is a summary; the full notes, with before/after code for every breaking change, are in the [workflow v2 changelog](https://docs.codemod.com/community/workflows/changelog). Upgrading from 1.x: see [Upgrade from 1.x](https://docs.codemod.com/community/workflows/upgrade-from-1x).
+
+## [cli-2.0.0-alpha.10] - Unreleased
+
+<!-- A10: fill in from the merged PRs and the publish date when alpha.10 ships. -->
+
+### 💥 Breaking Changes
+
+- *(cli)* A run waiting at an approval exits `3` (was `0`)
+- *(workflow)* Callbacks only compute: no `fetch`, `child_process` or environment writes; use `shell()`, `agent()` or `http()`. `--allow-fetch` is deprecated
+- *(cli)* Declared `string` params arrive as strings
+- *(workflow)* `runtime: docker` / `runtime: podman` YAML steps are refused with an error
+
+### 🚀 Features
+
+- *(workflow)* `http()` step
+- *(cli)* `codemod run <1.x package>` upgrades the package on the fly
+- *(cli)* Runs record the CLI version; one run per repository at a time; a paused run keeps its question
+- *(cli)* `DO_NOT_TRACK=1` turns off telemetry
+
+## [cli-2.0.0-alpha.9] - 2026-11-25
+
+### 💥 Breaking Changes
+
+- *(cli)* Rejecting an approval ends the run as `rejected` (exit `1`); resuming takes `--force` (#2525)
+- *(cli)* Ctrl-C pauses a run; `workflow cancel` ends it (#2525)
+- *(cli)* A dry run that reaches an approval exits `1` (#2525)
+
+### 🚀 Features
+
+- *(cli)* `--control stdio`: drive a run from another program over JSON lines (experimental) (#2525)
+- *(cli)* `workflow attach` and `workflow inspect`; `workflow resume --approve <QUESTION_ID>` (#2525)
+- *(cli)* `codemod/protocol`: types for the JSONL events and control commands (#2525)
+
+## [cli-2.0.0-alpha.8] - 2026-11-25
+
+### 🚀 Features
+
+- *(workflow)* `fail()` ends a run as failed and keeps its report as the output (exit `2`)
+- *(cli)* `run_finished` carries the workflow's return value and each step's result
+- *(cli)* `workflow status` and `workflow list` print JSON with `--format json`
+- *(cli)* A run that only reads is no longer stopped by uncommitted changes
+
+## [cli-2.0.0-alpha.7] - 2026-11-25
+
+### 🚀 Features
+
+- *(cli)* An interactive launcher for runs in a terminal
+- *(workflow)* `codemod/assess`: ask an AI decision model typed questions about a file
+- *(cli)* A run where some files failed exits `2`
+- *(cli)* `workflow upgrade` writes plain, typed `forEachFile` callbacks
+
+## [cli-2.0.0-alpha.6] - 2026-11-24
+
+### 🚀 Features
+
+- *(workflow)* Dry runs keep each step's changes in memory and end with the diff of the whole run
+- *(workflow)* `forEachFile` takes a reducer
+- *(workflow)* Simpler `codemod/deps` graph API; git steps moved to `codemod/git`
+
+## [cli-2.0.0-alpha.5] - 2026-11-22
+
+### 💥 Breaking Changes
+
+- *(workflow)* Per-file logic is a `forEachFile` callback; `jssg(...)` and file paths were removed from the workflow API
+
+### 🚀 Features
+
+- *(workflow)* `codemod/deps` reads Python lockfiles
+
+### 🐛 Bug Fixes
+
+- *(cli)* `--version` prints the real version (earlier alphas print `1.18.7`)
+- *(workflow)* Safer file writes, agent cancel on Windows, and other fixes from the engine review
+
+## [cli-2.0.0-alpha.4] - 2026-11-19
+
+### 💥 Breaking Changes
+
+- *(workflow)* Workflow state was removed: steps take values and return results
+- *(workflow)* Shell steps return `{ stdout, stderr, exitCode }`
+- *(jssg)* Transforms return data; `codemod/metrics` was removed (#2489, #2491)
+
+### 🚀 Features
+
+- *(workflow)* Dependency graph step over the target's lockfiles and the npm and crates.io registries
+
+## [cli-2.0.0-alpha.3] - 2026-11-16
+
+### 🚀 Features
+
+- *(workflow)* Step retries, timeouts, `sleep` and `waitForEvent`
+- *(workflow)* A step where some files fail is `partial`, and the run goes on
+- *(cli)* `codemod init` scaffolds `src/workflow.ts` and `tests/workflow.test.ts`
+
+## [cli-2.0.0-alpha.2] - 2026-11-13
+
+### 🚀 Features
+
+- *(workflow)* The v2 engine: workflows are TypeScript (`workflow.ts`), with recorded, resumable steps (#2485)
+- *(workflow)* `forEachFile(selector, callback)` runs per-file callbacks in parallel
+- *(cli)* `workflow.yaml` is translated to TypeScript at run time; `codemod workflow upgrade` writes the translation
+- *(testing)* `codemod/testing` runs whole workflows from a test file; `codemod/host` runs them in Node.js
+
+### 💥 Breaking Changes
+
+- *(cli)* `codemod workflow tui` was removed; `workflow resume` takes `--id` only (`-w`, `-t`, `--tasks_ids` and `--dry-run` were removed)
+
+## [cli-2.0.0-alpha.1] - 2026-11-13
+
+### ⚙️ Miscellaneous Tasks
+
+- Built from `main`, not the v2 branch: the 1.18.7 CLI plus the `sdk-migration` agent skill under a 2.0 version number. Use alpha.2 or later
+
+## [codemod-cli@1.18.7] - 2026-11-09
+
+### 🚀 Features
+
+- *(cli)* Slim the codemod skill to CLI commands, send platform work to the hosted MCP (#2470)
+- *(cli)* Send PostHog person traits for logged-in users (#2466)
+
+### 🐛 Bug Fixes
+
+- *(cli)* Make project MCP launchers and Claude update hooks portable, and fix `npx codemod ai` first run (#2456)
+- *(jssg)* Preserve leading bytes in root commitEdits so no-op codemods don't modify files (#2453)
+- *(jssg-utils)* Correct import lookup, insert, and rename gaps (#2464)
+- *(jssg-utils)* getAllImports typescript edge case (#2444)
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Upgrade ast-grep to 0.45.1 and tree-sitter to 0.26 (#2474)
+- *(bump)* Bump codemod crates version to v1.18.7 (#2478)
+
 ## [codemod-cli@1.18.6] - 2026-10-19
 
 ### 🐛 Bug Fixes

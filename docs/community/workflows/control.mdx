@@ -2,11 +2,14 @@
 title: "Drive codemod from a program"
 sidebarTitle: "Control protocol"
 description: "Run a workflow from a TUI, an agent or a script: read its events as JSON lines, answer its approvals on stdin, attach to runs started elsewhere."
+tag: "Experimental"
 ---
 
-<Warning>
-Experimental in the 2.0 alphas. The messages can still change; `hello.protocol` goes up when a change would break a client.
-</Warning>
+import Experimental from "/snippets/experimental.mdx";
+
+<Experimental />
+
+The messages can still change; `hello.protocol` goes up when a change would break a client.
 
 A program that runs codemod for someone (a terminal UI, a coding agent, a CI wrapper) starts it as a child process with `--format jsonl --control stdio`. The run prints one JSON object per line on stdout, and reads commands, one JSON object per line, on stdin. When the workflow asks something (an `approval(...)` step, a shell command, a coding agent to pick), the run waits for the answer instead of exiting.
 
@@ -95,5 +98,5 @@ It ends when the run stops executing. It only watches: the questions are answere
 
 ## Read runs and workflows
 
-- `workflow list --format json` and `workflow status --id <ID> --format json` print runs; `status` has `question`, the approval a waiting run needs.
+- `workflow list --format json` and `workflow status --id <ID> --format json` print runs; `status` has `question`, the approval a waiting run needs. {/* A10: T-74 */}A run paused while a question was open (`stop`, closed stdin) keeps that `question` too; up to alpha.9 it was `null`.
 - `workflow inspect -w <file|dir> --format json` describes a workflow for a setup form: declared params with their types, doc comments and `@default`s, imports, the capabilities its package asks for, and its `step(...)` calls. See [`workflow inspect`](/community/cli#codemod-workflow).

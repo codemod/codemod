@@ -1,0 +1,146 @@
+---
+title: "Your first workflow"
+sidebarTitle: "Your first workflow"
+description: "Write a workflow.ts with one forEachFile step, preview it with a dry run, then apply it. Five minutes."
+---
+
+You'll write a workflow that replaces `var` with `let` in every JavaScript file of a project, check what it would change with a dry run, then apply it. You need Node.js 22.18 or later and Git.
+
+## 1. Make a project to change
+
+Create a directory `my-app` with two files, and commit them. The CLI won't write to a repository with uncommitted changes, so you can always undo a run with Git.
+
+```js src/cart.js
+var total = 0;
+
+export function add(price) {
+  var tax = price * 0.2;
+  total += price + tax;
+  return total;
+}
+```
+
+```js src/user.js
+export function greet(name) {
+  var message = "Hello, " + name;
+  return message;
+}
+```
+
+```bash
+git init
+git add .
+git commit -m "Before the migration"
+```
+
+## 2. Write the workflow
+
+Create `workflow.ts` next to `src`:
+
+```ts workflow.ts
+import { parse } from "codemod/ast-grep";
+import { forEachFile, step } from "codemod/workflow";
+
+export default async function main() {
+  const result = await step(
+    "Replace var with let",
+    forEachFile("src/**/*.js", (file) => {
+      const root = parse(file).root();
+      const vars = root.findAll({ rule: { pattern: "var $NAME = $VALUE" } });
+      if (vars.length === 0) return;
+      file.write(root.commitEdits(vars.map((node) => node.replace("let" + node.text().slice(3)))));
+      return vars.length;
+    }),
+  );
+  const replaced = result.outputs.reduce((sum, n) => sum + n, 0);
+  console.log(`Replaced ${replaced} declarations in ${result.changes.written.length} files`);
+  return { replaced };
+}
+```
+
+- `forEachFile` runs the callback once for each file that matches `src/**/*.js`.
+- `parse(file)` gives you the file's syntax tree. `findAll` finds every `var` declaration, and `file.write` saves the new text.
+- The callback returns how many declarations it changed. `result.outputs` collects those numbers; `result.changes.written` lists the files that changed.
+- `step(...)` runs the work and saves its result, so a resumed run doesn't do it again.
+- What `main` returns is the run's output.
+
+## 3. Preview with a dry run
+
+```bash
+npx codemod@alpha workflow run -w ./workflow.ts --dry-run
+```
+
+A dry run does everything except write. It ends with the diff it would apply:
+
+```
+▸ Replace var with let
+✓ Replace var with let (0.0s)
+Replaced 3 declarations in 2 files
+
+Dry run: these changes were not written
+--- [before] src/cart.js
++++ [after]  src/cart.js
+@@ -1,7 +1,7 @@
+-var total = 0;
++let total = 0;
+
+ export function add(price) {
+-  var tax = price * 0.2;
++  let tax = price * 0.2;
+   total += price + tax;
+   return total;
+ }
+--- [before] src/user.js
++++ [after]  src/user.js
+@@ -1,4 +1,4 @@
+ export function greet(name) {
+-  var message = "Hello, " + name;
++  let message = "Hello, " + name;
+   return message;
+ }
+Done
+Output: {"replaced":3}
+```
+
+`git status` shows no changes.
+
+## 4. Apply it
+
+```bash
+npx codemod@alpha workflow run -w ./workflow.ts
+git diff --stat
+```
+
+```
+Run 0c75a073-e424-491c-bbf1-ef9c5570645e
+▸ Replace var with let
+✓ Replace var with let (0.0s)
+Replaced 3 declarations in 2 files
+Done
+Output: {"replaced":3}
+```
+
+```
+ src/cart.js | 4 ++--
+ src/user.js | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+```
+
+Each run is saved under its id. `npx codemod@alpha workflow list` shows it, and `workflow status --id <id>` shows its steps.
+
+Commit and run it again: it finds nothing left to change and prints `Replaced 0 declarations in 0 files`.
+
+<Note>
+On alpha.9 a dry run also prints a `Run <id>` line, though a dry run isn't saved. Ignore it.
+</Note>
+
+## Next
+
+<CardGroup cols={2}>
+  <Card title="Approvals and CI" icon="circle-check" href="/community/workflows/tutorials/approvals-and-ci">
+    Ask before a step, and run the same workflow unattended.
+  </Card>
+  <Card title="Build your first workflow" icon="graduation-cap" href="/community/workflows/getting-started">
+    The longer tutorial: ast-grep rules, a shell step, and tests.
+  </Card>
+</CardGroup>

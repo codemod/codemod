@@ -63,7 +63,7 @@ For logged-in sessions only, the CLI may also send a separate PostHog `$set` wit
 Scarf), deduped locally, and skipped when you opt out.
 
 Disable all of this for a single invocation with `--disable-analytics`, or by setting
-`DISABLE_ANALYTICS=true` / `DISABLE_ANALYTICS=1` in the environment. The flag works on explicit
+`DISABLE_ANALYTICS=true` / `DISABLE_ANALYTICS=1` {/* A10: T-73 */}(or `DO_NOT_TRACK=1`) in the environment. The flag works on explicit
 commands and on implicit package runs such as `npx codemod @org/package --disable-analytics`.
 
 More detail: [Telemetry compliance](https://codemod.com/telemetry-compliance).
@@ -394,7 +394,7 @@ A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>
 <ResponseField name="--approve" type="boolean">
   Give every approval the workflow asks for (`approval(...)` steps, manual nodes in `workflow.yaml`, pull requests). Without it, a run nobody can answer for pauses at the first approval and can be continued with `workflow resume --approve`.
 
-  `--approve` does not grant capabilities: those come from `--allow-fs`, `--allow-fetch` and `--allow-child-process`, or from your answer when the package asks.
+  `--approve` does not grant capabilities: those come from `--allow-fs` and `--allow-child-process`, or from your answer when the package asks. {/* A10: T-75 */}`--allow-fetch` is deprecated: callbacks can't make network requests; use an `http` step.
 
   ```bash
   npx codemod workflow run -w ./my-codemod --approve --no-interactive
@@ -414,9 +414,12 @@ A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>
   The decision model `assess()` uses, e.g. `openai/gpt-6-luna`; a bare model name is System One's (`systemone/jev-latest`). It comes before the model saved in the launcher (`"decisionModel"` in the CLI's `config.json`) and the `DECISION_PROVIDER` / `DECISION_MODEL` variables; a `decision_model` in the package's `codemod.yaml`, or a model named in the `assess()` call, still comes first.
 </ResponseField>
 
-**The launcher.** In an interactive terminal, `workflow run`, `codemod <package>` and `workflow resume` open a terminal UI. A new run starts on a setup screen (target, dry run, params, capabilities, coding agent, decision model; your agent and model are saved for next time); then the screen shows the run's steps, logs and diffs, with approvals answered in place (`y` approves, `n` rejects, which ends the run, and `l` stops it there to resume later). After a dry run, `a` runs it for real. It does not open with `--no-interactive`, `--format jsonl`, in CI, when input or output is piped, or with `CODEMOD_LAUNCHER=0`; those runs print the plain output.
+**Two ways to run.** In a terminal, the CLI prints progress lines and asks before approvals, shell commands and pull requests. A run is unattended when you pass `--no-interactive`, and also when there is no terminal to ask on (in CI, or with input piped in): it never asks, and its exit code says how it ended. When the CLI does ask, pressing Enter answers no: every question is about running or publishing something. See [Running in CI and from agents](/community/workflows/ci-and-agents).
 
-A run is unattended when you pass `--no-interactive`, and also when there is no terminal to ask on (in CI, or with input piped in). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something.
+{/* A10: launcher. The 2.0 alphas open a terminal UI (the launcher) in an interactive terminal; 2.0 stable won't have it. Drop this note when it's gone. */}
+<Note>
+The 2.0 alphas open a terminal UI in an interactive terminal. Set `CODEMOD_LAUNCHER=0` (or pass `--no-interactive`) to get the plain prompts and output described here.
+</Note>
 
 <ResponseField name="--managed-git" type="boolean">
   Let `branch`, `commit` and `pullRequest` steps (or `branch_name`, `commit` and `pull_request` in `workflow.yaml`) change the repository. Without it, those steps are recorded as skipped.
@@ -459,7 +462,7 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 </ResponseField>
 
 <ResponseField name="--param <KEY=VALUE>" type="string">
-  Pass key=value pairs to your workflow. Parameters reach the workflow as `params` (and the jssg transforms of a `workflow.yaml` as `options.params`).
+  Pass key=value pairs to your workflow. Parameters reach the workflow as `params` (and the jssg transforms of a `workflow.yaml` as `options.params`). {/* A10: T-73 */}A parameter the workflow declares as `string` arrives as a string; `number` and `boolean` ones are parsed. See [Parameters](/community/workflows/reference#parameters).
 
   ```bash
   # Single parameter:
@@ -512,10 +515,13 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 
 | Code | Meaning |
 | ---- | ------- |
-| `0` | The run finished, or is waiting for an approval. |
+| `0` | The run finished. |
 | `1` | The run failed, was paused (Ctrl-C), canceled, or rejected at an approval. Also: a dry run reached an approval nobody could answer (a dry run is not saved, so it cannot wait; pass `--approve`, or drive it with `--control stdio`). |
 | `2` | The run finished, but some files failed. The other files' changes were written (in a dry run, nothing was), and the output ends with how many failed. A resumed run counts the files that failed in steps it reused. Also: the workflow called [`fail()`](/community/workflows/reference#failing-a-run-with-a-report) (the run is `failed`, and keeps its output). |
+| `3` | {/* A10: T-74 */}The run is waiting at an approval nobody could answer (`--no-interactive`, CI). Up to alpha.9 this exited `0`. |
 | other | The workflow called `fail(message, { exitCode })` with that code (1 to 125). |
+
+See [Exit codes](/community/workflows/exit-codes) for how to read them in a script.
 
 **`workflow resume`**
 

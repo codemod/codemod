@@ -108,7 +108,8 @@ const config = await step("Read config", async () => JSON.parse(await readFile("
 ```
 
 - Write the function inline, so the build can extract it. Outside variables arrive as frozen copies, with the same rules as [forEachFile callbacks](#using-outside-variables).
-- Inside, `Date`, `Math.random`, `fetch`, `fs` and `child_process` are real, as far as the run allows (`--allow-fs`, `--allow-fetch`, `--allow-child-process`).
+- Inside, `Date` and `Math.random` are real, and `fs` is too when the run allows it (`--allow-fs`).
+- {/* A10: T-75 */}Function steps and callbacks only compute. They can't call `fetch`, start processes with `child_process`, or set environment variables: use a [`shell`](#shell-commands), [`http`](#http-requests) or [`agent`](#coding-agents) step, which the run shows, asks about and replays.
 - The result must be JSON. On resume, a finished function step is replayed from its record; if you changed it, it runs again.
 
 ## `forEachFile(selector?, callback)`
@@ -534,6 +535,11 @@ A dry run keeps what each step would change in memory, and later steps read that
 
 If a `codemod()` step resolves a preview-only registry package during an apply run, the step fails before starting that package. Rerun the workflow with `--dry-run` to preview it. This also applies to packages called by nested workflows.
 
+### HTTP requests
+
+{/* A10: T-75: add the http() signature, options and an example when it lands. */}
+`http` makes an HTTP request as a step of its own. Its response is recorded with the step, so a resumed run doesn't send it again. Callbacks can't call `fetch`.
+
 ### Coding agents
 
 Some adapters check the installed agent’s help output to detect supported options. That check has its own timeout and falls back to defaults if the help command does not finish.
@@ -774,6 +780,9 @@ A step's result is saved with the step, so it comes back when the step is replay
 
 The default export receives `{ params, target, dryRun }`. Pass parameters with `--param key=value`.
 
+{/* A10: T-73 */}
+Declare them in a `Params` interface, with `WorkflowContext<Params>`, and each value arrives as its declared type: a `string` parameter stays a string (`--param version=19` gives `"19"`), and a `number` or `boolean` one is parsed, with an error when it doesn't parse. `codemod workflow inspect` lists the declared parameters. Up to alpha.9, every value that parsed as JSON arrived parsed, whatever its declared type.
+
 ```ts
 export default async function main({ params }: { params: { team?: string } }) {
   const team = params.team ?? "all";
@@ -784,8 +793,8 @@ export default async function main({ params }: { params: { team?: string } }) {
 
 `await step(approval("Ship it?"))` asks before continuing.
 
-- In the launcher, `y` approves, `n` rejects, and `l` stops the run there to resume later. In a plain interactive terminal, answering **No** stops the run there to resume later.
-- With `--no-interactive`, the run stops at the approval, waiting, and exits successfully. Continue it with `codemod workflow resume --id <run-id> --approve <question-id>` to give that approval only (the run stops at the next one), or `--approve` alone to give it and every later one. Pass `--approve` to `workflow run` to approve everything up front.
+- In an interactive terminal, the run asks. Answering **No** stops the run there to resume later.
+- With `--no-interactive`, the run stops at the approval, waiting, and {/* A10: T-74 */}exits with code `3` (up to alpha.9, `0`). Continue it with `codemod workflow resume --id <run-id> --approve <question-id>` to give that approval only (the run stops at the next one), or `--approve` alone to give it and every later one. Pass `--approve` to `workflow run` to approve everything up front.
 - A dry run is not saved, so it cannot wait: one that reaches an approval stops, exits with code 1 and says to pass `--approve`.
 - With [`--control stdio`](/community/workflows/control), the run asks the program driving it and waits for the answer, dry runs included.
 
@@ -840,6 +849,11 @@ npx codemod workflow send <event> --id <run-id>
 ```
 
 Runs are stored under your data directory (`~/Library/Application Support/codemod/runs` on macOS). Set `CODEMOD_RUN_STORE_DIR` to store them elsewhere, or `CODEMOD_RUN_STORE=memory` to keep nothing. A dry run is never saved.
+
+{/* A10: T-74 */}
+- **One run per repository at a time.** A run can't start on a target another run is working on.
+- **Each run records the CLI version that started it.** Resume with the same version when you can: a newer CLI can build a callback differently, and a finished step whose callback changed runs again.
+- **A paused run keeps its question.** `workflow status` shows the approval it stopped at, also after Ctrl-C or a closed control channel.
 
 When a run ends early, the steps still running finish first and are recorded, so a resume does not repeat them:
 

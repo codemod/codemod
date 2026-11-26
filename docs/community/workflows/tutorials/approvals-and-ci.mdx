@@ -1,0 +1,181 @@
+---
+title: "Approvals and CI"
+sidebarTitle: "Approvals and CI"
+description: "Add an approval to a workflow, answer it in a terminal, then run the same workflow unattended: --no-interactive, exit codes, resume, and --control stdio."
+---
+
+You'll add an `approval(...)` step between two edits, answer it in a terminal, then run the same workflow the way CI and coding agents do. You need Node.js 22.18 or later and Git.
+
+## 1. A workflow that asks
+
+In a new directory `my-app`, create a file to change and the workflow:
+
+```js src/user.js
+export function greet(name) {
+  var message = "Hello, " + name;
+  var punctuation = "!";
+  return message + punctuation;
+}
+```
+
+```ts workflow.ts
+import { approval, astGrep, forEachFile, step } from "codemod/workflow";
+
+export default async function main() {
+  const lets = await step(
+    "Replace var with let",
+    forEachFile("src/**/*.js", astGrep({
+      id: "no-var",
+      language: "javascript",
+      rule: { pattern: "var $A = $B" },
+      fix: "let $A = $B;",
+    })),
+  );
+  await step(approval(`Also turn ${lets.matches} let declarations into const?`));
+  const consts = await step(
+    "Replace let with const",
+    forEachFile("src/**/*.js", astGrep({
+      id: "prefer-const",
+      language: "javascript",
+      rule: { pattern: "let $A = $B" },
+      fix: "const $A = $B;",
+    })),
+  );
+  return { lets: lets.matches, consts: consts.matches };
+}
+```
+
+`astGrep` applies an [ast-grep rule](https://ast-grep.github.io/reference/yaml.html) to each file. `approval(message)` waits for a yes or no before the run goes on.
+
+```bash
+git init && git add . && git commit -m "Before the migration"
+```
+
+## 2. Answer in a terminal
+
+```bash
+npx codemod@alpha workflow run -w workflow.ts
+```
+
+The run asks, and goes on when you answer `y`:
+
+```
+✓ Replace var with let (0.0s)
+▸ approval: Also turn 2 let declarations into const?
+? Also turn 2 let declarations into const? Yes
+✓ Replace let with const (0.0s)
+Done
+Output: {"lets":2,"consts":2}
+```
+
+Answering `n` stops the run at the approval, to resume later. Undo the change before the next part: `git checkout -- src`.
+
+## 3. Run it unattended
+
+In CI there is nobody to answer. Pass `--no-interactive`: the run goes as far as it can, saves itself at the approval, and exits.
+
+```bash
+npx codemod@alpha workflow run -w workflow.ts --no-interactive
+echo "exit=$?"
+```
+
+```
+▸ Replace var with let
+✓ Replace var with let (0.0s)
+▸ approval: Also turn 2 let declarations into const?
+‖ approval: Also turn 2 let declarations into const?: waiting for approval
+
+Waiting for approval: Also turn 2 let declarations into const?
+  Approve it and go on with: codemod workflow resume --id 5cfec96f-4e58-436f-9c3b-e8925a6e132b --approve approval:1
+exit=0
+```
+
+{/* A10: T-74 */}
+<Note>
+From alpha.10 this exits `3`, not `0`, so a CI job can tell a waiting run from a finished one. See [Exit codes](/community/workflows/exit-codes).
+</Note>
+
+The first step's change is written. Ask the run what it waits for:
+
+```bash
+npx codemod@alpha workflow status --id <id> --format json
+```
+
+```json
+{"status":"awaiting-approval","question":"approval:1","awaiting":"Also turn 2 let declarations into const?", ...}
+```
+
+`approval:1` is the question's id: the approval in step 1. It stays the same however often you resume.
+
+## 4. Approve and continue
+
+```bash
+npx codemod@alpha workflow resume --id <id> --approve approval:1 --no-interactive
+```
+
+```
+Resuming run 5cfec96f-4e58-436f-9c3b-e8925a6e132b
+↺ Replace var with let (done earlier)
+▸ approval: Also turn 2 let declarations into const?
+✓ approval: Also turn 2 let declarations into const? (0.0s)
+▸ Replace let with const
+✓ Replace let with const (0.0s)
+Done
+Output: {"lets":2,"consts":2}
+```
+
+The first step isn't run again (`↺ … (done earlier)`). Both `var`s are now `const`.
+
+To approve everything up front, pass `--approve` to `workflow run`. To see past approvals in a dry run, pass `--dry-run --approve`: a dry run is not saved, so one that reaches an approval without `--approve` exits `1`.
+
+## 5. Answer from a program
+
+A coding agent or a wrapper script can answer questions while the run waits, in one process. Start the run with `--format jsonl --control stdio`, read events from its stdout, and write commands to its stdin. Save this as `drive.mjs` next to `my-app`:
+
+```js drive.mjs
+// node drive.mjs approve|reject -- <codemod command...>
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+
+const [answer, , cmd, ...args] = process.argv.slice(2);
+const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "inherit"] });
+
+for await (const line of createInterface({ input: child.stdout })) {
+  const event = JSON.parse(line);
+  if (event.event === "question") {
+    console.log(`question ${event.id}: ${event.message}`);
+    child.stdin.write(JSON.stringify({ command: answer, question_id: event.id }) + "\n");
+  }
+  if (event.event === "run_finished") {
+    console.log(`run_finished ${event.status} ${JSON.stringify(event.output)}`);
+    child.stdin.end();
+  }
+}
+child.on("exit", (code) => console.log(`exit=${code}`));
+```
+
+```bash
+git checkout -- src
+node ../drive.mjs approve -- npx codemod@alpha workflow run -w workflow.ts --format jsonl --control stdio
+```
+
+```
+question approval:1: Also turn 2 let declarations into const?
+run_finished succeeded {"lets":2,"consts":2}
+exit=0
+```
+
+Answer `reject` instead and the run ends as `rejected`, with exit code `1`. The first step's change stays; a rejected run can't be resumed without `--force`.
+
+```
+question approval:1: Also turn 2 let declarations into const?
+run_finished rejected null
+exit=1
+```
+
+Closing stdin while a question is open pauses the run, as Ctrl-C does. Resume it later with `workflow resume --id <id> --approve approval:1`.
+
+## Next
+
+- [Running in CI and from agents](/community/workflows/ci-and-agents): everything that changes without a person at the terminal.
+- [Drive codemod from a program](/community/workflows/control): every event and command of `--control stdio`.

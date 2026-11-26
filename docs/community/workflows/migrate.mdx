@@ -6,6 +6,8 @@ description: "workflow.yaml codemods keep running unchanged. Convert one to work
 
 Codemods written as `workflow.yaml` keep working: the CLI translates them into the equivalent [`workflow.ts`](/community/workflows/reference) when they run. You don't need to change anything to keep using or publishing them.
 
+For everything else that changed since 1.x (commands, flags, exit codes, metrics, callbacks), see [Upgrade from 1.x](/community/workflows/upgrade-from-1x). To try a conversion end to end, follow [Upgrade a 1.x package](/community/workflows/tutorials/upgrade-a-1x-package).
+
 Convert a codemod to `workflow.ts` when you want what TypeScript workflows add: inline `forEachFile` callbacks, ordinary control flow instead of `depends_on` and `if:`, step results you can use in later steps, and [tests that run the whole workflow](/community/workflows/testing).
 
 ## Convert a codemod
@@ -154,7 +156,7 @@ Most codemods run exactly as before. These are the differences, for both `workfl
 - **Modules are imported as `codemod/workflow`, `codemod/ast-grep`, and so on.** `upgrade` writes the new spelling. Imports of the older `codemod:workflow` spelling, in workflows and in transforms, keep working and name the same modules.
 - **Semantic analysis is on by default for `jssg` steps.** Transforms get file-scope semantic analysis, as they do with `codemod jssg run` and `codemod jssg test`, so `definition()` and `references()` work in workflows too. Before, they returned nothing in workflows. Turn it off with `semantic_analysis: none` (YAML) or `semanticAnalysis: "none"` (TypeScript).
 - **A step `if:` that fails to evaluate is reported.** The step is still skipped, as before, and the run's log says why.
-- **`runtime: docker` and `runtime: podman` are not supported.** Their steps run directly on the machine.
+- **`runtime: docker` and `runtime: podman` are not supported.** {/* A10: T-73 */}A step that sets one is refused when the run reaches it. Up to alpha.9 those steps ran directly on the machine, without a warning. Run the container from a `shell` step instead.
 - **Shell state output requires a POSIX shell.** On Windows, a translated workflow that needs `$STATE_OUTPUTS` fails before any step runs. Run it on a POSIX system, or port the workflow so steps pass results directly.
 - **`state.schema` is accepted but not checked.**
 - **Runs are resumed by id:** `codemod workflow resume --id <run-id>`. A manual node waits as an approval step; resume it with `--approve`. Runs started with an earlier CLI version can't be resumed.

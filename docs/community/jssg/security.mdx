@@ -285,6 +285,11 @@ codemod workflow run --allow-fs --allow-fetch --allow-child-process -w path/to/w
   CLI flags take precedence over `codemod.yaml`. This is useful for testing or one-off runs where you trust the codemod source. `--allow-fs` swaps the sandboxed fs for the unrestricted variant — if your codemod only needs files inside the target directory, you don't need to pass it.
 </Info>
 
+{/* A10: T-75 */}
+<Note>
+In a workflow (`codemod workflow run`, `codemod <package>`), transforms and `forEachFile` callbacks can't make network requests or start processes, whatever the flags say. `--allow-fetch` is deprecated there. Use a `shell`, `http` or `agent` step instead; see [Upgrade from 1.x](/community/workflows/upgrade-from-1x#callbacks-dont-reach-the-outside-world).
+</Note>
+
 ## Best practices
 
 <AccordionGroup>
