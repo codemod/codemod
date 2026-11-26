@@ -151,3 +151,35 @@ export default async function main() {
         json!(["list_orders", "load_orders"])
     );
 }
+
+#[test]
+fn crawling_sources_stops_at_a_sanitizer_the_value_was_reassigned_through() {
+    let h = Harness::new();
+    h.write(
+        "shop/search.py",
+        "def search(request, cursor):\n    q = request.GET[\"q\"]\n    q = clean(q)\n    cursor.execute(q)\n",
+    );
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, dataflow, crawl } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "shop/search.py" }, async (file) => {
+    const root = parse(file).root();
+    const sink = root.find("cursor.execute($Q)").getMatch("Q");
+    const cleaned = root.findAll("clean($$$)");
+    const reached = await crawl(dataflow("python").sources, [sink], { stopAt: cleaned });
+    return [...reached.keys()].map((node) => node.text());
+  }));
+  return found.outputs.flat();
+}
+"#,
+        Value::Null,
+    );
+    let reached = output(&report).unwrap();
+    assert!(reached.as_array().unwrap().contains(&json!("clean(q)")));
+    assert!(!reached
+        .as_array()
+        .unwrap()
+        .contains(&json!("request.GET[\"q\"]")));
+}
