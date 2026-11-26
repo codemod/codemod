@@ -82,6 +82,9 @@ enum Commands {
     /// Show current authentication status
     Whoami(commands::whoami::Command),
 
+    /// Manage CLI telemetry preferences
+    Telemetry(commands::telemetry::Command),
+
     /// Publish a workflow
     Publish(commands::publish::Command),
 
@@ -194,6 +197,7 @@ fn is_package_name(arg: &str) -> bool {
         "login",
         "logout",
         "whoami",
+        "telemetry",
         "publish",
         "manifest",
         "search",
@@ -477,18 +481,32 @@ async fn run_cli() -> Result<()> {
     let default_log_filter = if cli.verbose { "debug" } else { "error" };
     env_logger::init_from_env(env_logger::Env::default().default_filter_or(default_log_filter));
 
-    if effective_disable_analytics(&cli) {
+    let invocation_opt_out = effective_disable_analytics(&cli)
+        || matches!(std::env::var("DISABLE_ANALYTICS").as_deref(), Ok("true" | "1"));
+    if let Some(Commands::Telemetry(args)) = &cli.command {
+        return commands::telemetry::handler(args, invocation_opt_out);
+    }
+    if !matches!(&cli.command, Some(Commands::Mcp(_)))
+        && !matches!(
+            &cli.command,
+            Some(Commands::Workflow(WorkflowArgs { command: WorkflowCommands::Harness(_) }))
+        )
+    {
+        commands::telemetry::maybe_print_notice();
+    }
+
+    let storage = (!invocation_opt_out).then(TokenStorage::new).transpose()?;
+    let saved_opt_out = storage
+        .as_ref()
+        .map(TokenStorage::telemetry_disabled)
+        .transpose()?
+        .unwrap_or(false);
+    if invocation_opt_out || saved_opt_out {
         std::env::set_var("DISABLE_ANALYTICS", "true");
     }
 
     let mut person_traits_task = None;
-    let telemetry_sender: TelemetrySenderMutex = if std::env::var("DISABLE_ANALYTICS")
-        == Ok("true".to_string())
-        || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
-    {
-        Arc::new(Box::new(NullSender {}))
-    } else {
-        let storage = TokenStorage::new()?;
+    let telemetry_sender: TelemetrySenderMutex = if let Some(storage) = storage.filter(|_| !saved_opt_out) {
         let config = storage.load_config()?;
 
         let auth = storage.get_auth_for_registry(&config.default_registry)?;
@@ -544,6 +562,8 @@ async fn run_cli() -> Result<()> {
             (None, Some(scarf)) => Arc::new(Box::new(scarf)),
             (None, None) => Arc::new(Box::new(NullSender {})),
         }
+    } else {
+        Arc::new(Box::new(NullSender {}))
     };
 
     telemetry_sender.initialize_panic_telemetry().await;
@@ -620,6 +640,7 @@ async fn dispatch_command(cli: &Cli, telemetry_sender: TelemetrySenderMutex) -> 
         Some(Commands::Whoami(args)) => {
             commands::whoami::handler(args).await?;
         }
+        Some(Commands::Telemetry(_)) => unreachable!("handled before initializing telemetry"),
         Some(Commands::Publish(args)) => {
             commands::publish::handler(args, telemetry_sender.clone()).await?;
         }

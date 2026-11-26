@@ -3,7 +3,8 @@ use chrono::Utc;
 use clap::Args;
 
 use crate::ascii_art::print_ascii_art;
-use crate::auth::{OidcClient, TokenStorage};
+use crate::auth::{status_json, OidcClient, TokenStorage};
+use crate::commands::output::TextOrJson;
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -13,6 +14,9 @@ pub struct Command {
     /// Show detailed information including token scopes
     #[arg(long)]
     detailed: bool,
+    /// Output format
+    #[arg(long, default_value = "text")]
+    format: TextOrJson,
 }
 
 pub async fn handler(args: &Command) -> Result<()> {
@@ -33,10 +37,29 @@ pub async fn handler(args: &Command) -> Result<()> {
 
     let oidc_client = OidcClient::new(registry_url.clone(), registry_config)?;
 
-    let auth_file = oidc_client.get_auth_status()?;
+    let auth_file = oidc_client
+        .get_auth_status()?
+        .filter(|auth| oidc_client.is_token_valid(&auth.tokens));
+
+    if args.format == TextOrJson::Json {
+        let mut status = status_json(&registry_url, auth_file.as_ref());
+        if let Some(auth) = auth_file.as_ref().filter(|_| args.detailed) {
+            status["token"] = serde_json::json!({
+                "type": auth.tokens.token_type,
+                "scopes": auth.tokens.scope,
+                "expires_at": auth.tokens.expires_at,
+                "has_refresh_token": auth.tokens.refresh_token.is_some(),
+            });
+        }
+        println!("{status}");
+        if auth_file.is_none() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     match auth_file {
-        Some(stored_auth) if oidc_client.is_token_valid(&stored_auth.tokens) => {
+        Some(stored_auth) => {
             print_ascii_art();
             println!("✓ Logged in to: {registry_url}");
             println!("Username: {}", stored_auth.user.username);
@@ -79,7 +102,7 @@ pub async fn handler(args: &Command) -> Result<()> {
                 );
             }
         }
-        _ => {
+        None => {
             println!("✗ Not logged in to {registry_url}");
             println!(
                 "\nRun '{}' to authenticate",

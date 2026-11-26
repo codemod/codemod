@@ -27,6 +27,7 @@ use crate::utils::package_validation::DEFAULT_WORKFLOW_FILE_NAME;
 use crate::utils::skill_layout::expected_authored_skill_file;
 
 use crate::auth::TokenStorage;
+use crate::commands::output::TextOrJson;
 use crate::commands::TelemetrySenderExt;
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use codemod_telemetry::send_event::BaseEvent;
@@ -39,17 +40,20 @@ pub struct Command {
     /// Release channel to update
     #[arg(long, default_value = "latest")]
     tag: String,
+
+    /// Output format
+    #[arg(long, default_value = "text")]
+    format: TextOrJson,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, serde::Serialize, Debug)]
 struct PublishResponse {
     success: bool,
     package: PublishedPackage,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, serde::Serialize, Debug)]
 struct PublishedPackage {
-    #[allow(dead_code)]
     id: String,
     name: String,
     version: String,
@@ -121,25 +125,37 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         )
         .await;
 
-    println!(
-        "{} Package published successfully!",
-        style("✓").green().bold()
-    );
-    println!(
-        "  {} {}",
-        style("Package:").dim(),
-        style(format_package_name(&response.package)).cyan()
-    );
-    println!(
-        "  {} {}",
-        style("Version:").dim(),
-        style(&response.package.version).cyan()
-    );
-    println!(
-        "  {} {}",
-        style("Published:").dim(),
-        style(&response.package.published_at).cyan()
-    );
+    if args.format == TextOrJson::Json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "success": true,
+                "registry": registry_url,
+                "tag": args.tag,
+                "package": response.package,
+            })
+        );
+    } else {
+        println!(
+            "{} Package published successfully!",
+            style("✓").green().bold()
+        );
+        println!(
+            "  {} {}",
+            style("Package:").dim(),
+            style(format_package_name(&response.package)).cyan()
+        );
+        println!(
+            "  {} {}",
+            style("Version:").dim(),
+            style(&response.package.version).cyan()
+        );
+        println!(
+            "  {} {}",
+            style("Published:").dim(),
+            style(&response.package.published_at).cyan()
+        );
+    }
 
     // Clean up temporary bundle
     if let Err(e) = fs::remove_file(&bundle_path) {
