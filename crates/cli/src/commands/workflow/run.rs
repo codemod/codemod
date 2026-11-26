@@ -257,7 +257,7 @@ fn upgrade_hint(workflow_dir: &Path) {
         format!("codemod workflow upgrade {}", dir.display())
     };
     eprintln!(
-        "\n{} workflow.yaml runs as before. To move this codemod to workflow.ts, run `{command}`.",
+        "\n{} to move this codemod to workflow.ts, run `{command}`.",
         style("Tip:").cyan().bold()
     );
 }

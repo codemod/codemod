@@ -86,7 +86,25 @@ fn parse_and_validate(path: &Path) -> Result<Workflow, String> {
     let bundle = path.parent().unwrap_or(Path::new("."));
     butterflow_core::utils::validate_workflow(&workflow, bundle)
         .map_err(|e| format!("{}: {e}", path.display()))?;
+    unsupported_runtime(&workflow).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(workflow)
+}
+
+/// Steps that ran in a container (`runtime: docker` or `podman`) on 1.x
+/// are refused rather than run on this machine.
+fn unsupported_runtime(workflow: &Workflow) -> Result<(), String> {
+    match workflow.nodes.iter().find_map(|node| {
+        node.runtime
+            .as_ref()
+            .filter(|r| r.r#type != butterflow_models::RuntimeType::Direct)
+            .map(|r| (node, r.r#type))
+    }) {
+        Some((node, runtime)) => Err(format!(
+            "step '{}' uses runtime: {runtime}, which codemod 2.0 doesn't support yet. Run it with `npx codemod@1 …` (the same command on codemod 1.x).",
+            node.name
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Translate an already-parsed workflow.

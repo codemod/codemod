@@ -163,6 +163,40 @@ fn a_dry_run_changes_nothing() {
 }
 
 #[test]
+fn a_container_runtime_is_refused_before_anything_runs() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: where
+    name: Where
+    runtime:
+      type: docker
+      image: alpine
+    steps:
+      - name: Touch
+        run: touch ran.txt
+"#,
+    );
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("step 'Where' uses runtime: docker")
+            && text(&output).contains("npx codemod@1"),
+        "{}",
+        text(&output)
+    );
+    assert!(!fixture.target.path().join("ran.txt").exists());
+
+    let package = fixture.package.path().to_str().unwrap();
+    let output = fixture.codemod(&["workflow", "upgrade", package]);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(!fixture.package.path().join("workflow.ts").exists());
+}
+
+#[test]
 fn a_param_declared_as_string_arrives_as_text() {
     let fixture = Fixture::new();
     fixture.package_file(

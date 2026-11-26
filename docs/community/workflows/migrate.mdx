@@ -154,7 +154,7 @@ Most codemods run exactly as before. These are the differences, for both `workfl
 - **Modules are imported as `codemod/workflow`, `codemod/ast-grep`, and so on.** `upgrade` writes the new spelling. Imports of the older `codemod:workflow` spelling, in workflows and in transforms, keep working and name the same modules.
 - **Semantic analysis is on by default for `jssg` steps.** Transforms get file-scope semantic analysis, as they do with `codemod jssg run` and `codemod jssg test`, so `definition()` and `references()` work in workflows too. Before, they returned nothing in workflows. Turn it off with `semantic_analysis: none` (YAML) or `semanticAnalysis: "none"` (TypeScript).
 - **A step `if:` that fails to evaluate is reported.** The step is still skipped, as before, and the run's log says why.
-- **`runtime: docker` and `runtime: podman` are not supported.** Their steps run directly on the machine.
+- **`runtime: docker` and `runtime: podman` are not supported yet.** `workflow run` and `workflow upgrade` refuse a workflow that uses them, before anything runs. Keep running it with `npx codemod@1`.
 - **Shell state output requires a POSIX shell.** On Windows, a translated workflow that needs `$STATE_OUTPUTS` fails before any step runs. Run it on a POSIX system, or port the workflow so steps pass results directly.
 - **`state.schema` is accepted but not checked.**
 - **Runs are resumed by id:** `codemod workflow resume --id <run-id>`. A manual node waits as an approval step; resume it with `--approve`. Runs started with an earlier CLI version can't be resumed.
