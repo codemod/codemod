@@ -130,6 +130,13 @@ impl Worker {
     pub async fn new<R: ModuleResolver + 'static>(
         options: WorkerOptions<R>,
     ) -> Result<Self, ExecutionError> {
+        Self::new_inner(options, false).await
+    }
+
+    async fn new_inner<R: ModuleResolver + 'static>(
+        options: WorkerOptions<R>,
+        enable_test_timers: bool,
+    ) -> Result<Self, ExecutionError> {
         let runtime = AsyncRuntime::new()
             .map_err(|e| init_error(format!("Failed to create AsyncRuntime: {e}")))?;
         let interrupt = Arc::clone(&options.cancel);
@@ -140,10 +147,11 @@ impl Worker {
         let fetch = options.capabilities.contains(&LlrtSupportedModules::Fetch);
         // Workers run workflow callbacks. Withhold the native bindings instead of
         // trying to revoke them after the loader has exposed their exports.
-        let mut module_builder = LlrtModuleBuilder::build_with_exclusions(&[
-            LlrtSupportedModules::Process,
-            LlrtSupportedModules::Timers,
-        ]);
+        let mut excluded = vec![LlrtSupportedModules::Process];
+        if !enable_test_timers {
+            excluded.push(LlrtSupportedModules::Timers);
+        }
+        let mut module_builder = LlrtModuleBuilder::build_with_exclusions(&excluded);
         for capability in &options.capabilities {
             match capability {
                 LlrtSupportedModules::Fetch => {
@@ -371,7 +379,7 @@ mod tests {
     use crate::sandbox::resolvers::InMemoryResolver;
 
     async fn worker() -> Worker {
-        Worker::new(WorkerOptions {
+        let options = WorkerOptions {
             capabilities: HashSet::new(),
             resolver: Arc::new(InMemoryResolver::new()),
             modules: Vec::new(),
@@ -385,9 +393,9 @@ mod tests {
             semantic_provider: None,
             pending_files: None,
             legacy_fs: false,
-        })
-        .await
-        .unwrap()
+        };
+        // Only this test harness installs LLRT timers to exercise shutdown.
+        Worker::new_inner(options, true).await.unwrap()
     }
 
     async fn eval<T>(worker: &Worker, code: &'static str) -> T
