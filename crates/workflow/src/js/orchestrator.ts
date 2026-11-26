@@ -817,7 +817,15 @@ function ruleList(value: unknown): Json[] {
 
 /** Tasks that wait: their step records when the wait began. */
 const WAITS = new Set(["sleep", "waitForEvent"]);
-const SIDE_EFFECTS = new Set(["shell", "agent", "branch", "commit", "pullRequest", "http", "codemod"]);
+const SIDE_EFFECTS = new Set([
+  "shell",
+  "agent",
+  "branch",
+  "commit",
+  "pullRequest",
+  "http",
+  "codemod",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
@@ -970,7 +978,9 @@ export function createRuntime(host: Host) {
       replaceable.delete(entry);
       const others = recorded.get(entry.key);
       others?.splice(others.indexOf(entry), 1);
-      return entry.status === "skipped" ? { position: entry.position, entry } : { position: entry.position };
+      return entry.status === "skipped"
+        ? { position: entry.position, entry }
+        : { position: entry.position };
     }
     return { position: nextPosition++ };
   }
