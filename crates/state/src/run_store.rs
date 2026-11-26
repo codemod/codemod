@@ -1467,17 +1467,6 @@ mod tests {
             Err(StoreError::NotFound(_))
         ));
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let run = store.run_dir("a").unwrap();
-            assert_eq!(run.metadata().unwrap().permissions().mode() & 0o077, 0);
-            for name in ["run.json", "steps.jsonl", "journal.jsonl"] {
-                let metadata = run.join(name).metadata().unwrap();
-                assert_eq!(metadata.permissions().mode() & 0o077, 0, "{name}");
-            }
-        }
-
         assert!(!store.is_held("a").unwrap());
         let lease = store.acquire("a").unwrap().expect("nothing holds the run");
         assert!(store.is_held("a").unwrap());
@@ -1524,7 +1513,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = LocalStore::new(dir.path());
         store.put_run(&record("a", 1)).unwrap();
-        let run_dir = store.run_dir("a");
+        let run_dir = store.run_dir("a").unwrap();
         LocalStore::write_json(
             &run_dir.join("steps.json"),
             &[step(0, StepStatus::Failed), step(2, StepStatus::Partial)],
@@ -1726,6 +1715,17 @@ mod tests {
     #[test]
     fn local_store_meets_the_contract() {
         let dir = tempfile::TempDir::new().unwrap();
-        contract(&LocalStore::new(dir.path()));
+        let store = LocalStore::new(dir.path());
+        contract(&store);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let run = store.run_dir("a").unwrap();
+            assert_eq!(run.metadata().unwrap().permissions().mode() & 0o077, 0);
+            for name in ["run.json", "steps.jsonl", "journal.jsonl"] {
+                let metadata = run.join(name).metadata().unwrap();
+                assert_eq!(metadata.permissions().mode() & 0o077, 0, "{name}");
+            }
+        }
     }
 }
