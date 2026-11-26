@@ -565,6 +565,17 @@ impl Engine {
         host: &str,
         options: ResumeOptions,
     ) -> Result<Execution, EngineError> {
+        // Match the start/cancel lock order and read the current record
+        // under the run lease: cancel could have changed the original.
+        let target_lease = lock_target(self.store.as_ref(), &record.target, &record.id)?;
+        let lease = self
+            .store
+            .acquire(&record.id)?
+            .ok_or_else(|| EngineError::Busy(record.id.clone()))?;
+        record = self
+            .store
+            .get_run(&record.id)?
+            .ok_or_else(|| EngineError::NotFound(record.id.clone()))?;
         // Step keys identify callbacks the way the host that ran them does.
         if let Some(started) = record.settings.host.as_deref().filter(|h| *h != host) {
             return Err(EngineError::OtherHost {
@@ -600,13 +611,6 @@ impl Engine {
                 });
             }
         }
-        // The lease comes first: while another process executes the run, its
-        // record and cancel request are not ours to change.
-        let lease = self
-            .store
-            .acquire(&record.id)?
-            .ok_or_else(|| EngineError::Busy(record.id.clone()))?;
-        let target_lease = lock_target(self.store.as_ref(), &record.target, &record.id)?;
         record
             .reopen(options.force)
             .map_err(|refused| match refused {
@@ -737,13 +741,31 @@ pub enum Canceled {
 
 /// Ask a run to stop, whichever process executes it.
 pub fn cancel_run(store: &dyn RunStore, run_id: &str) -> Result<Canceled, EngineError> {
+    let record = store
+        .get_run(run_id)?
+        .ok_or_else(|| EngineError::NotFound(run_id.to_string()))?;
+    // An executor takes this lock before publishing a new run (and before
+    // taking its run lease on resume). Don't steal its run lease during
+    // that window. A different run on this target cannot write our record.
+    let _target = match store.lock_target(&record.target, run_id)? {
+        Ok(lease) => Some(lease),
+        Err(holder) if holder.run_id == run_id => {
+            let record = store.get_run(run_id)?.unwrap_or(record);
+            if record.status.resumable() != butterflow_state::run_store::Resumable::Yes {
+                return Ok(Canceled::AlreadyFinished(record.status));
+            }
+            store.request_cancel(run_id)?;
+            return Ok(Canceled::Requested);
+        }
+        Err(_) => None,
+    };
+    let Some(_lease) = store.acquire(run_id)? else {
+        store.request_cancel(run_id)?;
+        return Ok(Canceled::Requested);
+    };
     let mut record = store
         .get_run(run_id)?
         .ok_or_else(|| EngineError::NotFound(run_id.to_string()))?;
-    if store.is_held(run_id)? {
-        store.request_cancel(run_id)?;
-        return Ok(Canceled::Requested);
-    }
     if record.status.resumable() != butterflow_state::run_store::Resumable::Yes {
         return Ok(Canceled::AlreadyFinished(record.status));
     }

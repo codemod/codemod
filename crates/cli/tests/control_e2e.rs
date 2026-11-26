@@ -519,7 +519,7 @@ export default async function main() {
     edit_store(&fixture, &format!("{id}/run.json"), |text| {
         text.replace(&version, "0.0.1-older")
     });
-    edit_store(&fixture, &format!("{id}/steps.json"), |text| {
+    edit_store(&fixture, &format!("{id}/steps.jsonl"), |text| {
         regex::Regex::new("cb_[0-9a-f]{16}")
             .unwrap()
             .replace_all(&text, "cb_0000000000000000")

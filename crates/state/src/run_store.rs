@@ -685,7 +685,7 @@ impl RunStore for MemoryStore {
 
 // ----------------------------------------------------------------- local ---
 
-/// JSON files on disk: `<root>/<run_id>/run.json` and `steps.json`, a
+/// JSON files on disk: `<root>/<run_id>/run.json` and `steps.jsonl`, a
 /// `cancel` marker, a `lock` file its executor keeps locked, one file per
 /// undelivered event under `events/`, and the event journal,
 /// `journal.jsonl`.
@@ -745,11 +745,62 @@ impl LocalStore {
             path: path.to_path_buf(),
             source,
         })?;
-        // Named after the process: `workflow cancel` may write the record of a
-        // run another process has just picked up.
-        let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
-        fs::write(&temporary, text).map_err(io)?;
-        fs::rename(&temporary, path).map_err(io)
+        Self::write_atomic(path, text.as_bytes())
+    }
+
+    fn write_atomic(path: &Path, bytes: &[u8]) -> StoreResult<()> {
+        use std::io::Write as _;
+        let io = |source| StoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        };
+        static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temporary = path.with_extension(format!("{}-{n}.tmp", std::process::id()));
+        let mut file = fs::File::create(&temporary).map_err(io)?;
+        file.write_all(bytes).map_err(io)?;
+        file.sync_all().map_err(io)?;
+        drop(file);
+        fs::rename(&temporary, path).map_err(io)?;
+        Self::sync_parent(path).map_err(io)
+    }
+
+    fn sync_parent(path: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() {
+            fs::File::open(parent)?.sync_all()?;
+        }
+        #[cfg(not(unix))]
+        let _ = path;
+        Ok(())
+    }
+
+    /// A writer killed mid-append may leave an uncommitted final line, with
+    /// no newline. Drop that tail before starting another append. The common
+    /// case reads only the last block, not the history.
+    fn trim_step_tail(file: &mut fs::File) -> std::io::Result<()> {
+        use std::io::{Read as _, Seek as _, SeekFrom};
+        let len = file.metadata()?.len();
+        let mut end = len;
+        let mut buf = [0; 4096];
+        while end > 0 {
+            let start = end.saturating_sub(buf.len() as u64);
+            let block = &mut buf[..(end - start) as usize];
+            file.seek(SeekFrom::Start(start))?;
+            file.read_exact(block)?;
+            if let Some(last) = block.iter().rposition(|&byte| byte == b'\n') {
+                let committed = start + last as u64 + 1;
+                if committed != len {
+                    file.set_len(committed)?;
+                }
+                return Ok(());
+            }
+            end = start;
+        }
+        if len != 0 {
+            file.set_len(0)?;
+        }
+        Ok(())
     }
 
     /// The run's lock file, opened; `None` when the run does not exist.
@@ -821,10 +872,6 @@ impl LocalStore {
         path: PathBuf,
         holder: TargetHolder,
     ) -> StoreResult<Result<Box<dyn RunLease>, TargetHolder>> {
-        let io = |source| StoreError::Io {
-            path: path.clone(),
-            source,
-        };
         let current: Option<TargetHolder> = fs::read_to_string(&path)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok());
@@ -833,8 +880,7 @@ impl LocalStore {
                 return Ok(Err(current));
             }
         }
-        let text = serde_json::to_string(&holder).unwrap_or_default();
-        fs::write(&path, text).map_err(io)?;
+        Self::write_json(&path, &holder)?;
         Ok(Ok(Box::new(PidLease { path })))
     }
 }
@@ -914,15 +960,73 @@ impl RunStore for LocalStore {
     }
 
     fn put_step(&self, run_id: &str, step: &StepRecord) -> StoreResult<()> {
+        use std::io::Write as _;
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let path = self.run_dir(run_id).join("steps.json");
-        let mut steps: Vec<StepRecord> = Self::read_json(&path)?.unwrap_or_default();
-        upsert(&mut steps, step);
-        Self::write_json(&path, &steps)
+        let path = self.run_dir(run_id).join("steps.jsonl");
+        let io = |source| StoreError::Io {
+            path: path.clone(),
+            source,
+        };
+        let mut line = serde_json::to_vec(step).map_err(|source| StoreError::Json {
+            path: path.clone(),
+            source,
+        })?;
+        line.push(b'\n');
+        // Only the executor holding the run writes steps. Status readers
+        // may run concurrently; a newline is the commit boundary.
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&path)
+            .map_err(io)?;
+        Self::trim_step_tail(&mut file).map_err(io)?;
+        let first = file.metadata().map_err(io)?.len() == 0;
+        file.write_all(&line).map_err(io)?;
+        file.sync_all().map_err(io)?;
+        if first {
+            Self::sync_parent(&path).map_err(io)?;
+        }
+        Ok(())
     }
 
     fn load_steps(&self, run_id: &str) -> StoreResult<Vec<StepRecord>> {
-        Ok(Self::read_json(&self.run_dir(run_id).join("steps.json"))?.unwrap_or_default())
+        use std::io::BufRead as _;
+        let dir = self.run_dir(run_id);
+        let legacy: Option<Vec<StepRecord>> = Self::read_json(&dir.join("steps.json"))?;
+        let mut steps: std::collections::BTreeMap<_, _> = legacy
+            .unwrap_or_default()
+            .into_iter()
+            .map(|step| (step.position, step))
+            .collect();
+        let path = dir.join("steps.jsonl");
+        let io = |source| StoreError::Io {
+            path: path.clone(),
+            source,
+        };
+        let file = match fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(steps.into_values().collect());
+            }
+            Err(source) => return Err(io(source)),
+        };
+        let mut reader = std::io::BufReader::new(file);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            reader.read_until(b'\n', &mut line).map_err(io)?;
+            if line.last() != Some(&b'\n') {
+                break;
+            }
+            let step: StepRecord =
+                serde_json::from_slice(&line).map_err(|source| StoreError::Json {
+                    path: path.clone(),
+                    source,
+                })?;
+            steps.insert(step.position, step);
+        }
+        Ok(steps.into_values().collect())
     }
 
     fn acquire(&self, run_id: &str) -> StoreResult<Option<Box<dyn RunLease>>> {
@@ -1006,7 +1110,7 @@ impl RunStore for LocalStore {
             return Err(StoreError::NotFound(run_id.to_string()));
         }
         let path = dir.join("cancel");
-        fs::write(&path, b"").map_err(|source| StoreError::Io { path, source })
+        Self::write_atomic(&path, b"")
     }
 
     fn cancel_requested(&self, run_id: &str) -> StoreResult<bool> {
@@ -1016,7 +1120,7 @@ impl RunStore for LocalStore {
     fn clear_cancel(&self, run_id: &str) -> StoreResult<()> {
         let path = self.run_dir(run_id).join("cancel");
         match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
+            Ok(()) => Self::sync_parent(&path).map_err(|source| StoreError::Io { path, source }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(source) => Err(StoreError::Io { path, source }),
         }
@@ -1282,6 +1386,46 @@ mod tests {
         run.reopen(false).unwrap();
         run.conclude(Outcome::Succeeded(Value::from(1)));
         assert_eq!(run.reopen(true), Err(NotResumable::AlreadySucceeded));
+    }
+
+    #[test]
+    fn local_store_recovers_an_interrupted_write_and_keeps_legacy_steps() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let store = LocalStore::new(dir.path());
+        store.put_run(&record("a", 1)).unwrap();
+        let run_dir = store.run_dir("a");
+        LocalStore::write_json(
+            &run_dir.join("steps.json"),
+            &[step(0, StepStatus::Failed), step(2, StepStatus::Partial)],
+        )
+        .unwrap();
+        store.put_step("a", &step(0, StepStatus::Succeeded)).unwrap();
+
+        // Bytes left by a writer that stops halfway through a record, or
+        // before publishing a new run.json, must not replace saved data.
+        let mut log = fs::OpenOptions::new()
+            .append(true)
+            .open(run_dir.join("steps.jsonl"))
+            .unwrap();
+        log.write_all(b"{\"position\":1,\"label\":\"unfinished")
+            .unwrap();
+        log.sync_all().unwrap();
+        drop(log);
+        fs::write(run_dir.join("run.123-0.tmp"), b"{\"status\":").unwrap();
+        let reopened = LocalStore::new(dir.path());
+        assert_eq!(reopened.get_run("a").unwrap().unwrap().id, "a");
+        assert_eq!(reopened.load_steps("a").unwrap(), [
+            step(0, StepStatus::Succeeded),
+            step(2, StepStatus::Partial),
+        ]);
+
+        reopened.put_step("a", &step(1, StepStatus::Succeeded)).unwrap();
+        assert_eq!(reopened.load_steps("a").unwrap(), [
+            step(0, StepStatus::Succeeded),
+            step(1, StepStatus::Succeeded),
+            step(2, StepStatus::Partial),
+        ]);
     }
 
     #[test]
