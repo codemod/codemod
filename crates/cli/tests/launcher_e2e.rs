@@ -371,8 +371,8 @@ fn without_the_opt_in_a_terminal_run_uses_plain_prompts() {
     // Never switched to the alternate screen.
     let raw = String::from_utf8_lossy(&session.output.lock().unwrap()).into_owned();
     assert!(!raw.contains("\x1b[?1049h"), "{raw}");
-    let (success, output) = session.finish();
-    assert!(success, "{output}");
+    let (code, output) = session.finish();
+    assert_eq!(code, 0, "{output}");
     assert_eq!(
         fs::read_to_string(target.path().join("src/a.ts")).unwrap(),
         "let a = 1;\n"
@@ -390,8 +390,8 @@ fn ci_never_prompts_even_on_a_terminal() {
     let ci = [("CI", "1")];
 
     let session = Session::start_env(home.path(), store.path(), cwd.path(), &[], None, &ci);
-    let (success, output) = session.finish();
-    assert!(!success, "{output}");
+    let (code, output) = session.finish();
+    assert_eq!(code, 1, "{output}");
     assert!(output.contains("Next steps"), "{output}");
     assert!(!output.contains("What would you like to do?"), "{output}");
 
@@ -422,8 +422,8 @@ fn ci_never_prompts_even_on_a_terminal() {
         None,
         &ci,
     );
-    let (success, output) = session.finish();
-    assert!(success, "{output}");
+    let (code, output) = session.finish();
+    assert_eq!(code, 0, "{output}");
     assert!(output.contains("ran first"), "{output}");
     assert!(!output.contains("Select a workflow"), "{output}");
 
