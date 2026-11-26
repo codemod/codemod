@@ -131,6 +131,13 @@ impl<'js> SgRootRjs<'js> {
         Ok(document_source(&self.inner.grep).into_owned())
     }
 
+    /// Internal JSSG compatibility diagnostic for a recovered target tree.
+    #[cfg(feature = "native")]
+    #[qjs(rename = "_jssgHasSyntaxErrors")]
+    pub fn jssg_has_syntax_errors(&self) -> bool {
+        self.inner.grep.root().get_inner_node().has_error()
+    }
+
     /// Write content to this file.
     ///
     /// This method is only valid for files obtained via `definition()` or `references()`.
@@ -966,6 +973,7 @@ impl<'js> SgNodeRjs<'js> {
         ctx: Ctx<'js>,
         options: Opt<rquickjs::Object<'js>>,
     ) -> Result<Value<'js>> {
+        crate::sandbox::runtime_module::experimental(&ctx, "SgNode.definition()");
         #[cfg(not(feature = "native"))]
         {
             let _ = options;
@@ -1101,6 +1109,7 @@ impl<'js> SgNodeRjs<'js> {
     /// In accurate mode, this searches the entire workspace.
     #[qjs(rename = "references")]
     pub fn references(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        crate::sandbox::runtime_module::experimental(&ctx, "SgNode.references()");
         #[cfg(not(feature = "native"))]
         {
             return rquickjs::Array::new(ctx.clone())?.into_js(&ctx);

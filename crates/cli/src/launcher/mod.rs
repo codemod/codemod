@@ -44,6 +44,9 @@ pub use setup::SetupChoices;
 use setup::{SetupAction, SetupInput, SetupState};
 use view::{Action, RunView, StepState};
 
+pub(crate) const HELP: &str =
+    "Set CODEMOD_LAUNCHER=1 for the full-screen workflow launcher (experimental).";
+
 /// Whether runs with these flags show the launcher.
 pub fn enabled(flags: &RunFlags) -> bool {
     opted_in(std::env::var("CODEMOD_LAUNCHER").ok().as_deref())
@@ -155,6 +158,7 @@ pub async fn setup(plan: Plan<'_>) -> Result<Option<SetupChoices>> {
     }));
     state.fetching_models = true;
 
+    eprintln!("{}", crate::experimental_notice("workflow launcher"));
     let mut screen = Screen::enter()?;
     let mut keys = EventStream::new();
     let mut key_error = None;
@@ -335,6 +339,7 @@ pub(crate) async fn run_resume(
     title: String,
     settings: ExecSettings,
 ) -> Result<ExecOutcome> {
+    eprintln!("{}", crate::experimental_notice("workflow launcher"));
     let (outcome, _) =
         run_on_screen(&title, Kind::Resume(run_id.to_string()), &settings, true).await?;
     Ok(outcome)
@@ -371,8 +376,8 @@ async fn run_on_screen(
     ));
     let (engine, summary) = crate::workflow_exec::engine_with(settings, events, interaction);
     let stop = engine.stop_handle();
-    let allow_dirty = settings.allow_dirty;
-    let force = settings.force;
+    let options = settings.resume_options();
+    let allow_dirty = options.allow_dirty;
 
     let workflow = match &kind {
         Kind::Start { workflow, .. } => {
@@ -400,10 +405,7 @@ async fn run_on_screen(
                 test: None,
                 check_uncommitted: !allow_dirty,
             }),
-            Kind::Resume(run_id) => engine.resume_with(
-                &run_id,
-                codemod_workflow::ResumeOptions { allow_dirty, force },
-            ),
+            Kind::Resume(run_id) => engine.resume_with(&run_id, options),
         };
         let _ = done_sender.send(report);
     });
@@ -419,7 +421,7 @@ async fn run_on_screen(
     let signal = crate::workflow_exec::stop_requested();
     tokio::pin!(signal);
     let mut signaled = false;
-    let mut report: Option<Result<RunReport, String>> = None;
+    let mut report: Option<Result<RunReport>> = None;
     let mut messages_open = true;
 
     let action = loop {
@@ -441,12 +443,12 @@ async fn run_on_screen(
                     receive(&mut view, &summary, message);
                 }
                 let result = result
-                    .map_err(|_| "the workflow engine stopped unexpectedly".to_string())
-                    .and_then(|r| r.map_err(|error| error.to_string()));
+                    .map_err(|_| anyhow!("the workflow engine stopped unexpectedly"))
+                    .and_then(|r| r.map_err(Into::into));
                 if let Err(error) = &result {
                     view.phase = view::Phase::Finished {
                         status: RunStatus::Failed,
-                        error: Some(error.clone()),
+                        error: Some(error.to_string()),
                     };
                     view.can_apply = false;
                 }
@@ -492,16 +494,19 @@ async fn run_on_screen(
     };
     drop(keys);
     drop(screen);
+    for notice in &view.experimental_notices {
+        eprintln!("{notice}");
+    }
 
     // Wait for the engine if the screen closed first.
     let result = match report {
         Some(result) => result,
         None => done
             .await
-            .map_err(|_| "the workflow engine stopped unexpectedly".to_string())
-            .and_then(|r| r.map_err(|error| error.to_string())),
+            .map_err(|_| anyhow!("the workflow engine stopped unexpectedly"))
+            .and_then(|r| r.map_err(Into::into)),
     };
-    let report = result.map_err(|error| anyhow!(error))?;
+    let report = result?;
     let outcome = ExecOutcome {
         report,
         summary,
@@ -557,6 +562,7 @@ fn print_record(view: &RunView) {
         let symbol = match step.state {
             StepState::Succeeded => style("✓").green(),
             StepState::Replayed => style("↺").dim(),
+            StepState::Skipped => style("↷").dim(),
             StepState::Partial => style("◐").yellow(),
             StepState::Failed => style("✗").red(),
             StepState::Canceled => style("■").yellow(),

@@ -6,6 +6,12 @@
 //!
 //! Header values given as `{ env: "NAME" }` are read from the environment
 //! when the request is sent; the run records the name, never the value.
+//!
+//! Before a request is sent, the run asks ([`Approval::HttpRequest`]),
+//! naming the URL and the environment variables the headers read: the
+//! workflow chooses both, so a request can carry anything the run can read
+//! to any host. An unattended run refuses without `--approve`, as it does a
+//! `shell()` step.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
@@ -15,7 +21,8 @@ use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use super::{block_on, TaskContext, TaskError, TaskOutcome, TaskResult};
+use super::{block_on, not_approved, TaskContext, TaskError, TaskOutcome, TaskResult};
+use crate::interaction::{Approval, Decision};
 
 /// The most of a response body a step keeps: the run records it.
 const MAX_BODY: usize = 10 * 1024 * 1024;
@@ -56,7 +63,11 @@ impl Request {
 
 pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     let method = request.method();
-    if task.run.dry_run && request.dry_run.as_deref() != Some("perform") {
+    // A preview-only package's dry run is approved as a whole: it sends
+    // nothing, whatever the step asks.
+    if task.run.dry_run
+        && (task.run.services.skip_shard_steps || request.dry_run.as_deref() != Some("perform"))
+    {
         task.log(format!(
             "skipped: would request {method} {} (http steps do not run in a dry run unless they set dryRun: \"perform\")",
             request.url
@@ -72,6 +83,34 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             "http steps request http:// or https:// URLs, not '{}'",
             request.url
         )));
+    }
+
+    // Before any variable is read.
+    let approval = Approval::HttpRequest {
+        method: method.to_string(),
+        url: url.to_string(),
+        env: request
+            .headers
+            .values()
+            .filter_map(|value| match value {
+                HeaderValue::Env { env } => Some(env.clone()),
+                HeaderValue::Text(_) => None,
+            })
+            .collect(),
+    };
+    match task.approve(&approval) {
+        Decision::Approved => {}
+        Decision::Denied => {
+            return Err(TaskError::Failed(not_approved(
+                task,
+                &format!("the request {method} {url}"),
+            )))
+        }
+        Decision::Deferred => {
+            return Err(TaskError::AwaitingApproval(format!(
+                "approve sending: {method} {url}"
+            )))
+        }
     }
 
     let mut headers = reqwest::header::HeaderMap::new();
@@ -91,7 +130,24 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         headers.insert(header_name, header_value);
     }
 
+    // Headers read from the environment stay with the host that was
+    // approved: a redirect to another origin is the result, not followed.
+    let carries_env = request
+        .headers
+        .values()
+        .any(|value| matches!(value, HeaderValue::Env { .. }));
+    let origin = url.origin();
+    let redirects = reqwest::redirect::Policy::custom(move |attempt| {
+        if carries_env && attempt.url().origin() != origin {
+            attempt.stop()
+        } else if attempt.previous().len() > 10 {
+            attempt.error("too many redirects")
+        } else {
+            attempt.follow()
+        }
+    });
     let client = reqwest::Client::builder()
+        .redirect(redirects)
         .user_agent(concat!("codemod-workflow/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| TaskError::Failed(format!("cannot make an HTTP client: {e}")))?;

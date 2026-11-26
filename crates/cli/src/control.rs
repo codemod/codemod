@@ -43,8 +43,15 @@ pub struct Approvals {
 }
 
 impl Approvals {
+    /// `ids` holds question ids (`shell:2`) and scopes (`shell`, `http`,
+    /// `agent`, `pull-request`, `approval`): `--approve=shell,http`.
     pub fn gives(&self, id: &str, approval: &Approval) -> bool {
-        approval.given_by_approve_all() && (self.all || self.ids.iter().any(|given| given == id))
+        approval.given_by_approve_all()
+            && (self.all
+                || self
+                    .ids
+                    .iter()
+                    .any(|given| given == id || Some(given.as_str()) == approval.scope()))
     }
 }
 
@@ -353,8 +360,10 @@ fn reply_to(asked: &Asked, answer: &Value) -> Result<Reply, String> {
                 Value::String(text) if text == "reject" => Decision::Denied,
                 Value::Bool(false) => Decision::Denied,
                 Value::String(text) if text == "later" => {
-                    if !matches!(approval, Approval::Manual { .. }) {
-                        return Err("only an approval(...) step can wait until later".into());
+                    if approval.unanswered() != Decision::Deferred {
+                        return Err(
+                            "only an approval(...) or interrupted step can wait until later".into(),
+                        );
                     }
                     Decision::Deferred
                 }
@@ -417,11 +426,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn approvals_are_given_by_id_or_by_kind() {
+        let shell = Approval::ShellCommand {
+            command: "ls".into(),
+        };
+        let http = Approval::HttpRequest {
+            method: "GET".into(),
+            url: "https://example.com/".into(),
+            env: Vec::new(),
+        };
+        let some = Approvals {
+            all: false,
+            ids: vec!["shell".into(), "http:4".into()],
+        };
+        assert!(some.gives("shell:1", &shell));
+        assert!(some.gives("http:4", &http));
+        assert!(!some.gives("http:5", &http));
+        // Never capabilities, whatever is named.
+        let capabilities = Approval::Capabilities {
+            modules: vec!["fs".into()],
+        };
+        let named = Approvals {
+            all: true,
+            ids: vec!["capabilities:1".into()],
+        };
+        assert!(!named.gives("capabilities:1", &capabilities));
+    }
+
     fn ask(id: &str) -> Ask {
         Ask {
             id: id.into(),
             step: Some("1".into()),
             stop: None,
+            trusted: false,
         }
     }
 
@@ -666,6 +704,9 @@ mod protocol_samples {
                     host: Some("quickjs".into()),
                 },
             },
+            Event::Experimental {
+                api: "http()".into(),
+            },
             Event::StepStarted {
                 at: StepAt::top(0),
                 label: "Replace".into(),
@@ -813,7 +854,8 @@ mod protocol_samples {
         ];
         for event in &events {
             match event {
-                Event::RunStarted { .. }
+                Event::Experimental { .. }
+                | Event::RunStarted { .. }
                 | Event::StepStarted { .. }
                 | Event::StepReplayed { .. }
                 | Event::StepProgress { .. }

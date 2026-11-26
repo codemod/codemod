@@ -103,8 +103,8 @@ impl OidcClient {
 
         if let Err(e) = open::that(auth_url.as_str()) {
             warn!("Failed to open browser automatically: {e}");
-            println!("Please open the following URL in your browser:");
-            println!("{auth_url}");
+            eprintln!("Please open the following URL in your browser:");
+            eprintln!("{auth_url}");
         }
 
         // Wait for callback or server completion
@@ -139,7 +139,6 @@ impl OidcClient {
                         self.storage.save_auth(&stored_auth)?;
 
                         info!("✓ Successfully logged in as {}", stored_auth.user.username);
-                        println!("✓ Successfully logged in as {}", stored_auth.user.username);
 
                         Ok(stored_auth)
                     }

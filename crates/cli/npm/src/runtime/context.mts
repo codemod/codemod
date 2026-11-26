@@ -8,7 +8,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import type { NativeRun } from "./addon.mts";
+import type { NativeFiles, NativeRun } from "./addon.mts";
 import type { Runtime } from "./orchestrator.mts";
 
 /** What a step or `forEachFile` callback sees and leaves behind. */
@@ -30,6 +30,7 @@ export interface RunScope {
   /** What `Date`, `performance.now` and `Math.random` give in the body. */
   body?: BodyClock;
   step?: StepScope;
+  files?: NativeFiles;
 }
 
 /**
@@ -53,6 +54,10 @@ const KEY = Symbol.for("codemod.workflow.context");
 const shared = globalThis as { [KEY]?: AsyncLocalStorage<RunScope> };
 
 export const context: AsyncLocalStorage<RunScope> = (shared[KEY] ??= new AsyncLocalStorage());
+
+export function experimental(api: string): void {
+  context.getStore()?.run.experimental(api);
+}
 
 /** The run the calling code belongs to; throws outside a run. */
 export function current(what: string): RunScope {

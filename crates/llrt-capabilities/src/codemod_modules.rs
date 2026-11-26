@@ -7,7 +7,7 @@
 
 /// The codemod runtime modules, by name.
 pub const CODEMOD_MODULES: &[&str] = &[
-    "ast-grep", "workflow", "deps", "git", "assess", "runtime", "llm",
+    "files", "ast-grep", "workflow", "deps", "git", "assess", "runtime", "llm",
 ];
 
 /// The module a specifier names (`"ast-grep"` for both `codemod/ast-grep` and

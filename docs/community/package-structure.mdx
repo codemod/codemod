@@ -3,6 +3,8 @@ title: "Package Structure"
 sidebarTitle: "Package Structure"
 ---
 
+import Experimental from "/snippets/experimental.mdx";
+
 A **Codemod package** is a directory containing everything needed to run an automated code transformation: metadata, workflow definition, transformation scripts, and test fixtures.
 
 Packages are fully portable—run them locally, in CI, or share them via the [Codemod Registry](https://go.codemod.com/registry).
@@ -75,6 +77,10 @@ Codemod packages use a workflow-first model and can be:
 - **Workflow-only**: the workflow has executable steps and no `installSkill` steps.
 - **Skill-only**: the workflow has `installSkill` steps and no executable steps, with authored skill files under `agents/skill/<skill-name>/`.
 - **Workflow + skill**: the workflow has both executable and `installSkill` steps, with authored skill files under `agents/skill/<skill-name>/`.
+
+### Package skills
+
+<Experimental />
 
 Use `codemod init` to scaffold a workflow package or `codemod init --skill` for a skill package. To ship both, add an `installSkill` step and the skill files to a workflow package yourself. Skill-only scaffolds cannot also set `--project-type`.
 

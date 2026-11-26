@@ -73,7 +73,11 @@ pub(crate) fn install(
         "releases",
         Function::new(
             ctx.clone(),
-            Async(move |ecosystem: String, names: String| {
+            Async(move |ctx: Ctx<'_>, ecosystem: String, names: String| {
+                codemod_sandbox::sandbox::runtime_module::experimental(
+                    &ctx,
+                    "codemod/deps.registry",
+                );
                 let registry = registry.clone();
                 let cancel = Arc::clone(&cancel);
                 async move {
@@ -93,6 +97,15 @@ pub(crate) fn install(
             }),
         )?,
     )?;
-    host.set("semver", Function::new(ctx.clone(), semver)?)?;
+    host.set(
+        "semver",
+        Function::new(
+            ctx.clone(),
+            |ctx: Ctx<'_>, op: String, ecosystem: String, a: String, b: String| {
+                codemod_sandbox::sandbox::runtime_module::experimental(&ctx, "codemod/deps.semver");
+                semver(op, ecosystem, a, b)
+            },
+        )?,
+    )?;
     ctx.globals().set("__dependencyHost", host)
 }

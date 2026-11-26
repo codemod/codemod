@@ -5,8 +5,8 @@
 //! `codemod-internal:dependencies` (`registry`, `semver`, the dependency
 //! graph) backed by the run's package registry.
 //!
-//! Callbacks are pure: they change the current file through the file API
-//! and read the target through a read-only `fs`; the network, processes,
+//! Callbacks change the target through the `file` and `files` APIs;
+//! the network, processes,
 //! other writes, environment changes and timers fail with the declared step
 //! to use instead (`http()`, `shell()`, `sleep()`). Capabilities granted to
 //! the run (`--allow-*`, codemod.yaml) no longer reach them.
@@ -37,11 +37,6 @@ pub(crate) const ASSESS_MODULE: &str = "codemod-internal:assess";
 /// The globals of steps' and callbacks' isolates (`js/callback_globals.ts`).
 const CALLBACK_GLOBALS_MODULE: &str = "codemod-internal:callback-globals";
 
-/// What a write through `fs` in a callback says; `{name}` is the function
-/// called. The same words as `unavailable("fs.…", "callback")` in
-/// `js/orchestrator.ts`, which the Node.js host throws.
-pub(crate) const READ_ONLY_FS: &str = "{name} is not available in workflow callbacks (function steps, forEachFile callbacks and reducers): change the current file with file.write(), file.rename() or file.delete(), and anything else with a step such as shell() or agent()";
-
 /// What the YAML translation's callbacks run jssg transforms with.
 pub(crate) const JSSG_COMPAT_MODULE: &str = "codemod-internal:jssg-compat";
 
@@ -67,6 +62,7 @@ pub(crate) struct StepIsolates {
 impl StepIsolates {
     pub fn new(task: &TaskContext<'_>) -> Result<Self, String> {
         let resolver = OxcResolver::new(task.run.bundle_dir.clone(), None)
+            .and_then(|resolver| resolver.data_within(&task.run.package_dir))
             .map_err(|e| format!("cannot resolve imports from the workflow directory: {e}"))?;
         Ok(Self {
             resolver: Arc::new(resolver),
@@ -84,7 +80,7 @@ impl StepIsolates {
         default_language: Option<String>,
     ) -> WorkerOptions<OxcResolver> {
         let run = task.run;
-        let events = Arc::clone(&run.events);
+        let notices = Arc::clone(run);
         let at = task.at();
         WorkerOptions {
             // Callbacks get no unsafe LLRT module, whatever the run grants.
@@ -93,13 +89,13 @@ impl StepIsolates {
             modules: isolate_modules(),
             codemod_modules: isolate_codemod_modules(self.v1),
             llm_request_handler: None,
-            runtime_event_callback: Some(Arc::new(move |event: RuntimeEvent| {
-                if event.kind != RuntimeEventKind::SetCurrentUnit {
-                    events.emit(Event::StepLog {
-                        at: at.clone(),
-                        line: butterflow_core::jssg_runner::format_runtime_event(&event),
-                    });
-                }
+            runtime_event_callback: Some(Arc::new(move |event: RuntimeEvent| match event.kind {
+                RuntimeEventKind::Experimental(api) => notices.experimental(api),
+                RuntimeEventKind::SetCurrentUnit => {}
+                _ => notices.events.emit(Event::StepLog {
+                    at: at.clone(),
+                    line: butterflow_core::jssg_runner::format_runtime_event(&event),
+                }),
             })),
             cancel: Arc::clone(&task.cancel),
             dry_run: run.dry_run,
@@ -112,7 +108,7 @@ impl StepIsolates {
                 .overlay
                 .as_ref()
                 .map(super::overlay::Overlay::pending_files),
-            read_only_fs: Some(READ_ONLY_FS.to_string()),
+            legacy_fs: self.v1,
         }
     }
 }
@@ -208,7 +204,7 @@ pub(crate) fn ignore_capabilities(
     }
     if !requested.is_empty() {
         task.log(format!(
-            "capabilities ({}) are no longer given to callbacks: they read the target through a read-only fs; use step(http(...)) for the network and step(shell(...)) for commands",
+            "capabilities ({}) are no longer given to callbacks: use codemod/files for the target, step(http(...)) for the network and step(shell(...)) for commands",
             requested.join(", ")
         ));
     }
@@ -277,6 +273,7 @@ pub(crate) async fn start(
         .map_err(|e| format!("could not start the step's runtime: {e}"))?;
     async_with!(worker.context => |ctx| {
         deps_host::install(&ctx, registry, cancel).map_err(|e| e.to_string())?;
+        crate::assess::install_notice(&ctx).map_err(|e| e.to_string())?;
         if let Some(handle) = assess {
             crate::assess::install(&ctx, handle.run, handle.position, handle.cancel)
                 .map_err(|e| e.to_string())?;

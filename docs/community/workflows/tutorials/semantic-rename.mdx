@@ -2,7 +2,12 @@
 title: "Rename a function across a barrel"
 sidebarTitle: "Semantic rename"
 description: "Use definition() in a forEachFile callback to rename one exported function everywhere it is used, through a barrel file and a tsconfig path alias, without touching a look-alike."
+tag: "Experimental"
 ---
+
+import Experimental from "/snippets/experimental.mdx";
+
+<Experimental />
 
 A text search for a function's name also finds other functions with the same name. With semantic analysis, each use of a name can tell you where it was declared, through imports, barrel files (`index.ts` files that re-export) and tsconfig path aliases. You'll rename the shared `toMoment` to `toDayjs` everywhere it is used, and leave a different `toMoment` alone. You need Node.js 22.18 or later and Git.
 

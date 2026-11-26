@@ -36,6 +36,7 @@
             "pages": [
               "community/oss-quickstart",
               "community/cli",
+              "community/api-stability",
               "community/package-structure",
               {
                 "group": "Workflows",

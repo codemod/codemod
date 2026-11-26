@@ -24,6 +24,7 @@ use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
 use log::{debug, error, warn};
 use semantic_factory::LazySemanticProvider;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -228,6 +229,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     // Always collect diffs so we can offer report interactively
     let diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>> = Some(Arc::new(Mutex::new(Vec::new())));
     let execution_errors = Mutex::new(Vec::<String>::new());
+    let recovered = AtomicUsize::new(0);
     let target_directory_for_report = target_directory.clone();
 
     // Every file's text goes through `pending`, so a file changed by several
@@ -262,14 +264,14 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         }
     };
 
-    let executed = config.execute(|file_path, _config| {
+    // The walker blocks while its workers drive transforms on the CLI runtime.
+    let runtime = tokio::runtime::Handle::current();
+    let execute_file = |file_path: &Path, _config: &CodemodExecutionConfig| {
         // Only process files
         if !file_path.is_file() {
             return;
         }
 
-        // Use a tokio runtime to handle the async execution within the sync callback
-        let rt = tokio::runtime::Runtime::new().unwrap();
         let mut attempts = 0;
         loop {
             let runtime_event_buffer = super::RuntimeEventBuffer::new();
@@ -317,7 +319,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 target_directory: &target_directory,
                 pending_files: Some(pending.clone()),
             };
-            let result = rt.block_on(execute_codemod_with_quickjs(options));
+            let result = runtime.block_on(execute_codemod_with_quickjs(options));
 
             // It gave way to another file's transform that was waiting for a
             // file it held, so what it did is incomplete: drop it and run it
@@ -339,16 +341,20 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
             let outcome = match result {
                 Ok(CodemodOutput {
-                    primary, secondary, ..
+                    primary,
+                    secondary,
+                    recovered_syntax,
+                    ..
                 }) => {
+                    if recovered_syntax {
+                        recovered.fetch_add(1, Ordering::Relaxed);
+                    }
                     let mut file_renames = Vec::new();
                     if let ExecutionResult::Modified(modified) = primary {
                         taken.set(modified.content);
                         if let Some(to) = modified.rename_to {
-                            file_renames.push((
-                                taken.path().to_path_buf(),
-                                (file_path.to_path_buf(), to),
-                            ));
+                            file_renames
+                                .push((taken.path().to_path_buf(), (file_path.to_path_buf(), to)));
                         }
                     }
                     // What `jssgTransform` made of other files is in
@@ -402,35 +408,52 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             runtime_event_output.flush(&runtime_event_buffer);
             return;
         }
-    });
+    };
+    let executed = tokio::task::block_in_place(|| config.execute(execute_file));
     // Nothing ran (a capability was refused, the target can't be read):
     // the run failed.
     if let Err(error) = executed {
         anyhow::bail!("{error}");
     }
+    let recovered = recovered.load(Ordering::Relaxed);
+    if recovered > 0 {
+        eprintln!("{recovered} files had syntax errors; transformed with error recovery");
+    }
 
     // Every file is done: apply what is left (everything, in a dry run).
     let mut renames = renames.into_inner().unwrap();
-    let mut changes: Vec<(PathBuf, String, String, Option<PathBuf>)> = pending
+    type Change = (PathBuf, Option<String>, String, Option<PathBuf>);
+    let mut changes: Vec<Change> = pending
         .changed()
         .into_iter()
         .map(|(path, original, content)| match renames.remove(&path) {
-            Some((given, to)) => (given, original, content, Some(to)),
-            None => (path, original, content, None),
+            Some((given, to)) => (given, Some(original), content, Some(to)),
+            None => (path, Some(original), content, None),
         })
         .collect();
     // Files whose new text is written already, or that were only renamed.
     for (given, to) in renames.into_values() {
         if let Ok(text) = std::fs::read_to_string(&given) {
-            changes.push((given, text.clone(), text, Some(to)));
+            changes.push((given, Some(text.clone()), text, Some(to)));
         }
     }
+    changes.extend(
+        pending
+            .created()
+            .into_iter()
+            .map(|(path, content)| (path, None, content, None)),
+    );
     changes.sort();
 
     for (change_path, original, content, rename_to) in &changes {
         let write_path = rename_to.as_deref().unwrap_or(change_path);
         if !config.dry_run {
-            if let Err(e) = std::fs::write(write_path, content) {
+            let written = if original.is_none() {
+                target_file_create(write_path, content)
+            } else {
+                std::fs::write(write_path, content)
+            };
+            if let Err(e) = written {
                 execution_errors.lock().unwrap().push(format!(
                     "Failed to write modified file {}: {}",
                     write_path.display(),
@@ -471,7 +494,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             }
             let diff = generate_unified_diff(
                 change_path,
-                original,
+                original.as_deref().unwrap_or_default(),
                 content,
                 &diff_config,
                 DiffMetadata::default(),
@@ -486,7 +509,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 };
                 let plain_diff = generate_unified_diff(
                     change_path,
-                    original,
+                    original.as_deref().unwrap_or_default(),
                     content,
                     &plain_config,
                     DiffMetadata {
@@ -598,6 +621,18 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .await;
 
     Ok(())
+}
+
+fn target_file_create(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?
+        .write_all(content.as_bytes())
 }
 
 #[cfg(test)]

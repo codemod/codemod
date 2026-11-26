@@ -5,8 +5,8 @@
 //!   `codemod:metrics` imports point at a small module it adds to the
 //!   package ([`SUPPORT_DIR`]), and the transform is called through a
 //!   wrapper that returns the counts as the file's data;
-//! - imports of `fs` or `child_process` are left alone, with a warning
-//!   about what callbacks can do;
+//! - `fs` imports are rewritten where possible; remaining `fs` and
+//!   `child_process` imports are reported;
 //! - workflow state in a transform is an upgrade error.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -55,11 +55,20 @@ pub(crate) fn rewrite(workflow: &mut Workflow, bundle: &Path) -> Result<Rewrites
     let mut metric_files = BTreeSet::new();
     let mut wrappers: BTreeMap<String, String> = BTreeMap::new();
     let mut restricted_imports: BTreeMap<String, BTreeSet<&'static str>> = BTreeMap::new();
+    let mut fs_transforms: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut files_rewritten = BTreeMap::new();
     for js in jssg_steps_mut(workflow) {
         let entry = normalize(&bundle.join(&js.js_file));
         let mut uses_metrics = false;
         js.capabilities = None;
-        for file in closure(&entry) {
+        let files = match closure(&entry, &bundle) {
+            Ok(files) => files,
+            Err(reason) => {
+                problems.push(reason);
+                continue;
+            }
+        };
+        for file in files {
             let Ok(text) = std::fs::read_to_string(&file) else {
                 continue;
             };
@@ -77,6 +86,12 @@ pub(crate) fn rewrite(workflow: &mut Workflow, bundle: &Path) -> Result<Rewrites
             }
             for specifier in import_specifiers(&file, &text) {
                 if let Some(capability) = capability_of(&specifier) {
+                    if capability == "fs" {
+                        fs_transforms
+                            .entry(shown.clone())
+                            .or_default()
+                            .insert(js.js_file.clone());
+                    }
                     restricted_imports
                         .entry(shown.clone())
                         .or_default()
@@ -127,9 +142,29 @@ pub(crate) fn rewrite(workflow: &mut Workflow, bundle: &Path) -> Result<Rewrites
     }
     for (file, imports) in &restricted_imports {
         if imports.contains("fs") {
-            out.warnings.push(format!(
-                "{file} imports fs: 2.0 callbacks get no writable fs; they can only read inside the target. The import was left unchanged. A file API for more kinds of edits is being designed; move writes outside the current file to a declared shell() step for now."
-            ));
+            let path = bundle.join(file);
+            let rewritten = relative_to(&bundle, &path).and_then(|_| {
+                let text = std::fs::read_to_string(&path).ok()?;
+                let text = super::files::rewrite(&path, &text)?;
+                (!import_specifiers(&path, &text)
+                    .iter()
+                    .any(|specifier| capability_of(specifier) == Some("fs")))
+                .then_some(text)
+            });
+            if let Some(text) = rewritten {
+                out.notes
+                    .push(format!("{file}: replaced fs calls with codemod/files"));
+                files_rewritten.insert(path, text);
+            } else {
+                let transforms = fs_transforms[file]
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                out.warnings.push(format!(
+                    "{file} imports fs in transform {transforms}. The import was left unchanged: migrate target access to codemod/files or use a declared shell() step."
+                ));
+            }
         }
         if imports.contains("child_process") {
             out.warnings.push(format!(
@@ -150,7 +185,10 @@ pub(crate) fn rewrite(workflow: &mut Workflow, bundle: &Path) -> Result<Rewrites
                 ));
                 continue;
             };
-            let Ok(text) = std::fs::read_to_string(file) else {
+            let Some(text) = files_rewritten
+                .remove(file)
+                .or_else(|| std::fs::read_to_string(file).ok())
+            else {
                 continue;
             };
             let depth = relative.matches('/').count();
@@ -172,6 +210,7 @@ pub(crate) fn rewrite(workflow: &mut Workflow, bundle: &Path) -> Result<Rewrites
             if names.len() == 1 { "s" } else { "" },
         ));
     }
+    out.files.extend(files_rewritten);
     if problems.is_empty() {
         Ok(out)
     } else {
@@ -206,13 +245,25 @@ fn jssg_steps_mut(workflow: &mut Workflow) -> Vec<&mut UseJSAstGrep> {
 }
 
 /// The module and the package files it imports, relatively.
-fn closure(entry: &Path) -> Vec<PathBuf> {
+fn closure(entry: &Path, bundle: &Path) -> Result<Vec<PathBuf>, String> {
+    let root = bundle.canonicalize().map_err(|e| e.to_string())?;
     let mut seen = BTreeSet::new();
     let mut order = Vec::new();
     let mut queue = vec![entry.to_path_buf()];
     while let Some(file) = queue.pop() {
         if seen.len() > 500 || !seen.insert(file.clone()) {
             continue;
+        }
+        if file.exists()
+            && !file
+                .canonicalize()
+                .map_err(|e| e.to_string())?
+                .starts_with(&root)
+        {
+            return Err(format!(
+                "transform source leaves the workflow directory: {}",
+                file.display()
+            ));
         }
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
@@ -226,7 +277,7 @@ fn closure(entry: &Path) -> Vec<PathBuf> {
         );
         order.push(file);
     }
-    order
+    Ok(order)
 }
 
 fn imports_metrics(text: &str) -> bool {
@@ -554,14 +605,15 @@ mod tests {
     }
 
     #[test]
-    fn transforms_that_import_fs_or_child_process_get_warnings_not_capabilities() {
+    fn simple_fs_reads_are_converted_but_other_imports_get_warnings() {
         let source = "import { read } from \"./helper.ts\";\nimport { execSync } from \"node:child_process\";\nexport default function transform(root) { return null; }\n";
         let dir = package(&[
             ("workflow.yaml", &jssg_workflow("scripts/codemod.ts")),
             (
                 "scripts/helper.ts",
-                "import fs from \"fs\";\nexport const read = (p) => fs.readFileSync(p, \"utf8\");\n",
+                "import fs from \"fs\";\nexport const read = (p) => JSON.parse(fs.readFileSync(p, \"utf8\"));\nexport const create = (p) => fs.writeFileSync(p, \"x\");\nimport './needs-review.ts';\n",
             ),
+            ("scripts/needs-review.ts", "import { statSync } from 'fs';\nexport const isFile = (path) => statSync(path).isFile();\n"),
             (
                 "scripts/codemod.ts",
                 source,
@@ -573,11 +625,16 @@ mod tests {
             "{}",
             translated.source
         );
-        assert!(translated.files.is_empty());
+        assert_eq!(translated.files.len(), 1);
+        assert!(translated.files[0].0.ends_with("scripts/helper.ts"));
+        assert!(translated.files[0].1.contains("from \"codemod/files\""));
+        assert!(translated.files[0].1.contains(".read(p)"));
+        assert!(translated.files[0].1.contains(".create(p, \"x\")"));
         assert!(translated
             .warnings
             .iter()
-            .any(|w| w.contains("scripts/helper.ts imports fs: 2.0 callbacks get no writable fs")));
+            .any(|w| w
+                .contains("scripts/needs-review.ts imports fs in transform scripts/codemod.ts")));
         assert!(translated.warnings.iter().any(|w| w.contains(
             "scripts/codemod.ts imports child_process: 2.0 callbacks cannot start processes"
         )));

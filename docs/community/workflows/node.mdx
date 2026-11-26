@@ -2,7 +2,12 @@
 title: "Run workflows from Node.js"
 sidebarTitle: "Node.js and Bun"
 description: "Run a TypeScript workflow inside your own Node.js or Bun process, to debug it, test it, or build it into a tool."
+tag: "Experimental"
 ---
+
+import Experimental from "/snippets/experimental.mdx";
+
+<Experimental />
 
 The codemod CLI runs workflows in its own sandboxed JavaScript runtime. To run a workflow inside a Node.js or Bun process instead, use `codemod/host`. The workflow's body, function steps and `forEachFile` callbacks then run in your process, so you can:
 
@@ -58,6 +63,7 @@ The first argument is a workflow file or a package directory. In a package direc
 | `capabilities` | `[]` | Deprecated, does nothing: callbacks (and `shard`'s functions) no longer get capabilities |
 | `store` | `"memory"` | `"local"` records the run where `codemod workflow list` and `codemod workflow resume` find it |
 | `resume` | | Continue a recorded run by its id (with `store: "local"`) |
+| `rerunSteps` / `skipSteps` | | On resume, choose by numeric position what to do with each side-effect step that started but has no saved outcome. Skipped steps return `null`. |
 | `workflowName` | | Which workflow to run when `codemod.yaml` declares several |
 | `signal` | | An `AbortSignal` that cancels the run |
 
@@ -97,7 +103,7 @@ A workflow file is checked as the CLI checks it before it runs: a callback that 
 
 On the Node.js host:
 
-- **[Pure callbacks](/community/workflows/reference#callbacks-are-pure) are checked as in the CLI.** While the workflow's code runs, in the body or a callback, `fetch`, `XMLHttpRequest`, `WebSocket`, timers (also from `node:timers`), `child_process`, `fs` writes (`writeFile`, `mkdir`, `rm`, `rename`, `open` for writing, …) and setting `process.env` throw the CLI's errors. Reading files is not limited to the target here. Code outside the run, such as your test, is not affected. A function saved before `codemod/host` loaded escapes the check.
+- **[Pure callbacks](/community/workflows/reference#callbacks-are-pure) are checked as in the CLI.** While the workflow's code runs, in the body or a callback, `fetch`, `XMLHttpRequest`, `WebSocket`, timers (also from `node:timers`), `child_process`, `fs` writes (`writeFile`, `mkdir`, `rm`, `rename`, `open` for writing, …) and setting `process.env` throw the CLI's errors. Callbacks see an empty `process.env` but keep `process.cwd()` and `process.argv`. Reading files is not limited to the target here. Code outside the run, such as your test, is not affected. These checks are not a sandbox: references to host APIs saved before `codemod/host` loaded can escape them.
 - **Semantic analysis** (`semanticAnalysis`) is not available to callbacks on this host: `definition()` and `references()` find nothing. Run the workflow with the CLI for it.
 - **The workflow body's clock and randomness are replayed, as in the CLI.** In the body, `Date`, `performance.now()`, `Math.random()` and the global `crypto.getRandomValues()` and `crypto.randomUUID()` start from the run's start time and seed, and give the same answers when the run resumes; in callbacks they are real. `node:crypto` imported in the body is not seeded.
 - **`codemod/llm`** is not available yet.

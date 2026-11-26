@@ -8,6 +8,7 @@
     "crates/cli/src/templates/**",
     "crates/cli/npm/types/llrt/**",
     "crates/cli/npm/type-tests/protocol-samples.ts",
+    "crates/cli/npm/tests/snapshots/stable-api.d.ts",
     "packages/jssg-types/src/**",
     "schemas/*.json"
   ]

@@ -44,7 +44,7 @@ pub struct RunFlags {
     pub allow_child_process: bool,
 
     /// Allow codemod/assess to send files to the decision model (System One
-    /// by default): asked for interactively, required without a terminal
+    /// by default): asked for interactively, required without a terminal (experimental)
     #[arg(long)]
     pub allow_ai: bool,
 
@@ -53,16 +53,16 @@ pub struct RunFlags {
     pub no_interactive: bool,
 
     /// Coding agent to use for AI steps (e.g. claude, codex, aider); defaults to the one saved
-    /// in the launcher
+    /// in the launcher (experimental)
     #[arg(long)]
     pub agent: Option<String>,
 
     /// Decision model for decision and assessment calls, as <provider>/<model> (default:
-    /// the one saved in the launcher, else systemone/jev-latest)
+    /// the one saved in the launcher, else systemone/jev-latest) (experimental)
     #[arg(long, value_name = "PROVIDER/MODEL", value_parser = parse_decision_model)]
     pub model: Option<DecisionModel>,
 
-    /// Execute install-skill steps when running in non-interactive mode
+    /// Execute install-skill steps when running in non-interactive mode (experimental)
     #[arg(long)]
     pub install_skill: bool,
 
@@ -84,13 +84,51 @@ fn parse_decision_model(text: &str) -> Result<DecisionModel> {
 /// packages) share; `workflow resume` has its own `--approve`.
 #[derive(clap::Args, Debug, Default, Clone)]
 pub struct StartFlags {
-    /// Give every approval the workflow asks for (manual steps, pull requests)
-    #[arg(long)]
-    pub approve: bool,
+    /// Give the approvals the workflow asks for: all of them, or only some kinds
+    /// (--approve=shell,http: shell, agent, http, pull-request, approval). A package
+    /// from the registry needs it for what it runs and sends in an unattended run
+    #[arg(
+        long,
+        value_name = "KINDS",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = APPROVE_ALL,
+        value_delimiter = ',',
+        action = clap::ArgAction::Append
+    )]
+    pub approve: Vec<String>,
 
-    /// Let branch, commit and pull request steps change the git repository
+    /// Let branch, commit and pull request steps change the git repository (experimental)
     #[arg(long)]
     pub managed_git: bool,
+}
+
+/// What `--approve` alone stands for: every approval.
+pub const APPROVE_ALL: &str = "*";
+
+impl StartFlags {
+    /// `--approve` without kinds.
+    pub fn approve_all(&self) -> bool {
+        self.approve.iter().any(|kind| kind == APPROVE_ALL)
+    }
+
+    /// The kinds `--approve=<kinds>` names; unknown ones are an error.
+    pub fn approve_kinds(&self) -> Result<Vec<String>> {
+        const KINDS: [&str; 5] = ["shell", "agent", "http", "pull-request", "approval"];
+        let kinds: Vec<String> = self
+            .approve
+            .iter()
+            .filter(|kind| *kind != APPROVE_ALL)
+            .cloned()
+            .collect();
+        if let Some(unknown) = kinds.iter().find(|kind| !KINDS.contains(&kind.as_str())) {
+            return Err(anyhow!(
+                "--approve={unknown}: unknown kind of approval; use {} (or --approve alone for all)",
+                KINDS.join(", ")
+            ));
+        }
+        Ok(kinds)
+    }
 }
 
 impl RunFlags {
@@ -180,6 +218,7 @@ impl RunFlags {
             }),
             approve_all: false,
             approve_ids: Vec::new(),
+            trusted: false,
             managed_git: false,
             skip_shard_steps: false,
             nested_observer: None,
@@ -187,6 +226,8 @@ impl RunFlags {
             allow_dirty: false,
             control: self.control,
             force: false,
+            rerun_steps: Vec::new(),
+            skip_steps: Vec::new(),
         }
     }
 }
@@ -209,8 +250,12 @@ pub struct ExecSettings {
     pub install_skill: Option<Arc<dyn InstallSkillExecutor>>,
     /// Treat every approval as given.
     pub approve_all: bool,
-    /// Treat these questions as approved (`workflow resume --approve <id>`).
+    /// Treat these questions as approved (`workflow resume --approve <id>`),
+    /// or these kinds (`--approve=shell,http`).
     pub approve_ids: Vec<String>,
+    /// The workflow is the person's own (a local file or directory), not a
+    /// package from a registry: unattended, its steps run without `--approve`.
+    pub trusted: bool,
     /// Let `branch`, `commit` and `pullRequest` steps touch git.
     pub managed_git: bool,
     pub skip_shard_steps: bool,
@@ -225,9 +270,20 @@ pub struct ExecSettings {
     pub control: Option<crate::control::ControlMode>,
     /// `workflow resume --force`: continue a canceled or rejected run.
     pub force: bool,
+    pub rerun_steps: Vec<u64>,
+    pub skip_steps: Vec<u64>,
 }
 
 impl ExecSettings {
+    pub fn resume_options(&self) -> codemod_workflow::ResumeOptions {
+        codemod_workflow::ResumeOptions {
+            allow_dirty: self.allow_dirty,
+            force: self.force,
+            rerun_steps: self.rerun_steps.clone(),
+            skip_steps: self.skip_steps.clone(),
+        }
+    }
+
     pub fn approvals(&self) -> crate::control::Approvals {
         crate::control::Approvals {
             all: self.approve_all,
@@ -641,10 +697,7 @@ pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutc
     let (engine, renderer, summary) = engine(&settings, Some(run_id.to_string()))?;
     let started = Instant::now();
     let run_id = run_id.to_string();
-    let options = codemod_workflow::ResumeOptions {
-        allow_dirty: settings.allow_dirty,
-        force: settings.force,
-    };
+    let options = settings.resume_options();
     let report = run_off_thread(engine, move |engine| engine.resume_with(&run_id, options)).await?;
     renderer.finish();
     let outcome = ExecOutcome {
@@ -703,6 +756,7 @@ pub(crate) fn engine_with(
 ) -> (Engine, Arc<Summary>) {
     let summary = Arc::new(Summary::default());
     let services = Services {
+        trusted: settings.trusted,
         capabilities: settings.capabilities.clone(),
         registry: settings.registry.clone(),
         install_skill: settings.install_skill.clone(),
@@ -736,7 +790,7 @@ where
         .await
         .map_err(|_| anyhow!("the workflow engine stopped unexpectedly"));
     interrupt.abort();
-    result?.map_err(|e| anyhow!("{e}"))
+    result?.map_err(Into::into)
 }
 
 /// Resolves when the process is asked to stop: Ctrl-C, or being terminated
@@ -975,6 +1029,7 @@ impl crate::journal::Stamped for Renderer {
             return;
         };
         match event {
+            Event::Experimental { api } => self.line(crate::experimental_notice(&api)),
             // A dry run is not saved, so its id names nothing to look up.
             Event::RunStarted { dry_run: true, .. } => self.line(format!(
                 "{} {}",
@@ -1054,6 +1109,7 @@ impl crate::journal::Stamped for Renderer {
                 self.flush_agent_text(position);
                 let elapsed = format!("({:.1}s)", duration_ms as f64 / 1000.0);
                 match status {
+                    StepStatus::Skipped => self.line(format!("↷ {label}: skipped")),
                     StepStatus::Succeeded => self.line(format!(
                         "{} {label} {}",
                         style("✓").green(),
@@ -1081,7 +1137,7 @@ impl crate::journal::Stamped for Renderer {
                         self.line(format!("{} {label}: rejected", style("✗").red()))
                     }
                     // Never reported: a step that began to wait has not finished.
-                    StepStatus::Waiting => {}
+                    StepStatus::Waiting | StepStatus::Started => {}
                 }
             }
             // Real runs' diffs are for JSONL and the launcher; questions are
@@ -1166,6 +1222,10 @@ impl Interaction for TerminalInteraction {
         if self.approvals.gives(&ask.id, approval) {
             return Decision::Approved;
         }
+        // One's own workflow, with nobody to ask: its steps run.
+        if !self.interactive && ask.trusted && approval.runs_or_sends() {
+            return Decision::Approved;
+        }
         self.approve(approval)
     }
 
@@ -1176,6 +1236,15 @@ impl Interaction for TerminalInteraction {
         }
         let _guard = self.prompt_lock.lock().unwrap_or_else(|e| e.into_inner());
         let question = approval.prompt();
+        if matches!(approval, Approval::InterruptedStep { .. }) {
+            return match self.renderer.suspend(|| {
+                inquire::Select::new(&question, vec!["Decide later", "Rerun", "Skip"]).prompt()
+            }) {
+                Ok("Rerun") => Decision::Approved,
+                Ok("Skip") => Decision::Denied,
+                _ => Decision::Deferred,
+            };
+        }
         // Enter never approves: every one of these runs or publishes something.
         let answer = self.renderer.suspend(|| {
             inquire::Confirm::new(&question)

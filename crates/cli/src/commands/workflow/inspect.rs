@@ -16,7 +16,7 @@ pub struct Command {
     #[arg(long = "workflow-name", value_name = "NAME")]
     workflow_name: Option<String>,
 
-    /// Output format: "text" (default), or "json" for programs (a setup form)
+    /// Output format: "text" (default), or "json" for programs (experimental)
     #[arg(long, value_enum, default_value_t = ListFormat::Text)]
     format: ListFormat,
 }
@@ -27,6 +27,7 @@ pub struct Command {
 /// asks for are listed as `requestedCapabilities`: callbacks no longer get
 /// them, so `capabilities` is always empty.
 pub async fn handler(args: &Command) -> Result<()> {
+    eprintln!("{}", crate::experimental_notice("workflow inspect"));
     let (path, dir) =
         resolve_workflow_source_with_name(&args.workflow, args.workflow_name.as_deref())?;
     let typescript = codemod_workflow::is_typescript(&path);
@@ -42,6 +43,17 @@ pub async fn handler(args: &Command) -> Result<()> {
         codemod_workflow::inspect(&file, &source).map_err(|error| anyhow!("{error}"))?;
     let params = codemod_workflow::params::declared_params(&source);
     let modules = codemod_workflow::params::imported_modules(&source);
+    let files_module = |module: &str| matches!(module, "codemod/files" | "codemod:files");
+    let uses_files = modules.iter().any(|module| files_module(module))
+        || inspection.files.iter().any(|file| {
+            path.parent()
+                .and_then(|dir| std::fs::read_to_string(dir.join(file)).ok())
+                .is_some_and(|source| {
+                    codemod_workflow::params::imported_modules(&source)
+                        .iter()
+                        .any(|module| files_module(module))
+                })
+        });
     let mut requested: Vec<String> = resolve_capabilities(
         ResolveCapabilitiesArgs {
             allow_fs: false,
@@ -80,10 +92,11 @@ pub async fn handler(args: &Command) -> Result<()> {
             "install_skill": calls(&["installSkill"]),
             "wait": calls(&["sleep", "waitForEvent"]),
             "assess": modules.iter().any(|module| matches!(module.as_str(), "codemod/assess" | "codemod:assess")),
+            "files": uses_files,
         },
         "steps": inspection.steps.iter().map(|step| json!({
             "label": step.label,
-            "kind": step.kind,
+            "kind": step.kind.as_deref().unwrap_or("dynamic"),
         })).collect::<Vec<_>>(),
     });
     if args.format == ListFormat::Json {
@@ -121,6 +134,9 @@ fn print_text(described: &Value) {
         }
     }
     let uses = &described["uses"];
+    if uses["files"] == true {
+        println!("Files:     target-only reads and recorded creation (codemod/files)");
+    }
     let reaches: Vec<&str> = [
         ("http", "network (http)"),
         ("shell", "commands (shell)"),
@@ -141,7 +157,7 @@ fn print_text(described: &Value) {
         .unwrap_or_default();
     if !requested.is_empty() {
         println!(
-            "Asks for:  {} (ignored: callbacks no longer get capabilities; use http() and shell() steps)",
+            "Asks for:  {} (ignored: use codemod/files and http() or shell() steps)",
             requested.join(", ")
         );
     }
@@ -152,7 +168,7 @@ fn print_text(described: &Value) {
             println!(
                 "  {} ({})",
                 step["label"].as_str().unwrap_or("(no label)"),
-                step["kind"].as_str().unwrap_or("?")
+                step["kind"].as_str().unwrap_or("dynamic")
             );
         }
     }

@@ -291,6 +291,16 @@ struct AskRequest {
     timeout_ms: Option<u64>,
 }
 
+pub(crate) fn install_notice(ctx: &rquickjs::Ctx<'_>) -> rquickjs::Result<()> {
+    fn notice(ctx: rquickjs::Ctx<'_>) {
+        codemod_sandbox::sandbox::runtime_module::experimental(&ctx, "codemod/assess");
+    }
+    ctx.globals().set(
+        "__codemodExperimentalAssess",
+        rquickjs::Function::new(ctx.clone(), notice)?,
+    )
+}
+
 /// Answer one `assess()` call for the step at `position`. Returns the
 /// assessment as JSON: `{ answers, details, context, provider, model, usage }`.
 pub(crate) fn ask(
@@ -299,6 +309,7 @@ pub(crate) fn ask(
     cancel: &AtomicBool,
     request: &str,
 ) -> Result<String, String> {
+    run.experimental("codemod/assess");
     let request: AskRequest =
         serde_json::from_str(request).map_err(|e| format!("assess(): {e}"))?;
     let asked = questions::Asked::read(&request.questions)?;

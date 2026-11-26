@@ -76,6 +76,10 @@ impl Fixture {
     }
 
     fn run(&self, extra: &[&str]) -> Output {
+        self.run_with_threads("8", extra)
+    }
+
+    fn run_with_threads(&self, threads: &str, extra: &[&str]) -> Output {
         let script = self.package.path().join("codemod.ts");
         let mut args = vec![
             "jssg",
@@ -88,7 +92,7 @@ impl Fixture {
             "--allow-dirty",
             "--no-interactive",
             "--max-threads",
-            "8",
+            threads,
         ];
         args.extend_from_slice(extra);
         Command::new(env!("CARGO_BIN_EXE_codemod"))
@@ -117,6 +121,26 @@ fn touched_by_all() -> Vec<String> {
     lines.push("export {};".to_string());
     lines.sort();
     lines
+}
+
+#[test]
+fn jssg_run_drives_async_transforms_from_file_workers() {
+    let fixture = Fixture::new(&[]);
+    write(
+        fixture.package.path(),
+        "codemod.ts",
+        r#"
+export default async function transform(root: any) {
+  await new Promise(resolve => setTimeout(resolve, 1));
+  return root.root().text().replace("OLD", "NEW");
+}
+"#,
+    );
+    for threads in ["1", "8"] {
+        let output = fixture.run_with_threads(threads, &["--dry-run", "--no-color"]);
+        assert!(output.status.success(), "{}", text(&output));
+        assert_eq!(text(&output).matches("+const v").count(), FILES);
+    }
 }
 
 /// Many files changing one shared file with `jssgTransform` all keep their
@@ -160,6 +184,31 @@ fn jssg_run_drops_a_failed_files_changes_to_other_files() {
         fixture.read("src/bad.ts"),
         "// touch: shared/index.ts\n// throw\nconst bad = 'OLD';\n"
     );
+}
+
+#[test]
+fn standalone_transforms_can_create_target_files_without_allow_fs() {
+    let fixture = Fixture::new(&[]);
+    write(
+        fixture.package.path(),
+        "codemod.ts",
+        r#"
+import { files } from "codemod/files";
+export default function transform(root) {
+  if (root.filename().endsWith("index.ts")) {
+    files.create("generated/index.txt", files.read("shared/index.ts"));
+  }
+  return null;
+}
+"#,
+    );
+    let dry = fixture.run(&["--dry-run"]);
+    assert!(dry.status.success(), "{}", text(&dry));
+    assert!(text(&dry).contains("generated/index.txt"));
+    assert!(!fixture.target.path().join("generated").exists());
+    let run = fixture.run(&[]);
+    assert!(run.status.success(), "{}", text(&run));
+    assert_eq!(fixture.read("generated/index.txt"), "export {};\n");
 }
 
 /// A file that can't be written fails the run, and says so once.

@@ -19,13 +19,13 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 
-use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
 use super::execution_engine::{
     install_console_bridge, CallbackIsolate, DryRunExecutionFlag, ExecutionModeFlag, FileChange,
     JssgExecutionContext, JssgFileChanges, TargetDirectory,
 };
 use super::pending_files::PendingFiles;
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
+use super::target_files::{CompatFsHost, TargetFiles, WorkflowFsResolver};
 use crate::ast_grep::{DefaultParseLanguage, ParseSemanticProvider};
 use crate::llm::{LlmRequestHandler, LlmRuntimeContext};
 use crate::sandbox::errors::{ExecutionError, RuntimeError};
@@ -98,10 +98,8 @@ pub struct WorkerOptions<R> {
     /// `jssgTransform` reads and changes files through it. Each worker has
     /// its own without it.
     pub pending_files: Option<PendingFiles>,
-    /// Without the `fs` capability: give the code a read-only `fs` limited to
-    /// the target directory, whose writes fail with this message (`{name}`
-    /// is replaced by the function called). `None`: no `fs` at all.
-    pub read_only_fs: Option<String>,
+    /// A 1.x package's imports of `fs` use the target file API.
+    pub legacy_fs: bool,
 }
 
 /// A JSSG runtime kept alive across calls. Run code in it with
@@ -132,6 +130,13 @@ impl Worker {
     pub async fn new<R: ModuleResolver + 'static>(
         options: WorkerOptions<R>,
     ) -> Result<Self, ExecutionError> {
+        Self::new_inner(options, false).await
+    }
+
+    async fn new_inner<R: ModuleResolver + 'static>(
+        options: WorkerOptions<R>,
+        enable_test_timers: bool,
+    ) -> Result<Self, ExecutionError> {
         let runtime = AsyncRuntime::new()
             .map_err(|e| init_error(format!("Failed to create AsyncRuntime: {e}")))?;
         let interrupt = Arc::clone(&options.cancel);
@@ -140,18 +145,17 @@ impl Worker {
             .await;
 
         let fetch = options.capabilities.contains(&LlrtSupportedModules::Fetch);
-        let read_only_fs = options.read_only_fs.filter(|_| {
-            options.dry_run || !options.capabilities.contains(&LlrtSupportedModules::Fs)
-        });
-        let mut module_builder = LlrtModuleBuilder::build();
+        // Workers run workflow callbacks. Withhold the native bindings instead of
+        // trying to revoke them after the loader has exposed their exports.
+        let mut excluded = vec![LlrtSupportedModules::Process];
+        if !enable_test_timers {
+            excluded.push(LlrtSupportedModules::Timers);
+        }
+        let mut module_builder = LlrtModuleBuilder::build_with_exclusions(&excluded);
         for capability in &options.capabilities {
             match capability {
                 LlrtSupportedModules::Fetch => {
                     module_builder.enable_fetch();
-                }
-                // A dry run changes nothing: no file system, no commands.
-                LlrtSupportedModules::Fs if !options.dry_run => {
-                    module_builder.enable_fs();
                 }
                 LlrtSupportedModules::ChildProcess if !options.dry_run => {
                     module_builder.enable_child_process();
@@ -162,15 +166,9 @@ impl Worker {
 
         let (mut resolver, loader, globals) = module_builder.builder.build();
         let (codemod_resolver, mut loader) = crate::with_codemod_modules!(loader, llm: fetch);
-        if read_only_fs.is_some() {
-            for name in ["fs", "node:fs"] {
-                resolver = resolver.add_name(name);
-                loader = loader.with_module(name, CuratedFsModule);
-            }
-            for name in ["fs/promises", "node:fs/promises"] {
-                resolver = resolver.add_name(name);
-                loader = loader.with_module(name, CuratedFsPromisesModule);
-            }
+        if options.legacy_fs {
+            resolver = resolver.add_name("codemod-internal:fs-compat-host");
+            loader = loader.with_module("codemod-internal:fs-compat-host", CompatFsHost);
         }
         let codemod_resolver = codemod_resolver.providing(options.codemod_modules.clone());
 
@@ -180,10 +178,26 @@ impl Worker {
             memory_resolver = memory_resolver.with_module(name.as_str());
             memory_loader = memory_loader.with_module(name.as_str(), source.as_str());
         }
+        if options.legacy_fs {
+            for (name, source) in [
+                (
+                    "codemod-internal:fs-compat",
+                    include_str!("scripts/fs_compat.js"),
+                ),
+                (
+                    "codemod-internal:fs-promises",
+                    include_str!("scripts/fs_promises.js"),
+                ),
+            ] {
+                memory_resolver = memory_resolver.with_module(name);
+                memory_loader = memory_loader.with_module(name, source);
+            }
+        }
 
         runtime
             .set_loader(
                 (
+                    WorkflowFsResolver(options.legacy_fs),
                     codemod_resolver,
                     resolver,
                     memory_resolver,
@@ -214,6 +228,10 @@ impl Worker {
 
         let hooks_for_ctx = hooks.clone();
         let file_changes_for_ctx = file_changes.clone();
+        let files = TargetFiles::new(
+            options.target_directory,
+            file_changes.pending.clone().unwrap_or_default(),
+        );
         let installed: Result<(), String> = async_with!(context => |ctx| {
             let store = || -> rquickjs::Result<()> {
                 let fail = |e: String| rquickjs::Error::new_from_js_message("userdata", "worker", e);
@@ -232,6 +250,8 @@ impl Worker {
                 .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(TargetDirectory(target.clone()))
                     .map_err(|e| fail(format!("{e:?}")))?;
+                ctx.store_userdata(files)
+                    .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(llm.clone())
                     .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(hooks_for_ctx.clone())
@@ -240,19 +260,33 @@ impl Worker {
                     ctx.store_userdata(DefaultParseLanguage(language.clone()))
                         .map_err(|e| fail(format!("{e:?}")))?;
                 }
-                if let Some(message) = &read_only_fs {
-                    let root: vfs::VfsPath = vfs::PhysicalFS::new(PathBuf::from("/")).into();
-                    let config = CuratedFsConfig::new(target.to_string_lossy().into_owned(), root)
-                        .with_physical_target_dir(target.clone())
-                        .read_only(message.clone());
-                    ctx.store_userdata(config)
-                        .map_err(|e| fail(format!("{e:?}")))?;
-                }
                 if let Some(provider) = &options.semantic_provider {
                     ctx.store_userdata(ParseSemanticProvider(Arc::clone(provider)))
                         .map_err(|e| fail(format!("{e:?}")))?;
                 }
                 globals.attach(&ctx)?;
+                // The native process module is withheld: what transforms
+                // read from it that is no secret (not the environment)
+                // is handed over for the callback globals to build an
+                // inert `process` from.
+                let host = serde_json::json!({
+                    "cwd": std::env::current_dir()
+                        .map(|dir| dir.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    "argv": std::env::args().collect::<Vec<_>>(),
+                    "platform": match std::env::consts::OS {
+                        "windows" => "win32",
+                        "macos" => "darwin",
+                        os => os,
+                    },
+                    "arch": match std::env::consts::ARCH {
+                        "x86_64" => "x64",
+                        "aarch64" => "arm64",
+                        arch => arch,
+                    },
+                });
+                let host = ctx.json_parse(host.to_string())?;
+                ctx.globals().set("__codemodHostProcess", host)?;
                 ctx.eval::<(), _>(TRACK_TIMERS)?;
                 install_console_bridge(&ctx)
             };
@@ -345,7 +379,7 @@ mod tests {
     use crate::sandbox::resolvers::InMemoryResolver;
 
     async fn worker() -> Worker {
-        Worker::new(WorkerOptions {
+        let options = WorkerOptions {
             capabilities: HashSet::new(),
             resolver: Arc::new(InMemoryResolver::new()),
             modules: Vec::new(),
@@ -358,10 +392,10 @@ mod tests {
             default_language: None,
             semantic_provider: None,
             pending_files: None,
-            read_only_fs: None,
-        })
-        .await
-        .unwrap()
+            legacy_fs: false,
+        };
+        // Only this test harness installs LLRT timers to exercise shutdown.
+        Worker::new_inner(options, true).await.unwrap()
     }
 
     async fn eval<T>(worker: &Worker, code: &'static str) -> T

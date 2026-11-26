@@ -177,6 +177,102 @@ impl Controlled {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn killed_shell_requires_a_resume_choice() {
+    for choice in ["--rerun-step", "--skip-step", "control"] {
+        let fixture = Fixture::new(
+            r#"
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  await step("Before", () => 42);
+  const result = await step("Publish", shell("if test -e shell.pid; then touch repeated; else echo $$ > shell.pid; exec sleep 30; fi"));
+  await step("After", shell("touch continued"));
+  return result === null;
+}
+"#,
+        );
+        let args = fixture.run_args(&["--format", "jsonl"]);
+        let args: Vec<_> = args.iter().map(String::as_str).collect();
+        let mut original = Controlled::spawn(fixture.command(&args));
+        let start = original.event("run_started");
+        let id = start["run_id"].as_str().unwrap();
+        let pid_path = fixture.target.path().join("shell.pid");
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let pid: Option<libc::pid_t> = loop {
+            if let Some(pid) = fs::read_to_string(&pid_path)
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+            {
+                break Some(pid);
+            }
+            if std::time::Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        original.child.kill().unwrap();
+        if let Some(pid) = pid.filter(|&pid| pid > 0) {
+            // SAFETY: the fixture's command just recorded its PID before
+            // exec'ing sleep. SIGKILL the orphan so the test leaves no work.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        let (_, events, stderr) = original.finish();
+        assert!(pid.is_some(), "shell never started: {events:?}\n{stderr}");
+
+        let status = fixture.status(id);
+        assert_eq!(status["status"], "interrupted", "{status}");
+        assert_eq!(status["steps"][1]["status"], "started", "{status}");
+        let resume = ["workflow", "resume", "--id", id, "--no-interactive"];
+        let waiting = fixture.codemod(&[resume.as_slice(), &["--approve"]].concat());
+        let shown = text(&waiting);
+        assert_eq!(waiting.status.code(), Some(3), "{shown}");
+        assert!(
+            shown.contains("Publish")
+                && shown.contains("--rerun-step 1")
+                && shown.contains("--skip-step 1"),
+            "{shown}"
+        );
+        assert!(!fixture.target.path().join("repeated").exists());
+        assert!(!fixture.target.path().join("continued").exists());
+
+        if choice == "control" {
+            let args = [resume.as_slice(), &["--approve"]]
+                .concat()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let mut run = fixture.control(&args);
+            let question = run.event("question");
+            assert_eq!(
+                question["approval"]["kind"], "interrupted-step",
+                "{question}"
+            );
+            assert_eq!(question["id"], "interrupted-step:1", "{question}");
+            run.send(json!({
+                "command": "answer",
+                "question_id": "interrupted-step:1",
+                "value": "reject"
+            }));
+            run.event("run_finished");
+            let (code, _, stderr) = run.finish();
+            assert_eq!(code, Some(0), "{stderr}");
+        } else {
+            let result = fixture.codemod(&[resume.as_slice(), &[choice, "1"]].concat());
+            assert!(result.status.success(), "{}", text(&result));
+        }
+        let reran = choice == "--rerun-step";
+        assert_eq!(fixture.target.path().join("repeated").exists(), reran);
+        assert!(fixture.target.path().join("continued").exists());
+        let status = fixture.status(id);
+        assert_eq!(
+            status["steps"][1]["status"],
+            if reran { "succeeded" } else { "skipped" }
+        );
+        assert_eq!(status["output"], !reran);
+    }
+}
+
 fn write(dir: &Path, path: &str, text: &str) {
     let full = dir.join(path);
     fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -211,6 +307,30 @@ fn run_id(events: &[Value]) -> String {
         .as_str()
         .unwrap()
         .to_string()
+}
+
+#[test]
+fn control_reports_one_experimental_event_without_touching_run_output() {
+    let fixture = Fixture::new(
+        r#"
+import { sleep } from "codemod/workflow";
+export default async function workflow() {
+  await sleep(1);
+  await sleep(1);
+  return { answer: 42 };
+}
+"#,
+    );
+    let mut run = fixture.control(&fixture.run_args(&[]));
+    run.event("hello");
+    let notice = run.event("experimental");
+    assert_eq!(notice["api"], "sleep()");
+    let done = run.event("run_finished");
+    assert_eq!(done["output"], json!({ "answer": 42 }));
+    let (code, events, stderr) = run.finish();
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(named(&events, "experimental").len(), 1);
+    assert!(!stderr.contains("Experimental:"));
 }
 
 const TWO_APPROVALS: &str = r#"
@@ -519,7 +639,7 @@ export default async function main() {
     edit_store(&fixture, &format!("{id}/run.json"), |text| {
         text.replace(&version, "0.0.1-older")
     });
-    edit_store(&fixture, &format!("{id}/steps.json"), |text| {
+    edit_store(&fixture, &format!("{id}/steps.jsonl"), |text| {
         regex::Regex::new("cb_[0-9a-f]{16}")
             .unwrap()
             .replace_all(&text, "cb_0000000000000000")

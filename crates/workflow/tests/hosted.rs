@@ -62,6 +62,7 @@ fn a_hosted_run_selects_commits_and_records_steps() {
                 ] },
                 { "path": "src/b.js", "original": "old\n", "effects": [{ "op": "rename", "to": "../escape.js" }] },
             ]),
+            vec![],
         )
         .unwrap();
     assert_eq!(
@@ -159,6 +160,7 @@ fn a_file_changed_since_it_was_read_is_not_overwritten() {
             0,
             "Edit".into(),
             json!([{ "path": "a.txt", "original": "one\n", "effects": [{ "op": "write", "text": "three\n" }] }]),
+            vec![],
         )
         .unwrap_err();
     assert!(
@@ -183,6 +185,7 @@ fn a_commit_that_fails_part_way_is_undone() {
                 { "path": "a.txt", "original": "a\n", "effects": [{ "op": "write", "text": "A\n" }] },
                 { "path": "b.txt", "original": "b\n", "effects": [{ "op": "rename", "to": "blocked/b.txt" }] },
             ]),
+            vec![],
         )
         .unwrap_err();
     assert!(error.contains("blocked"), "{error}");

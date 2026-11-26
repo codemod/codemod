@@ -19,6 +19,19 @@ To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha wor
 
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
 
+See [Codemod API stability](/community/api-stability) for the compatibility guarantees that apply from 2.0 stable onward.
+
+<Update label="2.0.0-alpha.11" description="November 26, 2026">
+- **`codemod/files` replaces `fs` in 2.0 workflows.** Callbacks and JSSG transforms can read, list, and create target files; new files are recorded and previewed with other edits. YAML packages retain compatibility for supported target-local `fs` calls.
+- **Resume no longer silently repeats interrupted side effects.** Check what a step did, then choose **Rerun** or **Skip**. Unattended resumes exit `3` until you pass `--rerun-step` or `--skip-step`. Step records are appended and synced to disk, and alpha.10 runs can still be read.
+- **Experimental APIs are labeled.** Look for `@experimental` in declarations, an Experimental marker in the docs or CLI help, and a notice on first use.
+- **JSSG transform load and parse errors count as failures.** Target files with syntax errors still get transformed with error recovery; Codemod logs their count without failing the step.
+- **Telemetry has a one-time interactive notice.** Use `codemod telemetry on|off|status` to manage your saved setting.
+- **Registry commands support JSON output.** Use `--format json` with `login`, `whoami`, or `publish`. In CI, use `login --api-key` instead of browser login.
+- **Unattended registry packages need approval for side effects.** Use `--approve` or name the kinds to allow, for example `--approve=shell,http`. Local workflows stay trusted across resume, but `--approve` does not choose whether to repeat an interrupted step.
+- **Callbacks get an empty `process.env`.** They can still use `process.cwd()` and `process.argv`, and read or stage target files with `codemod/files`. Registry downloads get additional checks, checksum mismatches are logged rather than rejected, credentials are bound to their registry, and new run-store files are private.
+</Update>
+
 <Update label="2.0.0-alpha.10" description="November 26, 2026">
 **Breaking changes**
 

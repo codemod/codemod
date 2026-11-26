@@ -37,7 +37,15 @@ pub struct Command {
     #[arg(long)]
     force: bool,
 
-    /// Let branch, commit and pull request steps change the git repository
+    /// Repeat an interrupted side-effect step, even if it already took effect. Repeat for more steps
+    #[arg(long, value_name = "STEP_ID")]
+    rerun_step: Vec<u64>,
+
+    /// Continue without repeating an interrupted step (its result will be null). Repeat for more steps
+    #[arg(long, value_name = "STEP_ID")]
+    skip_step: Vec<u64>,
+
+    /// Let branch, commit and pull request steps change the git repository (experimental)
     #[arg(long)]
     managed_git: bool,
 
@@ -103,6 +111,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             approve_ids,
             managed_git: args.managed_git,
             force: args.force,
+            rerun_steps: args.rerun_step.clone(),
+            skip_steps: args.skip_step.clone(),
             allow_dirty: args.allow_dirty,
             ..args.flags.settings(
                 std::collections::HashSet::new(),

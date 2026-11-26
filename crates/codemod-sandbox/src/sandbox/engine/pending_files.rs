@@ -28,7 +28,7 @@ const WAIT_LIMIT: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 struct Pending {
-    original: String,
+    original: Option<String>,
     text: String,
     /// The thread whose transform has the file now.
     holder: Option<ThreadId>,
@@ -36,7 +36,7 @@ struct Pending {
     /// again until it is done.
     busy: bool,
     /// The text when the holder's transaction took the file.
-    before: String,
+    before: Option<String>,
     /// The take that has the file now; 0 when none has.
     token: u64,
 }
@@ -65,6 +65,7 @@ pub struct PendingFiles {
     /// Where a file's text comes from before the step changed it, when not
     /// from disk: see [`PendingFiles::with_base`].
     base: Option<Base>,
+    base_paths: Option<BasePaths>,
 }
 
 /// A file's text before the step changed it, for the files the caller has
@@ -73,6 +74,15 @@ type BaseFn = dyn Fn(&Path) -> Option<std::io::Result<String>> + Send + Sync;
 
 #[derive(Clone)]
 struct Base(Arc<BaseFn>);
+
+#[derive(Clone)]
+struct BasePaths(Arc<dyn Fn() -> Vec<PathBuf> + Send + Sync>);
+
+impl std::fmt::Debug for BasePaths {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BasePaths")
+    }
+}
 
 impl std::fmt::Debug for Base {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -130,13 +140,17 @@ impl State {
         let unchanged = match self.files.get_mut(path) {
             Some(file) if file.holder == Some(thread) => {
                 if !keep {
-                    file.text = std::mem::take(&mut file.before);
+                    let Some(before) = file.before.take() else {
+                        self.files.remove(path);
+                        return;
+                    };
+                    file.text = before;
                 }
                 file.holder = None;
                 file.busy = false;
                 file.token = 0;
-                file.before.clear();
-                file.text == file.original
+                file.before = None;
+                file.original.as_ref() == Some(&file.text)
             }
             _ => false,
         };
@@ -166,7 +180,85 @@ impl PendingFiles {
         Self {
             inner: Arc::default(),
             base: Some(Base(Arc::new(base))),
+            base_paths: None,
         }
+    }
+
+    /// Paths not already on disk that the base view contains.
+    pub fn with_base_paths(
+        mut self,
+        paths: impl Fn() -> Vec<PathBuf> + Send + Sync + 'static,
+    ) -> Self {
+        self.base_paths = Some(BasePaths(Arc::new(paths)));
+        self
+    }
+
+    /// Text visible to this thread, without holding a transform lock.
+    pub fn read(&self, path: &Path) -> std::io::Result<String> {
+        if let Some(file) = self.lock().files.get(path) {
+            return if file.holder.is_none() || file.holder == Some(std::thread::current().id()) {
+                Ok(file.text.clone())
+            } else {
+                file.before
+                    .clone()
+                    .ok_or_else(|| std::io::ErrorKind::NotFound.into())
+            };
+        }
+        self.read_base(path)
+    }
+
+    /// Whether the run has a pending file at this path, overriding disk metadata.
+    pub fn presence(&self, path: &Path) -> Option<bool> {
+        if let Some(file) = self.lock().files.get(path) {
+            let visible = file.holder.is_none() || file.holder == Some(std::thread::current().id());
+            return Some(visible || file.before.is_some());
+        }
+        self.base.as_ref()?.0(path).map(|text| text.is_ok())
+    }
+
+    /// New files visible to this thread, including earlier dry-run steps.
+    pub fn new_paths(&self) -> Vec<PathBuf> {
+        let mut paths = self
+            .base_paths
+            .as_ref()
+            .map_or_else(Vec::new, |base| (base.0)());
+        let me = std::thread::current().id();
+        paths.extend(
+            self.lock()
+                .files
+                .iter()
+                .filter(|(_, file)| {
+                    file.original.is_none() && (file.holder.is_none() || file.holder == Some(me))
+                })
+                .map(|(path, _)| path.clone()),
+        );
+        paths
+    }
+
+    /// Stage a new file in the calling thread's transaction, if it has one.
+    /// The caller validates the path and checks directory conflicts.
+    pub fn create(&self, path: PathBuf, text: String) -> std::io::Result<()> {
+        let me = std::thread::current().id();
+        let mut state = self.lock();
+        if state.files.contains_key(&path) {
+            return Err(std::io::ErrorKind::AlreadyExists.into());
+        }
+        let holder = state.open.contains(&me).then_some(me);
+        if holder.is_some() {
+            state.held.entry(me).or_default().push(path.clone());
+        }
+        state.files.insert(
+            path,
+            Pending {
+                original: None,
+                text,
+                holder,
+                busy: false,
+                before: None,
+                token: 0,
+            },
+        );
+        Ok(())
     }
 
     /// A file's text before the step changed it.
@@ -245,7 +337,7 @@ impl PendingFiles {
                 file.holder = Some(me);
                 file.busy = true;
                 file.token = token;
-                file.before = file.text.clone();
+                file.before = Some(file.text.clone());
                 file.text.clone()
             }
             None => {
@@ -253,11 +345,11 @@ impl PendingFiles {
                 state.files.insert(
                     key.clone(),
                     Pending {
-                        original: text.clone(),
+                        original: Some(text.clone()),
                         text: text.clone(),
                         holder: Some(me),
                         busy: true,
-                        before: text.clone(),
+                        before: Some(text.clone()),
                         token,
                     },
                 );
@@ -306,7 +398,13 @@ impl PendingFiles {
         let mut ready: Vec<PathBuf> = state
             .files
             .iter()
-            .filter(|(_, file)| file.holder.is_none() && file.text != file.original)
+            .filter(|(_, file)| {
+                file.holder.is_none()
+                    && file
+                        .original
+                        .as_ref()
+                        .is_some_and(|original| *original != file.text)
+            })
             .map(|(path, _)| path.clone())
             .collect();
         ready.sort();
@@ -333,11 +431,27 @@ impl PendingFiles {
             .lock()
             .files
             .iter()
-            .filter(|(_, file)| file.text != file.original)
-            .map(|(path, file)| (path.clone(), file.original.clone(), file.text.clone()))
+            .filter_map(|(path, file)| {
+                let original = file.original.as_ref()?;
+                (*original != file.text)
+                    .then(|| (path.clone(), original.clone(), file.text.clone()))
+            })
             .collect();
         changed.sort();
         changed
+    }
+
+    /// Files created by the step, in path order.
+    pub fn created(&self) -> Vec<(PathBuf, String)> {
+        let mut created: Vec<_> = self
+            .lock()
+            .files
+            .iter()
+            .filter(|(_, file)| file.original.is_none())
+            .map(|(path, file)| (path.clone(), file.text.clone()))
+            .collect();
+        created.sort();
+        created
     }
 }
 
@@ -395,6 +509,19 @@ impl Drop for TakenFile {
 }
 
 impl Transaction {
+    /// Whether this transaction staged a new file.
+    pub fn created_files(&self) -> bool {
+        let state = self.files.lock();
+        state.held.get(&self.thread).is_some_and(|paths| {
+            paths.iter().any(|path| {
+                state
+                    .files
+                    .get(path)
+                    .is_some_and(|file| file.before.is_none())
+            })
+        })
+    }
+
     /// Whether another transaction was given a file instead of this one, to
     /// break a cycle of waits: what this one did is incomplete, and should
     /// be dropped and done again.

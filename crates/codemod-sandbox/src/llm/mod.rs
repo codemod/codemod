@@ -66,6 +66,7 @@ impl ModuleDef for LlmModule {
 }
 
 async fn generate<'js>(ctx: Ctx<'js>, request: Value<'js>) -> Result<Value<'js>> {
+    crate::sandbox::runtime_module::experimental(&ctx, "codemod/llm");
     let serialized = ctx
         .json_stringify(request)?
         .ok_or_else(|| Exception::throw_message(&ctx, "LLM request cannot be undefined"))?

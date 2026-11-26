@@ -6,7 +6,9 @@ use reqwest::Client;
 use crate::ascii_art::print_ascii_art;
 use crate::auth::storage::StoredAuth;
 use crate::auth::types::{AuthTokens, UserInfo};
-use crate::auth::{OidcClient, TokenStorage};
+use crate::auth::{status_json, OidcClient, TokenStorage};
+use crate::commands::output::TextOrJson;
+use crate::utils::interactive::is_interactive;
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -19,6 +21,9 @@ pub struct Command {
     /// API key for authentication (alternative to OAuth flow)
     #[arg(long)]
     api_key: Option<String>,
+    /// Output format
+    #[arg(long, default_value = "text")]
+    format: TextOrJson,
 }
 
 async fn validate_api_key_and_get_user_info(registry_url: &str, api_key: &str) -> Result<UserInfo> {
@@ -95,6 +100,11 @@ pub async fn handler(args: &Command) -> Result<()> {
         // Save authentication
         storage.save_auth(&stored_auth)?;
 
+        if args.format == TextOrJson::Json {
+            println!("{}", status_json(&registry_url, Some(&stored_auth)));
+            return Ok(());
+        }
+
         println!(
             "✓ Successfully logged in with API key as {}",
             user_info.username
@@ -123,6 +133,10 @@ pub async fn handler(args: &Command) -> Result<()> {
     // Check current auth status
     if let Ok(Some(stored_auth)) = oidc_client.get_auth_status() {
         if oidc_client.is_token_valid(&stored_auth.tokens) {
+            if args.format == TextOrJson::Json {
+                println!("{}", status_json(&registry_url, Some(&stored_auth)));
+                return Ok(());
+            }
             println!(
                 "✓ Already logged in as {} ({})",
                 stored_auth.user.username, registry_url
@@ -145,15 +159,27 @@ pub async fn handler(args: &Command) -> Result<()> {
                 crate::utils::cli_command::npx_codemod("login --registry <url>")
             );
             return Ok(());
-        } else {
-            println!("Token is invalid, logging out");
-            oidc_client.logout()?;
         }
+    }
+
+    if !is_interactive(false) {
+        if args.format == TextOrJson::Json {
+            println!("{}", status_json(&registry_url, None));
+        }
+        return Err(anyhow!(
+            "Browser login requires an interactive terminal. Pass --api-key to log in without one."
+        ));
     }
 
     // Start OIDC login flow
     match oidc_client.login().await {
         Ok(auth) => {
+            if args.format == TextOrJson::Json {
+                println!("{}", status_json(&registry_url, Some(&auth)));
+                return Ok(());
+            }
+
+            println!("✓ Successfully logged in as {}", auth.user.username);
             if let Some(scope) = &args.scope {
                 info!("Setting default publish scope to {scope}");
                 // TODO: Save scope preference to config

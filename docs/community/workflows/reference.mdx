@@ -4,6 +4,8 @@ sidebarTitle: "Reference"
 description: "The workflow.ts API: steps, per-file callbacks, tasks, and resuming runs."
 ---
 
+import Experimental from "/snippets/experimental.mdx";
+
 A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow`, `codemod/git`, `codemod/deps` and `codemod/assess`, and what else a workflow can import.
 
 ## Complete example
@@ -56,7 +58,7 @@ A workflow file contains three kinds of code, each with its own rules:
 
 - **Steps are durable.** Each step's result is saved as soon as the step finishes. If a run fails or is canceled, `codemod workflow resume` replays the finished steps from their saved results and continues from the step that failed.
 - **A step starts when you call `step()`.** `await` waits for it. `Promise.all([step(a), step(b)])` runs two steps at the same time. Git steps are the exception: see [Git steps](#git-steps).
-- **Each step is identified by its label and content.** On resume, a step is skipped and its saved result reused when a step with the same label and the same content (the task, its options and the outside values it uses) already finished in this run. Every other step runs: the one that failed, a step you added, and a finished step you changed. So you can fix a run by editing the workflow, and where you add or move steps does not matter. Steps with the same label and content take the saved results in the order they are called.
+- **Each step is identified by its label and content.** On resume, a step reuses its saved result when a step with the same label and the same content (the task, its options and the outside values it uses) already finished in this run. Other steps normally run again, but a side-effecting step whose outcome was not saved [needs a rerun or skip decision](/community/cli#workflow-resume). Steps with the same label and content take the saved results in the order they are called.
 
 ## `step(label?, task, options?)`
 
@@ -96,7 +98,7 @@ Durations are milliseconds or a number with a unit: `"500ms"`, `"30s"`, `"10m"`,
 A function step runs once, in its own isolate, and records what it returns. It may be async.
 
 ```ts
-import { readFile } from "fs/promises";
+import { files } from "codemod/files";
 
 const plan = await step("Plan batches", () =>
   usages.outputs.reduce((batches, path, index) => {
@@ -104,11 +106,11 @@ const plan = await step("Plan batches", () =>
     return batches;
   }, [] as string[][]),
 );
-const config = await step("Read config", async () => JSON.parse(await readFile("codemod.config.json", "utf8")));
+const config = await step("Read config", () => JSON.parse(files.read("codemod.config.json")));
 ```
 
 - Write the function inline, so the build can extract it. Outside variables arrive as frozen copies, with the same rules as [forEachFile callbacks](#using-outside-variables).
-- Inside, `Date` and `Math.random` are real, and `fs` reads the target. The function is [pure](#callbacks-are-pure): no network, commands or other writes.
+- Inside, `Date` and `Math.random` are real, and [`files`](#target-files) reads the target and stages new files. The function is [pure](#callbacks-are-pure): no network, commands or unrecorded writes.
 - The result must be JSON. On resume, a finished function step is replayed from its record; if you changed it, it runs again.
 
 ## `forEachFile(selector?, callback)`
@@ -134,7 +136,7 @@ Object fields:
 | `language` | Selects the language's file extensions when `include` is not set, and is the default language for `parse(file)` and `parse(text)` |
 | `containing` | Only files whose text contains this string |
 | `concurrency` | Files each worker keeps in flight (default `1`). Raise it for async callbacks that wait on the network or `codemod/llm` |
-| `semanticAnalysis` | What `definition()` and `references()` on roots `parse(file)` makes can find: `"file"` (the default) within each file, `"workspace"` across the selected files of the target (or `{ mode: "workspace", root: "src" }`), `"none"` nothing. The analysis only runs when they are called |
+| `semanticAnalysis` | **Experimental.** What [`definition()` and `references()`](/community/jssg/semantic-analysis) on roots `parse(file)` makes can find: `"file"` (the default) within each file, `"workspace"` across the selected files of the target (or `{ mode: "workspace", root: "src" }`), `"none"` nothing. The analysis only runs when they are called |
 | `capabilities` | Deprecated: callbacks no longer get capabilities (see [Callbacks are pure](#callbacks-are-pure)). Still accepted; the step's log says it is ignored |
 
 Files are selected as `astGrep` selects them: `.gitignore` is respected, hidden files and directories (`.github/`) are included, and a `language` means the same extensions for both (`"typescript"` also takes `.js` files, which that parser reads). A selector is plain data, so you can reuse and refine it: `{ ...sources, containing: "moment" }`.
@@ -231,7 +233,7 @@ reduced; // { "app": 12, "ui": 3 }
 Function steps, `forEachFile` callbacks and reducers, `dependencyGraph` callbacks and the jssg transforms they run change the world only through what the run records. Inside them you get:
 
 - the `file` object: `file.write()`, `file.rename()` and `file.delete()` for the current file, and `jssgTransform` for others;
-- `fs`, read-only and limited to the target (`readFileSync`, `existsSync`, `readdirSync`, `statSync` and their promise forms);
+- [`codemod/files`](#target-files), for reading and creating files in the target;
 - parsing and analysis (`codemod/ast-grep`, `codemod/assess`, `registry` and `semver` from `codemod/deps`).
 
 Everything else that reaches outside fails with the step to use instead:
@@ -240,11 +242,44 @@ Everything else that reaches outside fails with the step to use instead:
 |---|---|---|
 | `fetch`, `XMLHttpRequest`, `WebSocket` | `fetch is not available in workflow callbacks …` | [`http()`](#http-requests) |
 | `child_process` (`exec`, `spawn`, …) | `child_process.execSync is not available …` | [`shell()`](#shell-commands) |
-| `fs` writes (`writeFileSync`, `mkdirSync`, `unlinkSync`, …), reads outside the target | `fs.writeFileSync is not available …`, `EACCES` | `file.write()`, or a `shell()` or `agent()` step |
+| `fs`, `node:fs`, or their `/promises` variants | `fs is not available in 2.0 workflows …` | [`files`](#target-files), `file.write()`, or a `shell()` step |
 | setting `process.env` | `process.env cannot be changed …` | `shell(command, { env })` |
+| reading `process.env` | every variable is `undefined`: callbacks get none of the machine's environment, but keep `process.cwd()` and `process.argv` | pass values as [parameters](#parameters); a step takes variables with `shell(command, { env })` or an `http()` header `{ env: "NAME" }` |
+| importing a data file (`.yaml`) from outside the workflow's package | `cannot be imported` | keep the file in the package; JavaScript and TypeScript import from anywhere |
 | `setTimeout`, `setInterval`, `setImmediate` | `setTimeout is not available …` | [`sleep()`](#sleepduration) between steps |
 
 `fetch` and timers written in a workflow file are build errors, in the body and in callbacks, so the workflow fails before a run starts. `--allow-fs`, `--allow-fetch`, `--allow-child-process` and `capabilities` in `codemod.yaml` no longer give callbacks anything: the flags print a deprecation warning, and `codemod.yaml` capabilities are noted when the run starts. `codemod jssg run` and `codemod jssg test` on their own (outside a workflow) still take `--allow-*`.
+
+### Target files
+
+Import `files` from `codemod/files` to read the target or stage a new file. Use it inside a function step, `forEachFile` callback, reducer or JSSG transform, not in the workflow body.
+
+| Method | Returns |
+|---|---|
+| `files.read(path)` | The file's UTF-8 text. Throws if the file is missing or isn't a UTF-8 file. |
+| `files.exists(path)` | `true` if the path exists, otherwise `false`. |
+| `files.list(glob)` | A sorted array of target-relative file paths matching the glob, for example `src/**/*.ts`. |
+| `files.create(path, text)` | Nothing. Stages a new UTF-8 file and creates its parent directories if needed. Throws if the path already exists. |
+
+Paths are relative to the target, or absolute inside it. Paths that leave the target or traverse symlinks throw. Reads see pending changes, including edits and creations from earlier steps in a dry run. New files commit with the step's other edits, appear in the diff, and survive resume without rerunning a finished step.
+
+For 1.x YAML packages, legacy `fs.mkdirSync`, `fs.mkdir`, and `fs.promises.mkdir` validate that the path stays in the target but do not create empty directories. Writing a new file creates any needed parent directories when the step commits.
+
+```ts workflow.ts
+import { files } from "codemod/files";
+import { step } from "codemod/workflow";
+
+export default async function main() {
+  await step("Write source inventory", () => {
+    if (!files.exists("source-files.txt")) {
+      files.create("source-files.txt", files.list("src/**/*.ts").join("\n") + "\n");
+    }
+  });
+  return step("Read source inventory", () => files.read("source-files.txt"));
+}
+```
+
+Standalone `jssg run` and `jssg test` also support `codemod/files` without `--allow-fs`. They keep the flag for transforms that explicitly import `fs`.
 
 ### Using outside variables
 
@@ -252,7 +287,7 @@ A callback (or function step) runs in its own isolate, so the build copies in wh
 
 - **Module-level constants, functions and classes** it uses are copied in.
 - **Local variables of the surrounding function** are passed in as frozen copies when the step starts. They must be JSON values.
-- **Imports** it uses are available: `codemod/ast-grep`, `codemod/runtime`, `codemod/assess`, Node-style modules (`path`, `fs` to read the target, ...), npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
+- **Imports** it uses are available: `codemod/ast-grep`, `codemod/runtime`, `codemod/assess`, `codemod/files`, Node-style modules such as `path`, npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
 
 These are build errors, reported with the file, line and column:
 
@@ -367,7 +402,7 @@ parse("tsx", text);                 // the original JSSG form
 The body is the code outside steps and callbacks. It runs again on every resume, and a step's saved result is reused only when the body calls that same step again, so the body has to come out the same each time:
 
 - **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, `codemod/git`, `codemod/assess` (its question builders; `assess()` itself rejects in the body), and npm packages or local files whose imports only reach these. In the QuickJS workflow body, you can import `sep` and `delimiter` by name from `node:path` (or `path`); Node's `path.posix` and `path.win32` are not available there.
-- **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use them inside a step or callback instead.
+- **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use `codemod/files` in a callback instead of importing `fs`.
 - **`Date`, `Math.random`, `crypto.randomUUID` and `performance.now` are replay-safe.** Random numbers come from a generator seeded by the run, and the clock starts at the run's start time and moves only when a step finishes, to the time recorded for it.
 - **`console.log`** goes to the run's output.
 
@@ -414,6 +449,8 @@ Callbacks kept in files and YAML rule files are imported, relative to the workfl
 
 ### Git steps
 
+<Experimental />
+
 `branch`, `commit` and `pullRequest` come from `codemod/git`:
 
 ```ts
@@ -441,6 +478,8 @@ for (const current of shards) {
 Steps without git can still run in parallel, before or after. Separate checkouts per shard are planned as an explicit API.
 
 ### Dependencies
+
+<Experimental />
 
 `dependencyGraph`, `registry` and `semver` come from `codemod/deps`. `dependencyGraph` reads the target's `yarn.lock` (Yarn 1 and Yarn 2+), `pnpm-lock.yaml` (lockfile 6.0 and later), `package-lock.json` and `npm-shrinkwrap.json` (v1, v2 and v3), `bun.lock`, `Cargo.lock`, `uv.lock`, `poetry.lock` and `Pipfile.lock`, with each workspace's `package.json`, `Cargo.toml`, `pyproject.toml` or `Pipfile` for declared ranges and dependency kinds. A Yarn 1 project's workspaces are the directories its root `package.json`'s `workspaces` globs match. Bun's binary `bun.lockb` and Go lockfiles are not read.
 
@@ -502,6 +541,8 @@ const moment = await step(dependencyGraph((g) => {
 
 ### `registry` and `semver`
 
+<Experimental />
+
 `registry.npm(name)`, `registry.cargo(name)` and `registry.pypi(name)` resolve to `{ ecosystem, name, versions }`, oldest first, with each release's `dependencies`, `peerDependencies` and `optionalDependencies`. PyPI lists dependencies per file rather than per release, so PyPI releases have none, and `releases({ accepting })` on a Python package throws. They work inside a function step or a `forEachFile` or `dependencyGraph` callback, and in the files those import, so the answer is recorded with the step and a resumed run does not ask again; in the workflow body they reject. Canceling the run, or a step's `timeout`, stops a lookup in progress. Each package is fetched once per run, and lookups started together are fetched together:
 
 ```ts
@@ -517,6 +558,8 @@ const ready = await step("Releases accepting React 19", async () => {
 `semver` has `satisfies(version, range)` (`null` for ranges it cannot read, such as `workspace:`), `compare`, `gt`, `lt`, `isBreaking(from, to)` and `isPrerelease`. Pass `{ ecosystem: "cargo" }` for Cargo's rules, or `{ ecosystem: "pypi" }` for PEP 440, which also reads Poetry's `^1.2`, `~1.2` and `||`.
 
 ### Shell commands
+
+A run asks before each command. With nobody to ask (`--no-interactive`, CI), your own workflow's steps go ahead, and a registry package's fail unless the run was started with `--approve`; see [Approvals](#approvals).
 
 Give `shell` the command as a string, or write it as a tagged template. In a template, each `${}` value is quoted for the shell, so a path with spaces or quotes stays one argument; an array is one argument per item. The rest of the text is taken as written, backslashes included.
 
@@ -557,7 +600,11 @@ If a `codemod()` step resolves a preview-only registry package during an apply r
 
 ### HTTP requests
 
-Callbacks have no network. A workflow that needs one declares the request as a step with `http()`, from `codemod/workflow`. The response is the step's result: it is recorded with the run, so a resumed run gets it back without sending the request again.
+<Experimental />
+
+Callbacks have no network. A workflow that needs one declares the request as a step with `http()`, from `codemod/workflow`. The response is the step's result: once saved, a resumed run gets it back without sending the request again. If the process crashed before saving the response, the request may still have reached the server. Resume asks whether to rerun or skip the step.
+
+A run asks before each request, showing the method, the URL and the names of the environment variables its headers read: the workflow chooses all three. With nobody to ask (`--no-interactive`, CI), your own workflow's steps go ahead, and a registry package's fail unless the run was started with `--approve`; see [Approvals](#approvals).
 
 ```ts
 import { http, step } from "codemod/workflow";
@@ -580,13 +627,15 @@ await step("Notify", http({ url: params.hook, method: "POST", json: { tag } }));
 | `allowErrorStatus` | Return a 4xx or 5xx response as the result. Without it such a response fails the step (with the status and the start of the body), so the step's `retries` apply |
 | `dryRun` | `"skip"` (the default): a dry run logs `would request GET …` and the step gives `{ skipped: true }`. `"perform"`: send it in a dry run too, for requests that only read |
 
-The result is `{ status, statusText, ok, url, headers, body, json? }`: `url` is where it ended after redirects, header names are lower case, `body` is the text (up to 10 MiB; base64 with `bodyEncoding: "base64"` when it is not UTF-8), and `json` is the parsed body when the response says it is JSON. The URL, method, headers and body are the step's content: change one and the step runs again on resume.
+The result is `{ status, statusText, ok, url, headers, body, json? }`: `url` is where it ended after redirects (a request with `{ env }` headers does not follow a redirect to another origin: that response is the result), header names are lower case, `body` is the text (up to 10 MiB; base64 with `bodyEncoding: "base64"` when it is not UTF-8), and `json` is the parsed body when the response says it is JSON. The URL, method, headers and body are the step's content: change one and the step runs again on resume.
 
 ### Coding agents
 
+<Experimental />
+
 Some adapters check the installed agent’s help output to detect supported options. That check has its own timeout and falls back to defaults if the help command does not finish.
 
-`agent(prompt, options)` runs a coding agent installed on the machine, without asking it questions, in the run's target directory:
+`agent(prompt, options)` runs a coding agent installed on the machine, without asking it questions, in the run's target directory. The run asks before the agent starts, showing the agent and the prompt: with `autonomy: "full"` the agent runs whatever commands the prompt leads it to. With nobody to ask (`--no-interactive`, CI), your own workflow's steps go ahead, and a registry package's fail unless the run was started with `--approve`; see [Approvals](#approvals).
 
 ```ts
 const review = await step(
@@ -649,11 +698,13 @@ Without `agent`, the step uses:
 1. the run's agent: `codemod workflow run --agent codex`, or the `LLM_AGENT` environment variable;
 2. the coding agent the workflow itself runs inside, for example when Claude Code runs `codemod run`. The prompt goes back to it in the step's output, and the step succeeds with `handedOff: true`;
 3. an agent you pick from the installed ones, when the run is interactive;
-4. the built-in agent, when `LLM_API_KEY` is set (with `LLM_PROVIDER`, `LLM_MODEL` and `LLM_BASE_URL`).
+4. the built-in agent, when `LLM_API_KEY` is set (with `LLM_PROVIDER`, `LLM_MODEL` and `LLM_BASE_URL`). `LLM_API_KEY` is only sent where the run's environment says: a step that sets `endpoint` or `llmProtocol` must give its own `apiKey`.
 
 Otherwise the prompt is printed as instructions and nothing runs.
 
 ## Assessing files with `codemod/assess`
+
+<Experimental />
 
 `assess(file, { questions })` asks a decision model typed questions about a file, inside a `forEachFile` callback or a function step, so AI judgments and ast-grep analysis happen in the same pass. Before it asks, the engine gathers the file's context itself: the files it imports, followed through re-exports, so the model does not spend tokens looking for them.
 
@@ -839,11 +890,22 @@ export default async function main({ params }: { params: { team?: string } }) {
 - A dry run is not saved, so it cannot wait: one that reaches an approval stops, exits with code 1 and says to pass `--approve`.
 - With [`--control stdio`](/community/workflows/control), the run asks the program driving it and waits for the answer, dry runs included.
 
+**Steps that run or send something ask too.** A `shell(...)` step asks before its command, an `agent(...)` step before the agent starts, an `http(...)` step before its request, and a `pullRequest(...)` step before it pushes: a workflow, also one from the registry, decides what they run and where they send it. Answering no fails the step. Their question ids are `shell:<step>`, `agent-run:<step>`, `http:<step>` and `pull-request:<step>`.
+
+With nobody to ask (`--no-interactive`, CI), it depends on whose workflow it is:
+
+- **Your own workflow** (`codemod workflow run -w <file>`, or `codemod run ./local-dir`) is trusted: these steps go ahead, as do those of local codemods it nests with `codemod("./path")`.
+- **A package from the registry** (`codemod run <package>`, 1.x packages included) is not: each of these steps fails without running, and the error names the step and the flag. So do the steps of a registry package your own workflow nests with `codemod("@org/package")`, and of anything a registry package nests. Read what the package runs, then pass `--approve` for everything, or only some kinds: `--approve=shell,http` (the kinds are `shell`, `agent`, `http`, `pull-request`, and `approval` for `approval(...)` steps). A resumed run keeps being the package's.
+
+The Node.js host (`codemod/host`, `codemod/testing`) approves everything unless you pass `approve: false`; then `approved: ["shell", "http:0"]` gives kinds or single questions.
+
 Each approval has a **question id** that stays the same across resumes: `approval:<step>`, where `<step>` is the step's key (`approval:3`, or `approval:2/0` inside a codemod that step 2 runs). The run's last lines, `workflow status` and `run_finished` name the one it waits for.
 
 **Rejecting an approval ends the run.** The run is `rejected`: steps running alongside are stopped, nothing after the approval runs, and what earlier steps changed **stays changed** (commit or stash before a run you may reject, or use `git` to undo it). A rejected run is over: `workflow resume` refuses it unless you pass `--force`, which asks the rejected approval again. Stopping a run with Ctrl-C instead leaves it `paused`, to resume; `workflow cancel` ends it as `canceled`, which also takes `--force` to resume.
 
 ## Waiting
+
+<Experimental />
 
 Both of these are steps: they appear in the run's steps, and a finished wait is not repeated on resume.
 

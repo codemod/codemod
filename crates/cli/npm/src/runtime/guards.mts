@@ -117,29 +117,6 @@ function guardedClass(name: string, original: object): object {
   });
 }
 
-// What writes, in `fs` and `fs/promises`.
-const FS_WRITES = [
-  "writeFile",
-  "appendFile",
-  "mkdir",
-  "mkdtemp",
-  "rm",
-  "rmdir",
-  "unlink",
-  "rename",
-  "copyFile",
-  "cp",
-  "symlink",
-  "link",
-  "truncate",
-  "chmod",
-  "lchmod",
-  "chown",
-  "lchown",
-  "utimes",
-  "lutimes",
-] as const;
-
 const CHILD_PROCESS = [
   "exec",
   "execSync",
@@ -149,23 +126,6 @@ const CHILD_PROCESS = [
   "spawnSync",
   "fork",
 ] as const;
-
-/** Whether `open`'s flags write (create, truncate, append or write). */
-function writes(flags: unknown): boolean {
-  // `fs.open(path, callback)`: read only.
-  if (flags === undefined || flags === null || typeof flags === "function") return false;
-  if (typeof flags === "number") {
-    const {
-      O_WRONLY = 1,
-      O_RDWR = 2,
-      O_CREAT = 0,
-      O_TRUNC = 0,
-      O_APPEND = 0,
-    } = (require("node:fs") as typeof import("node:fs")).constants;
-    return (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) !== 0;
-  }
-  return /[wa+]/.test(String(flags));
-}
 
 function install(real: RealGlobals): void {
   const globals = globalThis as unknown as Record<string, unknown>;
@@ -201,33 +161,41 @@ function install(real: RealGlobals): void {
     wrapMethod(childProcess, name, (original) => guarded(`child_process.${name}`, original));
   }
 
-  // Writing files: the file API, or a step.
+  // File access: `codemod/files`, even for workflows supplied as preloaded modules.
   const fs = require("node:fs") as Record<string, unknown>;
   const fsPromises = fs.promises as Record<string, unknown>;
-  for (const name of FS_WRITES) {
-    wrapMethod(fs, name, (original) => guarded(`fs.${name}`, original));
-    wrapMethod(fs, `${name}Sync`, (original) => guarded(`fs.${name}Sync`, original));
-    wrapMethod(fsPromises, name, (original) => guarded(`fs/promises.${name}`, original));
+  for (const [object, module] of [
+    [fs, "fs"],
+    [fsPromises, "fs/promises"],
+  ] as const) {
+    for (const name of Object.keys(object)) {
+      // Node's loader itself uses the `.native` realpath entry point.
+      if (name === "realpathSync") {
+        const original = object[name] as typeof import("node:fs").realpathSync;
+        object[name] = Object.assign(guarded(`${module}.${name}`, original as AnyFunction), {
+          native: original.native,
+        });
+      } else {
+        wrapMethod(object, name, (original) => guarded(`${module}.${name}`, original));
+      }
+    }
   }
-  wrapMethod(fs, "createWriteStream", (original) => guarded("fs.createWriteStream", original));
-  const openWith = (name: string, original: AnyFunction) =>
-    function (this: unknown, ...args: unknown[]) {
-      if (writes(args[1])) refuse(name);
-      return original.apply(this, args);
-    };
-  wrapMethod(fs, "open", (original) => openWith("fs.open", original));
-  wrapMethod(fs, "openSync", (original) => openWith("fs.openSync", original));
-  wrapMethod(fsPromises, "open", (original) => openWith("fs/promises.open", original));
 
   // ESM named imports of the built-in modules see the wrappers too.
   if (typeof syncBuiltinESMExports === "function") syncBuiltinESMExports();
 
-  // `process.env`: read, not changed (a step takes its variables).
+  // No ambient environment in callbacks. Outside them keep the normal
+  // process environment, with writes guarded for the rest of the run too.
   const env = process.env;
   const refuseEnv = () => refuse("process.env");
+  const inCallback = () => scope()?.site === "callback";
   try {
     process.env = new Proxy(env, {
-      get: (target, key) => target[key as string],
+      get: (target, key) => (inCallback() ? undefined : Reflect.get(target, key)),
+      has: (target, key) => !inCallback() && Reflect.has(target, key),
+      ownKeys: (target) => (inCallback() ? [] : Reflect.ownKeys(target)),
+      getOwnPropertyDescriptor: (target, key) =>
+        inCallback() ? undefined : Reflect.getOwnPropertyDescriptor(target, key),
       set(target, key, value) {
         refuseEnv();
         target[key as string] = value as string;

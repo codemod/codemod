@@ -6,6 +6,7 @@ declare module "codemod:assess" {
   /** Option names, or names to descriptions (`null` for none). */
   type OptionsOf<O extends string> = readonly O[] | { readonly [K in O]: string | null };
 
+  /** @experimental */
   export interface YesNoQuestion {
     readonly type: "yesNo";
     readonly instructions: string;
@@ -14,12 +15,14 @@ declare module "codemod:assess" {
     readonly threshold?: number;
   }
 
+  /** @experimental */
   export interface ChoiceQuestion<O extends string = string> {
     readonly type: "choice";
     readonly instructions?: string;
     readonly options: readonly { readonly name: O; readonly description?: string }[];
   }
 
+  /** @experimental */
   export interface NumberQuestion {
     readonly type: "number";
     readonly instructions: string;
@@ -28,6 +31,7 @@ declare module "codemod:assess" {
     readonly levels?: readonly string[];
   }
 
+  /** @experimental */
   export interface ListQuestion<O extends string = string> {
     readonly type: "list";
     readonly instructions: string;
@@ -35,15 +39,20 @@ declare module "codemod:assess" {
     readonly threshold?: number;
   }
 
+  /** @experimental */
   export type Question = YesNoQuestion | ChoiceQuestion | NumberQuestion | ListQuestion;
 
-  /** Questions by id; answers come back under the same ids. */
+  /**
+   * Questions by id; answers come back under the same ids.
+   * @experimental
+   */
   export type Questions = { readonly [id: string]: Question };
 
   /**
    * A yes/no question. The answer is `true` when the probability of yes is
    * at least `threshold` (default 0.5); `details` has the probability.
    * `yes` and `no` say what counts as each.
+   * @experimental
    */
   export function yesNo(
     instructions: string,
@@ -53,8 +62,10 @@ declare module "codemod:assess" {
   /**
    * One of several options (2 to 255): `choice(["a", "b"])`, or with the
    * question and a description of each, `choice("Which?", { a: "When ...", b: null })`.
+   * @experimental
    */
   export function choice<const O extends string>(options: OptionsOf<O>): ChoiceQuestion<O>;
+  /** @experimental */
   export function choice<const O extends string>(
     instructions: string,
     options: OptionsOf<O>,
@@ -64,6 +75,7 @@ declare module "codemod:assess" {
    * A whole number from `min` to `max` (2 to 10 of them), `levels` describing
    * each. The answer is the probability-weighted number, so it may fall
    * between two; `details.likeliest` is the likeliest one.
+   * @experimental
    */
   export function number(
     instructions: string,
@@ -73,6 +85,7 @@ declare module "codemod:assess" {
   /**
    * Which of the options (1 to 50) apply. Each is asked as a yes/no
    * question; the answer lists those at or above `threshold` (default 0.5).
+   * @experimental
    */
   export function list<const O extends string>(
     instructions: string,
@@ -80,7 +93,10 @@ declare module "codemod:assess" {
     settings?: { threshold?: number },
   ): ListQuestion<O>;
 
-  /** The typed answer to a question. */
+  /**
+   * The typed answer to a question.
+   * @experimental
+   */
   export type Answer<Q> = Q extends YesNoQuestion
     ? boolean
     : Q extends ChoiceQuestion<infer O>
@@ -91,7 +107,10 @@ declare module "codemod:assess" {
           ? O[]
           : never;
 
-  /** What the model said about a question besides its answer. */
+  /**
+   * What the model said about a question besides its answer.
+   * @experimental
+   */
   export type Detail<Q> = Q extends YesNoQuestion
     ? { probability: number }
     : Q extends ChoiceQuestion<infer O>
@@ -102,6 +121,7 @@ declare module "codemod:assess" {
           ? { probabilities: Record<O, number> }
           : never;
 
+  /** @experimental */
   export interface Assessment<Q extends Questions> {
     answers: { -readonly [K in keyof Q]: Answer<Q[K]> };
     details: { -readonly [K in keyof Q]: Detail<Q[K]> };
@@ -115,6 +135,7 @@ declare module "codemod:assess" {
     usage: { calls: number; inputTokens: number; outputTokens: number };
   }
 
+  /** @experimental */
   export interface AssessContext {
     /**
      * The files the file imports, followed through re-exports to the files
@@ -131,6 +152,7 @@ declare module "codemod:assess" {
     limit?: number;
   }
 
+  /** @experimental */
   export interface AssessOptions<Q extends Questions> {
     questions: Q;
     context?: AssessContext;
@@ -164,6 +186,7 @@ declare module "codemod:assess" {
    * answers.handlesErrors; // boolean
    * answers.smell; // "swallowed" | "logged-only" | "none"
    * ```
+   * @experimental
    */
   export function assess<const Q extends Questions>(
     file: string | { readonly path: string; readonly text?: string },

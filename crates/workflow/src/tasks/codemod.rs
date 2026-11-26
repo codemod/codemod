@@ -96,24 +96,24 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         .map_err(|e| TaskError::Failed(format!("cannot load '{}': {e}", request.source)))?;
     task.log(format!("running {}", request.source));
 
-    let child = Arc::new(
-        run.child(
-            task.position,
-            task.alongside,
-            workflow_path.clone(),
-            package_dir,
-            request
-                .params
-                .map(Value::Object)
-                .unwrap_or_else(|| run.params.clone()),
-            workflow.built.callbacks.clone(),
-            Arc::new(NestedEvents {
-                parent: Arc::clone(&run.events),
-            }),
-            identity,
-            Arc::clone(&task.cancel),
-        ),
+    let mut child = run.child(
+        task.position,
+        task.alongside,
+        workflow_path.clone(),
+        package_dir,
+        request
+            .params
+            .map(Value::Object)
+            .unwrap_or_else(|| run.params.clone()),
+        workflow.built.callbacks.clone(),
+        Arc::new(NestedEvents {
+            parent: Arc::clone(&run.events),
+        }),
+        identity,
+        Arc::clone(&task.cancel),
     );
+    child.trusted = nested_trust(run.trusted, local);
+    let child = Arc::new(child);
     let observer = run.services.nested_observer.clone();
     if let (Some(observer), Some(nested)) = (&observer, &nested_run) {
         block_on(observer.record(NestedCodemodRunEvent::Started(nested.clone())));
@@ -186,6 +186,13 @@ fn require_preview_if_restricted(
     Ok(())
 }
 
+/// Whether a nested codemod's steps are the person's own: only a local one
+/// in a workflow that is. A package from the registry never is, wherever it
+/// is nested, and what a registry package nests is the package's.
+fn nested_trust(parent: bool, local: bool) -> bool {
+    parent && local
+}
+
 fn is_local(source: &str) -> bool {
     source.starts_with("./") || source.starts_with("../") || source.starts_with('/')
 }
@@ -214,6 +221,17 @@ impl EventSink for NestedEvents {
 mod tests {
     use super::*;
     use butterflow_core::registry::PackageSpec;
+
+    #[test]
+    fn only_a_local_codemod_in_ones_own_workflow_is_trusted() {
+        assert!(nested_trust(true, true));
+        assert!(
+            !nested_trust(true, false),
+            "a registry package nested in one's own"
+        );
+        assert!(!nested_trust(false, true), "what a registry package nests");
+        assert!(!nested_trust(false, false));
+    }
 
     #[test]
     fn nested_registry_preview_restriction_rejects_apply_but_allows_dry_run() {

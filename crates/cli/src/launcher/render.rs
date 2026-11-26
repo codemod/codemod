@@ -226,6 +226,7 @@ fn step_symbol(state: StepState, tick: usize) -> Span<'static> {
             Style::default().fg(Color::Cyan),
         ),
         StepState::Replayed => Span::styled("↺", dim()),
+        StepState::Skipped => Span::styled("↷", dim()),
         StepState::Succeeded => Span::styled("✓", Style::default().fg(Color::Green)),
         StepState::Partial => Span::styled("◐", Style::default().fg(Color::Yellow)),
         StepState::Failed => Span::styled("✗", Style::default().fg(Color::Red)),
@@ -312,10 +313,13 @@ pub fn run(frame: &mut Frame, view: &RunView) {
     let mut keys: Vec<(&str, &str)> = Vec::new();
     match &view.modal {
         Some(Modal::Approval { approval, .. }) => {
-            keys.push(("y", "approve"));
-            keys.push(("n", "reject"));
-            if matches!(approval, Approval::Manual { .. }) {
-                keys.push(("l", "later"));
+            if matches!(approval, Approval::InterruptedStep { .. }) {
+                keys.extend([("y", "rerun"), ("n", "skip"), ("esc", "later")]);
+            } else {
+                keys.extend([("y", "approve"), ("n", "reject")]);
+                if matches!(approval, Approval::Manual { .. }) {
+                    keys.push(("l", "later"));
+                }
             }
         }
         Some(Modal::Agent { .. }) => {
@@ -603,6 +607,9 @@ fn approval_modal(frame: &mut Frame, approval: &Approval) {
             " Open a pull request? ",
             format!("Push '{branch}' and open \"{title}\"."),
         ),
+        Approval::InterruptedStep { .. } => (" Interrupted step ", approval.prompt()),
+        Approval::Agent { .. } => (" Run a coding agent? ", approval.prompt()),
+        Approval::HttpRequest { .. } => (" Send an HTTP request? ", approval.prompt()),
         Approval::UncommittedChanges {
             path,
             not_a_repository,
@@ -615,11 +622,16 @@ fn approval_modal(frame: &mut Frame, approval: &Approval) {
             },
         ),
     };
+    let (yes, no) = if matches!(approval, Approval::InterruptedStep { .. }) {
+        (" rerun   ", " skip")
+    } else {
+        (" approve   ", " reject")
+    };
     let mut keys = vec![
         Span::styled("y", bold()),
-        Span::raw(" approve   "),
+        Span::raw(yes),
         Span::styled("n", bold()),
-        Span::raw(" reject"),
+        Span::raw(no),
     ];
     if matches!(approval, Approval::Manual { .. }) {
         keys.push(Span::raw("   "));

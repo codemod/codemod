@@ -168,6 +168,8 @@ pub struct CodemodOutput {
     pub secondary: Vec<FileChange>,
     /// The `data` the transform returned for this file, as JSON.
     pub data: Option<serde_json::Value>,
+    /// The transform ran on a target tree that contains syntax errors.
+    pub recovered_syntax: bool,
 }
 
 /// Shared accumulator for file changes produced by `jssgTransform`.
@@ -512,6 +514,18 @@ where
             pending: options.pending_files.clone(),
             ..JssgFileChanges::default()
         };
+        let files_pending = options.pending_files.clone().unwrap_or_else(|| {
+            let file = dunce::canonicalize(options.file_path).unwrap_or_else(|_| options.file_path.to_path_buf());
+            let content = options.content.to_string();
+            super::PendingFiles::with_base(move |path| (path == file).then(|| Ok(content.clone())))
+        });
+        ctx.store_userdata(super::target_files::TargetFiles::new(
+            options.target_directory.to_path_buf(), files_pending,
+        )).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store target files: {e:?}"),
+            },
+        })?;
         ctx.store_userdata(jssg_file_changes.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store JssgFileChanges: {:?}", e),
@@ -661,7 +675,7 @@ where
                     .collect();
 
                 if ast_matches.is_empty() {
-                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![], data: None });
+                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![], data: None, recovered_syntax: false });
                 }
 
                 Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
@@ -714,7 +728,8 @@ where
                 .map(|guard| guard.clone())
                 .unwrap_or_default();
 
-            Ok(CodemodOutput { primary, secondary, data })
+            let recovered_syntax = sg_root_inner.grep.root().get_inner_node().has_error();
+            Ok(CodemodOutput { primary, secondary, data, recovered_syntax })
         };
         execution.await
     })

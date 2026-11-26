@@ -28,12 +28,17 @@ pub struct OpenOptions {
     pub given: Option<Map<String, Value>>,
     /// Give every approval the workflow asks for.
     pub approve: Option<bool>,
+    /// Give these questions only, by id (`http:0`, `shell:2`), as
+    /// `codemod workflow resume --approve <id>` does.
+    pub approved: Option<Vec<String>>,
     /// Capabilities for host tasks' transforms, on top of codemod.yaml's.
     pub capabilities: Option<Vec<String>>,
     /// `"memory"` (the default for tests and dry runs) or `"local"`.
     pub store: Option<String>,
     /// Continue this run instead of starting one (`store: "local"`).
     pub resume: Option<String>,
+    pub rerun_steps: Option<Vec<u32>>,
+    pub skip_steps: Option<Vec<u32>>,
     /// The decision model `codemod/assess` asks, over what the workflow's
     /// codemod.yaml, the user config and the environment choose.
     pub decision_model: Option<DecisionModelOptions>,
@@ -115,8 +120,11 @@ impl Run {
         let engine = Engine::new(
             store,
             events.clone(),
-            Arc::new(NonInteractive {
-                approve_all: options.approve.unwrap_or(true),
+            Arc::new(Approvals {
+                all: NonInteractive {
+                    approve_all: options.approve.unwrap_or(true),
+                },
+                ids: options.approved.unwrap_or_default(),
             }),
             Services {
                 capabilities,
@@ -126,7 +134,24 @@ impl Run {
             },
         );
         let run = match options.resume {
-            Some(run_id) => engine.open_resumed(&run_id),
+            Some(run_id) => engine.open_resumed_with(
+                &run_id,
+                codemod_workflow::ResumeOptions {
+                    rerun_steps: options
+                        .rerun_steps
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(u64::from)
+                        .collect(),
+                    skip_steps: options
+                        .skip_steps
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(u64::from)
+                        .collect(),
+                    ..Default::default()
+                },
+            ),
             None => engine.open(OpenRequest {
                 workflow,
                 target: PathBuf::from(&options.target),
@@ -202,6 +227,11 @@ impl Run {
     #[napi]
     pub fn event(&self, event: String) -> Result<()> {
         self.inner.run.event(&event).map_err(Error::from_reason)
+    }
+
+    #[napi]
+    pub fn experimental(&self, api: String) {
+        self.inner.run.experimental(&api);
     }
 
     #[napi]
@@ -281,12 +311,28 @@ impl Run {
 
     /// Commit what a step's callbacks did to its files. Resolves to `{ changes, failures }`.
     #[napi]
-    pub async fn commit_files(&self, position: u32, label: String, files: String) -> Result<Value> {
+    pub async fn commit_files(
+        &self,
+        position: u32,
+        label: String,
+        files: String,
+        created: String,
+    ) -> Result<Value> {
         let inner = Arc::clone(&self.inner);
         let files: Value = serde_json::from_str(&files).map_err(to_napi)?;
-        off_thread(move || inner.run.commit_files(position.into(), label, files))
-            .await?
-            .map_err(Error::from_reason)
+        let created = serde_json::from_str(&created).map_err(to_napi)?;
+        off_thread(move || {
+            inner
+                .run
+                .commit_files(position.into(), label, files, created)
+        })
+        .await?
+        .map_err(Error::from_reason)
+    }
+
+    #[napi]
+    pub fn target_files(&self) -> NativeFiles {
+        NativeFiles(self.inner.run.target_files())
     }
 
     /// Events since the last call, as the engine reports them.
@@ -315,6 +361,76 @@ impl Run {
             "filesWithErrors": count(&stats.files_with_errors),
         });
         Ok(report)
+    }
+}
+
+#[napi]
+pub struct NativeFiles(codemod_sandbox::sandbox::engine::target_files::TargetFiles);
+
+#[napi]
+impl NativeFiles {
+    #[napi]
+    pub fn read(&self, path: String) -> Result<String> {
+        self.0.read(&path).map_err(Error::from_reason)
+    }
+
+    #[napi]
+    pub fn exists(&self, path: String) -> Result<bool> {
+        self.0.exists(&path).map_err(Error::from_reason)
+    }
+
+    #[napi]
+    pub fn list(&self, glob: String) -> Result<Vec<String>> {
+        self.0.list(&glob).map_err(Error::from_reason)
+    }
+
+    #[napi]
+    pub fn create(&self, path: String, text: String) -> Result<()> {
+        self.0.create(&path, text).map_err(Error::from_reason)
+    }
+
+    #[napi]
+    pub fn created(&self) -> Vec<Vec<String>> {
+        self.0
+            .created()
+            .into_iter()
+            .map(|(path, text)| vec![path, text])
+            .collect()
+    }
+}
+
+/// `approve` for every question, or `approved` for some, by id.
+struct Approvals {
+    all: NonInteractive,
+    ids: Vec<String>,
+}
+
+impl codemod_workflow::interaction::Interaction for Approvals {
+    fn is_interactive(&self) -> bool {
+        false
+    }
+
+    fn approve(
+        &self,
+        approval: &codemod_workflow::interaction::Approval,
+    ) -> codemod_workflow::interaction::Decision {
+        self.all.approve(approval)
+    }
+
+    fn ask(
+        &self,
+        ask: &codemod_workflow::interaction::Ask,
+        approval: &codemod_workflow::interaction::Approval,
+    ) -> codemod_workflow::interaction::Decision {
+        if approval.given_by_approve_all()
+            && self
+                .ids
+                .iter()
+                .any(|given| *given == ask.id || Some(given.as_str()) == approval.scope())
+        {
+            return codemod_workflow::interaction::Decision::Approved;
+        }
+        self.all.approve(approval)
     }
 }
 

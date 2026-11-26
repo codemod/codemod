@@ -77,6 +77,7 @@ impl WriteGate {
                     id: approval.question_id(None),
                     step: None,
                     stop: Some(std::sync::Arc::clone(stop)),
+                    trusted: false,
                 };
                 match interaction.ask(&ask, &approval) {
                     Decision::Approved => Ok(()),
@@ -99,6 +100,9 @@ impl WriteGate {
     }
 
     fn mark_passed(&self) {
+        let Ok(_state) = self.store.lock_run_state(&self.run_id) else {
+            return;
+        };
         if let Ok(Some(mut record)) = self.store.get_run(&self.run_id) {
             if record.settings.check_uncommitted {
                 record.settings.check_uncommitted = false;

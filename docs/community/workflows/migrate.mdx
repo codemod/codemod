@@ -199,7 +199,7 @@ Most codemods run exactly as before. These are the differences, for both `workfl
 - **A step `if:` that fails to evaluate is reported.** The step is still skipped, as before, and the run's log says why.
 - **`runtime: docker` and `runtime: podman` are not supported.** Runs and upgrades refuse the whole workflow before any steps run. Use the [opt-in 1.x fallback](#running-a-package-with-codemod-1x) for packages that still need these runtimes.
 - **Shell state output requires a POSIX shell.** On Windows, a translated workflow that needs `$STATE_OUTPUTS` fails before any step runs. Run it on a POSIX system, or port the workflow so steps pass results directly.
-- **Transforms are pure.** A `jssg` transform that calls `fetch`, `child_process` or writes files with `fs` fails on each file, even with `capabilities` in `codemod.yaml` or `--allow-*` flags, which are now ignored for workflows. Reading the target with `fs` still works. Move network requests to an `http()` step and commands to a `shell` step before the transform runs, and give the transform what they returned. See [Callbacks are pure](/community/workflows/reference#callbacks-are-pure).
+- **Transforms only change files through recorded edits.** YAML packages can keep their supported target-local `fs` operations through the 1.x compatibility layer, including writing a new file. In `workflow.ts` and its transforms, import `codemod/files` instead. Move network requests to `http()` and commands to `shell()` steps; `--allow-*` flags do not grant callbacks those capabilities. See [Callbacks are pure](/community/workflows/reference#callbacks-are-pure).
 - **`state.schema` is accepted but not checked.**
 - **Runs are resumed by id:** `codemod workflow resume --id <run-id>`. A manual node waits as an approval step; resume it with `--approve`. 2.0 cannot resume 1.x runs. See [Resuming runs](/community/workflows/upgrade-from-1x#resuming-runs) for changes across 2.0 versions.
 - **`codemod workflow tui` was removed.** Runs show their progress in the terminal.
@@ -213,6 +213,8 @@ Publishing includes every callback and shard function the workflow imports, and 
 ## Breaking changes in this alpha
 
 A `workflow.ts` written for an earlier preview may need these changes. Each fails to build with a message that says what to write instead. `workflow.yaml` files need none: the translation does it for them.
+
+- **Replace `fs` imports with `codemod/files`.** Change UTF-8 `readFile` or `readFileSync` calls to `files.read(path)`, existence checks to `files.exists(path)`, and file discovery to `files.list(glob)`. To write a new file, use `files.create(path, text)`. It never overwrites an existing file. `workflow upgrade` rewrites straightforward calls and warns by filename when you need to make the change yourself.
 
 - **`jssg(...)` was removed: per-file logic is a `forEachFile` callback.** Write it inline, or keep it in a file as that file's default export and import it:
 

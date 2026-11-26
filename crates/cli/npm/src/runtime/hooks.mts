@@ -4,9 +4,10 @@
 import type { LoadHook, ResolveHook } from "node:module";
 
 import { resolveCodemodModule } from "./modules.mts";
-import { isYamlUrl, loadWorkflow, loadYaml } from "./transforms.mts";
+import { isYamlUrl, loadWorkflow, loadYaml, refuseWorkflowFs } from "./transforms.mts";
 
 export const resolve: ResolveHook = async (specifier, context, nextResolve) => {
+  refuseWorkflowFs(specifier, context.parentURL);
   const url = resolveCodemodModule(specifier);
   return url ? { url, shortCircuit: true } : nextResolve(specifier, context);
 };

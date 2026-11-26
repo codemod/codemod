@@ -29,7 +29,7 @@ pub struct Command {
     #[arg(long)]
     project_type: Option<ProjectType>,
 
-    /// Scaffold a skill-focused package with an install-skill workflow
+    /// Scaffold a skill-focused package with an install-skill workflow (experimental)
     #[arg(long)]
     skill: bool,
 
@@ -405,6 +405,9 @@ pub fn handler(args: &Command) -> Result<()> {
         interactive_setup(&project_name, args)?
     };
 
+    if config.package_behavior != PackageBehavior::WorkflowOnly {
+        eprintln!("{}", crate::experimental_notice("package skills"));
+    }
     if config.workspace {
         create_workspace_project(&project_path, &config)?;
     } else {

@@ -111,6 +111,11 @@ impl SgRoot {
         self.inner.grep.source().to_string()
     }
 
+    #[napi(js_name = "_jssgHasSyntaxErrors")]
+    pub fn jssg_has_syntax_errors(&self) -> bool {
+        self.inner.grep.root().get_inner_node().has_error()
+    }
+
     #[napi]
     pub fn rename(&self, _path: String) -> Result<()> {
         Err(Error::from_reason(

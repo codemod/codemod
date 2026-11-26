@@ -81,7 +81,7 @@ struct LegacyFileChange {
 pub struct Command {
     /// Package name with optional version (e.g., @org/package@1.0.0)
     #[arg(value_name = "PACKAGE")]
-    package: String,
+    pub(crate) package: String,
 
     /// Registry URL
     #[arg(long)]
@@ -129,7 +129,7 @@ pub struct Command {
     v1: bool,
 
     #[command(flatten)]
-    start: crate::workflow_exec::StartFlags,
+    pub(crate) start: crate::workflow_exec::StartFlags,
 
     #[command(flatten)]
     flags: crate::workflow_exec::RunFlags,
@@ -372,7 +372,11 @@ pub async fn handler(
         name: Some(canonical_codemod_name.clone()),
         dry_run,
         settings: crate::workflow_exec::ExecSettings {
-            approve_all: args.start.approve || pro_dry_run_required,
+            approve_all: args.start.approve_all() || pro_dry_run_required,
+            approve_ids: args.start.approve_kinds()?,
+            // A local directory the person names is theirs; a package from
+            // the registry is not.
+            trusted: butterflow_core::registry::is_local_source(&args.package),
             managed_git: args.start.managed_git,
             skip_shard_steps: pro_dry_run_required,
             nested_observer: Some(run_telemetry.nested_observer(telemetry.clone())),

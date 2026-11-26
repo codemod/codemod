@@ -12,13 +12,15 @@
  * package's `codemod/*` exports. Code that imports `codemod/*` needs none of this.
  *
  * @module
+ * @experimental
  */
 
 import module from "node:module";
 
 import { CODEMOD_MODULES, resolveCodemodModule } from "./runtime/modules.mts";
-import { isYamlUrl, loadWorkflow, loadYaml } from "./runtime/transforms.mts";
+import { isYamlUrl, loadWorkflow, loadYaml, refuseWorkflowFs } from "./runtime/transforms.mts";
 
+/** @experimental */
 export { resolveCodemodModule };
 
 /** What this file uses of Bun's `Bun` global. */
@@ -65,6 +67,7 @@ function register(): void {
   if (typeof module.registerHooks === "function") {
     module.registerHooks({
       resolve(specifier, context, nextResolve) {
+        refuseWorkflowFs(specifier, context.parentURL);
         const url = resolveCodemodModule(specifier);
         return url ? { url, shortCircuit: true } : nextResolve(specifier, context);
       },

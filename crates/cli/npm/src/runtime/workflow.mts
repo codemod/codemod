@@ -60,6 +60,7 @@ export function waitForEvent(name: string, options?: { timeout?: Duration }): Pr
   return body("waitForEvent()").waitForEvent(name, options);
 }
 
+/** @internal */
 export function __evaluate(kind: string, expression: string, scope: unknown): unknown {
   return current("__evaluate()").runtime.__evaluate(kind, expression, scope);
 }

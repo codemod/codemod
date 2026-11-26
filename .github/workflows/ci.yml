@@ -135,6 +135,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter codemod typecheck
+      - run: pnpm --filter codemod snapshot:stable-api
       - run: pnpm --filter codemod test
 
   jssg-utils-docs:

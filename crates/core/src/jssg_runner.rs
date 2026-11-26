@@ -83,7 +83,7 @@ pub type JssgDataCallback = Arc<dyn Fn(&str, Value) + Send + Sync>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JssgFileChange {
     pub path: PathBuf,
-    pub original: String,
+    pub original: Option<String>,
     pub content: String,
     pub rename_to: Option<PathBuf>,
 }
@@ -212,6 +212,7 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     let skipped = AtomicUsize::new(0);
     let abort = AtomicBool::new(false);
 
+    let recovered = AtomicUsize::new(0);
     let walk = config.execute(|file_path, _| {
         if !file_path.is_file() || abort.load(Ordering::SeqCst) {
             return;
@@ -238,7 +239,10 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
             let unit = Mutex::new(relative.clone());
             let relative = relative.clone();
             let callback: RuntimeEventCallback = Arc::new(move |event: RuntimeEvent| {
-                if event.kind == RuntimeEventKind::SetCurrentUnit {
+                if matches!(
+                    event.kind,
+                    RuntimeEventKind::SetCurrentUnit | RuntimeEventKind::Experimental(_)
+                ) {
                     *unit.lock().unwrap() = format!("{relative} :: {}", event.message);
                     return;
                 }
@@ -281,7 +285,11 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
                 primary,
                 secondary,
                 data,
+                recovered_syntax,
             }) => {
+                if recovered_syntax {
+                    recovered.fetch_add(1, Ordering::Relaxed);
+                }
                 if let (Some(on_data), Some(data)) = (&request.on_data, data) {
                     on_data(&relative, data);
                 }
@@ -335,7 +343,7 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
         outcome.changes.push(JssgFileChange {
             rename_to: renames.remove(&path),
             path,
-            original,
+            original: Some(original),
             content,
         });
     }
@@ -346,11 +354,22 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
         };
         outcome.changes.push(JssgFileChange {
             path,
-            original: text.clone(),
+            original: Some(text.clone()),
             content: text,
             rename_to: Some(to),
         });
     }
+    outcome.changes.extend(
+        pending
+            .created()
+            .into_iter()
+            .map(|(path, content)| JssgFileChange {
+                path,
+                original: None,
+                content,
+                rename_to: None,
+            }),
+    );
     outcome.changes.sort_by(|a, b| a.path.cmp(&b.path));
     outcome.failures = failures.into_inner().unwrap();
     outcome.failures.sort();
@@ -358,6 +377,12 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     outcome.matched.sort();
     outcome.unmodified = unmodified.load(Ordering::SeqCst);
     outcome.skipped = skipped.load(Ordering::SeqCst);
+    let recovered = recovered.load(Ordering::Relaxed);
+    if recovered > 0 {
+        outcome.warnings.push(format!(
+            "{recovered} files had syntax errors; transformed with error recovery"
+        ));
+    }
 
     // Worth saying only when the transform then ran: with no file to run on
     // nothing was lost, and when it fails on the files their errors say why.

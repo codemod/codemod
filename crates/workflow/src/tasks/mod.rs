@@ -95,6 +95,7 @@ impl TaskContext<'_> {
             id: approval.question_id(Some(&step)),
             step: Some(step),
             stop: Some(Arc::clone(&self.cancel)),
+            trusted: self.run.trusted,
         };
         let decision = self.run.interaction.ask(&ask, approval);
         if decision == Decision::Deferred {
@@ -172,6 +173,10 @@ pub(crate) fn failed_files(failed: usize, total: usize) -> String {
 #[derive(Debug)]
 pub(crate) enum TaskError {
     Failed(String),
+    FailedFiles {
+        message: String,
+        files: FileCount,
+    },
     /// A manual approval nobody could give now.
     AwaitingApproval(String),
     /// A manual approval was rejected: the run ends.
@@ -190,6 +195,10 @@ impl TaskError {
     pub fn to_payload(&self) -> String {
         let (name, message) = match self {
             Self::Failed(message) => ("Error", message.as_str()),
+            Self::FailedFiles { message, files } => {
+                return serde_json::json!({ "name": "Error", "message": message, "files": files })
+                    .to_string();
+            }
             Self::AwaitingApproval(message) => ("AwaitingApprovalError", message.as_str()),
             Self::Rejected(message) => ("RejectedError", message.as_str()),
             Self::Canceled => ("CanceledError", "the run was canceled"),
@@ -209,6 +218,22 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let experimental = match kind.as_str() {
+        "http" => Some("http()"),
+        "agent" => Some("agent()"),
+        "installSkill" => Some("installSkill()"),
+        "sleep" => Some("sleep()"),
+        "waitForEvent" => Some("waitForEvent()"),
+        "shard" if !task.run.v1_compat() => Some("shard()"),
+        "dependencyGraph" => Some("codemod/deps.dependencyGraph"),
+        "branch" => Some("codemod/git.branch"),
+        "commit" => Some("codemod/git.commit"),
+        "pullRequest" => Some("codemod/git.pullRequest"),
+        _ => None,
+    };
+    if let Some(api) = experimental {
+        task.run.experimental(api);
+    }
     // Steps that change the target outside the file commits `before_write`
     // already guards. Git steps only touch git with `--managed-git`.
     let git_step = matches!(kind.as_str(), "branch" | "commit" | "pullRequest");
@@ -218,7 +243,7 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         task.run.before_write().map_err(TaskError::Failed)?;
     }
     let result = match kind.as_str() {
-        "forEachFile" => for_each_file::run(task, content).map_err(TaskError::from),
+        "forEachFile" => for_each_file::run(task, content),
         "function" => function::run(task, content).map_err(TaskError::from),
         "dependencyGraph" => dependency_graph::run(task, content).map_err(TaskError::from),
         "shell" => shell::run(task, parse(content)?),
@@ -284,6 +309,35 @@ impl Globs {
             Self::One(glob) => vec![glob],
             Self::Many(globs) => globs,
         }
+    }
+}
+
+/// What a step says when `what` ("the shell command") was not approved. An
+/// unattended run was not asked: it says how to allow it.
+pub(crate) fn not_approved(task: &TaskContext<'_>, what: &str) -> String {
+    if task.run.interaction.is_interactive() {
+        return format!("{what} was not approved");
+    }
+    let scope = match task_scope(what) {
+        Some(scope) => format!("--approve={scope} for steps like it, or --approve"),
+        None => "--approve".to_string(),
+    };
+    format!(
+        "{what} was not approved: step '{}' is a package's, and nobody can be asked in an unattended run. Read what the package runs, then pass {scope} for everything it runs and sends (shell, agent, http and pull request steps)",
+        task.label
+    )
+}
+
+/// The `--approve=<scope>` of what a step asked to do.
+fn task_scope(what: &str) -> Option<&'static str> {
+    if what.starts_with("the shell command") {
+        Some("shell")
+    } else if what.starts_with("the request") {
+        Some("http")
+    } else if what.starts_with("running") {
+        Some("agent")
+    } else {
+        None
     }
 }
 

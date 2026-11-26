@@ -18,6 +18,7 @@ pub enum StepState {
     Running,
     /// Finished in an earlier attempt of the run; its result was reused.
     Replayed,
+    Skipped,
     Succeeded,
     Partial,
     Failed,
@@ -29,6 +30,8 @@ pub enum StepState {
 impl From<StepStatus> for StepState {
     fn from(status: StepStatus) -> Self {
         match status {
+            StepStatus::Started => Self::Running,
+            StepStatus::Skipped => Self::Skipped,
             StepStatus::Succeeded => Self::Succeeded,
             StepStatus::Partial => Self::Partial,
             StepStatus::Failed => Self::Failed,
@@ -120,6 +123,7 @@ pub struct RunView {
     pub steps: Vec<StepView>,
     /// Everything the run printed: its own output and every step's.
     pub output: Vec<String>,
+    pub experimental_notices: Vec<String>,
     pub diffs: Vec<DiffView>,
     /// 0 is the whole run; `i + 1` is `steps[i]`.
     pub selected: usize,
@@ -147,6 +151,7 @@ impl RunView {
             phase: Phase::Starting,
             steps: Vec::new(),
             output: Vec::new(),
+            experimental_notices: Vec::new(),
             diffs: Vec::new(),
             selected: 0,
             pane: Pane::Logs,
@@ -216,6 +221,11 @@ impl RunView {
             return;
         };
         match event {
+            Event::Experimental { api } => {
+                let notice = crate::experimental_notice(&api);
+                self.log(None, notice.clone());
+                self.experimental_notices.push(notice);
+            }
             Event::RunStarted {
                 run_id, resumed, ..
             } => {

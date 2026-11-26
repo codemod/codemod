@@ -4,6 +4,8 @@ title: "Testing"
 
 Test your JSSG codemod using snapshot testing with single-file fixtures or full directory snapshots.
 
+An invalid transform module fails the test. If an input fixture has a syntax error, the transform still runs on the recovered syntax tree; Codemod logs a count and compares the resulting output with the snapshot.
+
 <Tip>
   These tests run one transform file. To run the same fixtures through the whole workflow, with every step it runs, use a [workflow test file](/community/workflows/testing).
 </Tip>

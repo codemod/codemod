@@ -27,7 +27,7 @@
  * native addon; `shard`'s functions run in the engine's isolates.
  *
  * The rules the CLI holds workflow code to hold here too. Function steps,
- * `forEachFile` callbacks and reducers are pure: they get the file API,
+ * `forEachFile` callbacks and reducers use the `file` and `files` APIs,
  * reading files and the analysis APIs, but not `fetch`, `child_process`,
  * writing files (`fs.writeFile`, `fs.mkdir`, ...), changing
  * `process.env`, or timers; use `http()`, `shell()` and `sleep()` steps
@@ -71,22 +71,31 @@ import type {
   Selector,
   StartRequest,
 } from "./orchestrator.mts";
-import { workflowUrl } from "./transforms.mts";
+import { importWorkflow } from "./transforms.mts";
 import { callbackId } from "./workflow.mts";
 
-/** A `URL` (`new URL("./workflow.ts", import.meta.url)`); only `file:` URLs are paths. */
+/**
+ * A `URL` (`new URL("./workflow.ts", import.meta.url)`); only `file:` URLs are paths.
+ * @experimental
+ */
 export interface UrlLike {
   readonly href: string;
 }
 
-/** An `AbortSignal`, or what a test environment has in its place. */
+/**
+ * An `AbortSignal`, or what a test environment has in its place.
+ * @experimental
+ */
 export interface AbortSignalLike {
   readonly aborted: boolean;
   addEventListener?(type: "abort", listener: () => void, options?: { once?: boolean }): void;
   removeEventListener?(type: "abort", listener: () => void): void;
 }
 
-/** A workflow module: what `import("./workflow.ts")` gives. */
+/**
+ * A workflow module: what `import("./workflow.ts")` gives.
+ * @experimental
+ */
 export interface WorkflowModule {
   default: (context: {
     params: Record<string, JsonValue>;
@@ -96,6 +105,7 @@ export interface WorkflowModule {
   }) => unknown;
 }
 
+/** @experimental */
 export interface HostRunOptions {
   /** The directory the workflow changes. Default: the current directory. */
   target?: string;
@@ -111,6 +121,13 @@ export interface HostRunOptions {
   given?: Record<string, JsonValue>;
   /** Give every approval the workflow asks for. Default `true`. */
   approve?: boolean;
+  /**
+   * With `approve: false`: the questions to approve all the same, by id
+   * (`"http:0"`, `"shell:2"`: the kind and the step's key), as
+   * `codemod workflow resume --approve <id>` does. Steps that run or send
+   * something (`shell`, `agent`, `http`, `pullRequest`) fail unapproved.
+   */
+  approved?: string[];
   /**
    * @deprecated Capabilities for host tasks' transforms, on top of those
    * codemod.yaml declares. Workflow callbacks get none of them: they are
@@ -130,6 +147,10 @@ export interface HostRunOptions {
    * `codemod workflow resume`, nor one the CLI started here.
    */
   resume?: string;
+  /** On resume, repeat an interrupted side-effect step by its position. */
+  rerunSteps?: number[];
+  /** On resume, skip an interrupted side-effect step and give it a null result. */
+  skipSteps?: number[];
   /** The workflow file, when `workflow` is the module itself. */
   path?: string;
   /** Instead of `path`: the directory relative task paths resolve against. */
@@ -146,8 +167,10 @@ export interface HostRunOptions {
   decisionModel?: DecisionModelOptions;
 }
 
+/** @experimental */
 export type { DecisionModelOptions };
 
+/** @experimental */
 export interface HostStepReport {
   readonly position: number;
   readonly label: string;
@@ -158,6 +181,7 @@ export interface HostStepReport {
   readonly given: boolean;
 }
 
+/** @experimental */
 export interface HostRunReport {
   readonly runId: string;
   readonly status:
@@ -208,6 +232,7 @@ type BodyEnding =
  * any workflow on Bun) is loaded without the build's changes: imported
  * callbacks load with it and run as plain functions, and `shard`'s
  * `method.function` and `filter` fail. Give those workflows by path.
+ * @experimental
  */
 export async function runWorkflow(
   workflow: string | UrlLike | WorkflowModule,
@@ -232,11 +257,16 @@ export async function runWorkflow(
     until: options.until,
     given: options.given,
     approve: options.approve ?? true,
+    approved: options.approved,
     capabilities: options.capabilities ?? [],
     store: options.store,
     resume: options.resume,
+    rerunSteps: options.rerunSteps,
+    skipSteps: options.skipSteps,
     decisionModel: options.decisionModel,
   });
+
+  run.experimental("codemod/host");
 
   const body = bodyClockFor(run.startedAt, runSeed(run.runId));
   const flight = inFlight();
@@ -365,7 +395,7 @@ function locate(
   }
   // Marked for the load hook, which applies the build's changes to what
   // the engine runs (see transforms.mts).
-  return { path, load: () => import(workflowUrl(path)) };
+  return { path, load: () => importWorkflow(path) as Promise<Partial<WorkflowModule>> };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -547,11 +577,17 @@ async function runInPlace(
   if (!outer) throw new Error("a step started outside its run");
   if (task.task.kind === "function") {
     const step = stepScope(task.position, task.label);
-    const value = await context.run({ ...outer, step }, () => fn());
+    const files = run.targetFiles();
+    const value = await context.run({ ...outer, step, files }, () => fn());
     // A failure reported with failStep() stands even if the code caught it.
     if (step.failure !== undefined) throw new Error(step.failure);
     const result = value === undefined ? null : value;
     checkJson(result, "the step's result");
+    const created = files.created();
+    limit.check();
+    if (created.length) {
+      await run.commitFiles(task.position, task.label, "[]", JSON.stringify(created));
+    }
     return { result };
   }
   if (task.task.kind === "forEachFile") return forEachFile(run, outer, task, fn, limit);
@@ -571,17 +607,20 @@ async function forEachFile(
   const total = files.length;
   const every = Math.max(1, Math.floor(total / 100));
   let processed = 0;
+  let recovered = 0;
   const outputs: ({ output: Json } | undefined)[] = Array.from({ length: total });
   const failures: { path: string; error: string }[] = [];
   const effects: FileEffects[] = [];
+  const created: [string, string][] = [];
   const concurrency = selector.concurrency ?? 1;
-  const fold = task.reducer ? inOrderFold(task, outer, step, concurrency) : undefined;
+  const fold = task.reducer ? inOrderFold(task, outer, step, concurrency, created) : undefined;
 
   const one = async (index: number, [path, text]: [path: string, text: string]) => {
-    const { file, effects: done, close } = fileHandle(path, text, step.language);
+    const { file, effects: done, recoveredSyntax, close } = fileHandle(path, text, step.language);
+    const targetFiles = run.targetFiles();
     try {
       step.failure = undefined;
-      const output = await context.run({ ...outer, step }, () => fn(file));
+      const output = await context.run({ ...outer, step, files: targetFiles }, () => fn(file));
       // A failure reported with failFile() stands even if the callback
       // caught it. With files in flight together it cannot be told whose it
       // was, as in the CLI.
@@ -595,6 +634,8 @@ async function forEachFile(
         else outputs[index] = { output };
       }
       if (done.length) effects.push({ path, original: text, effects: done });
+      created.push(...targetFiles.created());
+      if (recoveredSyntax()) recovered++;
     } catch (error) {
       failures.push({ path, error: describeError(error) });
     } finally {
@@ -637,10 +678,18 @@ async function forEachFile(
   if (limit.expired) throw new CanceledError("the step ran out of time");
 
   effects.sort((a, b) => (a.path < b.path ? -1 : 1));
-  const committed = await run.commitFiles(task.position, task.label, JSON.stringify(effects));
+  const committed = await run.commitFiles(
+    task.position,
+    task.label,
+    JSON.stringify(effects),
+    JSON.stringify(created),
+  );
   const allFailures = [...failures, ...committed.failures].sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
+  if (recovered > 0) {
+    run.log(task.position, `${recovered} files had syntax errors; transformed with error recovery`);
+  }
   // As the CLI does: each file that failed, then its error.
   for (const { path, error } of allFailures) {
     run.log(task.position, path);
@@ -650,8 +699,9 @@ async function forEachFile(
   // when it failed on some.
   const [first] = allFailures;
   if (first && allFailures.length === total) {
-    throw new Error(
-      `the callback failed on every file; first error: ${first.path}: ${first.error}`,
+    throw Object.assign(
+      new Error(`${total} of ${total} files failed; first error: ${first.path}: ${first.error}`),
+      { files: { failed: total, total } },
     );
   }
   const result: Outcome = {
@@ -698,6 +748,7 @@ function inOrderFold(
   outer: RunScope,
   step: StepScope,
   concurrency: number,
+  created: [string, string][],
 ): InOrderFold {
   const reducer = task.reducer as Callback;
   const reduce = task.task.reduce as { initial: Json };
@@ -706,6 +757,7 @@ function inOrderFold(
   const window = Math.max(concurrency * 4, 1024);
   // The reducer's own scope: a failStep() it catches still fails the step.
   const reducing = stepScope(step.position, step.label, step.language);
+  const files = outer.run.targetFiles();
   const waiting: { index: number; go: () => void }[] = [];
   const wake = () => {
     for (let i = waiting.length - 1; i >= 0; i--) {
@@ -731,7 +783,7 @@ function inOrderFold(
       if (!entry) continue;
       try {
         reducing.failure = undefined;
-        folded = await context.run({ ...outer, step: reducing }, () =>
+        folded = await context.run({ ...outer, step: reducing, files }, () =>
           reducer(folded, entry.output, entry.path),
         );
         if (reducing.failure !== undefined) error = { error: new Error(reducing.failure) };
@@ -762,6 +814,7 @@ function inOrderFold(
       if (error) throw new Error(`the reducer failed: ${describeError(error.error)}`);
       const result = folded === undefined ? null : folded;
       checkJson(result, "the reducer's result");
+      created.push(...files.created());
       return result;
     },
   };

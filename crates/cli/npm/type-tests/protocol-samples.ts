@@ -56,13 +56,19 @@ export const events: Event[] = [
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
+    "event": "experimental",
+    "api": "http()",
+    "seq": 1,
+    "ts": "2026-01-01T00:00:00+00:00"
+  },
+  {
     "event": "step_started",
     "position": 0,
     "step": "0",
     "parent": null,
     "label": "Replace",
     "kind": "forEachFile",
-    "seq": 1,
+    "seq": 2,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -72,7 +78,7 @@ export const events: Event[] = [
     "parent": null,
     "label": "Find",
     "kind": null,
-    "seq": 2,
+    "seq": 3,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -82,7 +88,7 @@ export const events: Event[] = [
     "parent": null,
     "processed": 1,
     "total": 2,
-    "seq": 3,
+    "seq": 4,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -91,14 +97,14 @@ export const events: Event[] = [
     "step": "2/0",
     "parent": "2",
     "line": "src/a.ts",
-    "seq": 4,
+    "seq": 5,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
     "event": "run_log",
     "line": "from the body",
     "step": null,
-    "seq": 5,
+    "seq": 6,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -112,7 +118,7 @@ export const events: Event[] = [
       "text": "Done.",
       "delta": false
     },
-    "seq": 6,
+    "seq": 7,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -124,7 +130,7 @@ export const events: Event[] = [
     "attempt": 1,
     "attempts": 3,
     "error": "boom",
-    "seq": 7,
+    "seq": 8,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -136,7 +142,7 @@ export const events: Event[] = [
     "diff": "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-var a = 1;\n+let a = 1;\n",
     "additions": 1,
     "deletions": 1,
-    "seq": 8,
+    "seq": 9,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -152,7 +158,7 @@ export const events: Event[] = [
       "bytes": 300000,
       "limit": 262144
     },
-    "seq": 9,
+    "seq": 10,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -165,7 +171,7 @@ export const events: Event[] = [
     "status": "partial",
     "error": "1 of 2 files failed",
     "duration_ms": 12,
-    "seq": 10,
+    "seq": 11,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -178,7 +184,7 @@ export const events: Event[] = [
       "kind": "manual",
       "message": "Ship it?"
     },
-    "seq": 11,
+    "seq": 12,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -192,7 +198,7 @@ export const events: Event[] = [
       "path": "/work/app",
       "notARepository": false
     },
-    "seq": 12,
+    "seq": 13,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -208,7 +214,7 @@ export const events: Event[] = [
         "available": true
       }
     ],
-    "seq": 13,
+    "seq": 14,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -216,7 +222,7 @@ export const events: Event[] = [
     "id": "approval:1",
     "answer": "approved",
     "by": "answer",
-    "seq": 14,
+    "seq": 15,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -224,14 +230,14 @@ export const events: Event[] = [
     "id": "agent:3",
     "answer": null,
     "by": "eof",
-    "seq": 15,
+    "seq": 16,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
     "event": "control_error",
     "message": "no question 'approval:9' is open",
     "line": "{\"command\":\"approve\",\"question_id\":\"approval:9\"}",
-    "seq": 16,
+    "seq": 17,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -240,7 +246,7 @@ export const events: Event[] = [
     "diff": "@@ -1 +1 @@\n-var a = 1;\n+let a = 1;\n",
     "additions": 1,
     "deletions": 1,
-    "seq": 17,
+    "seq": 18,
     "ts": "2026-01-01T00:00:00+00:00"
   },
   {
@@ -272,7 +278,7 @@ export const events: Event[] = [
         }
       }
     ],
-    "seq": 18,
+    "seq": 19,
     "ts": "2026-01-01T00:00:00+00:00"
   }
 ];

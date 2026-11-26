@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use codemod_workflow::events::CollectEvents;
-use codemod_workflow::interaction::{Interaction, NonInteractive};
+use codemod_workflow::interaction::{Approval, Decision, Interaction, NonInteractive};
 use codemod_workflow::{
     load_workflow, Ending, Engine, LoadedWorkflow, MemoryStore, RunReport, RunStore, Services,
     StartRequest, TestPlan,
@@ -23,11 +23,50 @@ pub struct Harness {
     pub engine: Engine,
 }
 
+/// These fixtures are ours: what their steps run and send is approved
+/// (shell commands, agents, requests, pull requests). Manual approvals stay
+/// unanswered, so tests can pause and resume at them. Tests of what an
+/// unattended run refuses use [`Harness::unattended`].
+pub struct FixtureInteraction;
+
+impl Interaction for FixtureInteraction {
+    fn is_interactive(&self) -> bool {
+        false
+    }
+
+    fn approve(&self, approval: &Approval) -> Decision {
+        match approval {
+            Approval::ShellCommand { .. }
+            | Approval::PullRequest { .. }
+            | Approval::Agent { .. }
+            | Approval::HttpRequest { .. } => Decision::Approved,
+            _ => approval.unanswered(),
+        }
+    }
+}
+
 impl Harness {
     pub fn new() -> Self {
         Self::with(
             Arc::new(MemoryStore::default()),
+            Arc::new(FixtureInteraction),
+        )
+    }
+
+    /// A run nobody answers for, without `--approve`.
+    pub fn unattended() -> Self {
+        Self::with(
+            Arc::new(MemoryStore::default()),
             Arc::new(NonInteractive { approve_all: false }),
+        )
+    }
+
+    /// As [`Self::new`], with every approval given (`--approve`): for steps
+    /// that ask before they run (`shell`, `agent`, `http`, `pullRequest`).
+    pub fn approving() -> Self {
+        Self::with(
+            Arc::new(MemoryStore::default()),
+            Arc::new(NonInteractive { approve_all: true }),
         )
     }
 

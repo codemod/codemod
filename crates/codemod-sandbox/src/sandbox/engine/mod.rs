@@ -7,6 +7,8 @@ pub mod in_memory_engine;
 pub mod pending_files;
 pub mod quickjs_adapters;
 pub mod selector_engine;
+#[cfg(feature = "native")]
+pub mod target_files;
 pub(crate) mod transform_helpers;
 #[cfg(feature = "native")]
 pub mod worker;

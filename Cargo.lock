@@ -1278,6 +1278,7 @@ dependencies = [
  "codemod-llrt-capabilities",
  "dashmap 6.1.0",
  "dunce",
+ "globset",
  "ignore",
  "js-sys",
  "language-core",

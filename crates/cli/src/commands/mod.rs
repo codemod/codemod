@@ -18,6 +18,7 @@ pub mod publish;
 pub mod run;
 mod run_telemetry;
 pub mod search;
+pub mod telemetry;
 pub mod unpublish;
 pub mod whoami;
 pub mod workflow;

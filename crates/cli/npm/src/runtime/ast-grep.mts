@@ -71,7 +71,7 @@ export function parse(source: unknown, second?: unknown): unknown {
 /** A path with links resolved; as given when it does not exist. */
 function real(path: string): string {
   try {
-    return realpathSync(path);
+    return realpathSync.native(path);
   } catch {
     return path;
   }
@@ -83,7 +83,9 @@ export function parseAsync(source: unknown, second?: unknown): unknown {
 }
 
 export function parseFile(language: string, path: string): unknown {
-  return addon().parse(language, readFileSync(path, "utf8"), path);
+  const store = context.getStore();
+  if (store && !store.files) throw new Error("parseFile() requires a workflow callback");
+  return addon().parse(language, store?.files?.read(path) ?? readFileSync(path, "utf8"), path);
 }
 
 /** The numeric id of a named node kind, for `{ kind: id }` matchers. */

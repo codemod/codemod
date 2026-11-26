@@ -2,14 +2,9 @@
 title: "Drive codemod from a program"
 sidebarTitle: "Control protocol"
 description: "Run a workflow from a TUI, an agent or a script: read its events as JSON lines, answer its approvals on stdin, attach to runs started elsewhere."
-tag: "Experimental"
 ---
 
 import Experimental from "/snippets/experimental.mdx";
-
-<Experimental />
-
-The messages can still change; `hello.protocol` goes up when a change would break a client.
 
 A program that runs codemod for someone (a terminal UI, a coding agent, a CI wrapper) starts it as a child process with `--format jsonl --control stdio`. The run prints one JSON object per line on stdout, and reads commands, one JSON object per line, on stdin. When the workflow asks something (an `approval(...)` step, a shell command, a coding agent to pick), the run waits for the answer instead of exiting.
 
@@ -38,6 +33,8 @@ The first line is `hello`. It names the run before anything happens, so a client
 
 Then come the run's events, the same as `--format jsonl` prints without a control channel (see [`--format`](/community/cli#codemod-workflow)). Each has `seq`, which counts up through the whole run, also across resumes, and `ts`. Step events name their step with `step`, a key that stays the same across resumes (`"3"`; `"3/0"` for step 0 of the codemod that step 3 runs, whose `parent` is `"3"`).
 
+When a workflow first uses an experimental API, an `experimental` event names it in `api`. A run emits at most one notice per API, even if it resumes. This event is part of the event stream, not the workflow result.
+
 A question looks like this:
 
 ```json
@@ -48,7 +45,10 @@ A question looks like this:
 | `id` | Asked when |
 | --- | --- |
 | `approval:<step>` | an `approval(...)` step runs |
+| `interrupted-step:<step>` | a resumed side-effect step started but has no saved outcome |
 | `shell:<step>` | a `shell` step is about to run a command |
+| `agent-run:<step>` | an `agent` step is about to run a coding agent; `approval` has the agent, the prompt and its autonomy |
+| `http:<step>` | an `http` step is about to send a request; `approval` has the method, the URL and the environment variables its headers read |
 | `pull-request:<step>` | a `pullRequest` step is about to push and open a pull request |
 | `capabilities:<step>` | a step's code asks for capabilities the run was not given |
 | `uncommitted-changes` | the run is about to change a target with uncommitted changes (unless `--allow-dirty`) |
@@ -66,10 +66,12 @@ Questions come one at a time. When one is answered, or closed because the run st
 {"command":"stop","mode":"pause"}
 ```
 
-- `approve` and `reject` answer an approval. `answer` takes `"approve"`, `"reject"` or `"later"` (approval steps only) for approvals, and an available agent's id, or `null` for the built-in agent, for agent questions. `questionId` is accepted for `question_id`.
+- `approve` and `reject` answer an approval. `answer` takes `"approve"`, `"reject"` or `"later"` (only for manual approvals and interrupted steps) for approvals, and an available agent's id, or `null` for the built-in agent, for agent questions. `questionId` is accepted for `question_id`.
 - `stop` stops the run: `"pause"` (the default) leaves it `paused`, to resume; `"cancel"` ends it as `canceled`.
 - A command that cannot be followed (not JSON, no such open question, a wrong answer) gets a `control_error` event with the `message` and the `line`; the run goes on.
 - Closing stdin pauses the run, as `stop` does, and closes the open question. Keep stdin open for as long as the run should go on.
+
+An interrupted-step question comes before `run_started`. Answer `"approve"` to rerun that step, `"reject"` to skip it without rejecting the run, or `"later"` to leave the run as it was and exit `3`. `--approve` does not answer these questions; use `--rerun-step` or `--skip-step` to decide up front.
 
 ## How a run ends
 
@@ -90,6 +92,8 @@ A dry run with a control channel waits at its questions like a real run, and `ap
 
 ## Attach to a run
 
+<Experimental />
+
 Every saved run keeps its events in the run store. `workflow attach` prints them, after a `hello` (with `"mode":"attach"` and no commands), and follows the run while another process executes it:
 
 ```bash
@@ -101,4 +105,4 @@ It ends when the run stops executing. It only watches: the questions are answere
 ## Read runs and workflows
 
 - `workflow list --format json` and `workflow status --id <ID> --format json` print runs; `status` has `question`, the approval a waiting run needs. If the run pauses while a question is open (for example, `stop` or closed stdin), it keeps that question.
-- `workflow inspect -w <file|dir> --format json` describes a workflow for a setup form: declared params with their types, doc comments and `@default`s, imports, which declared steps reach outside the target (`http`, `shell`, `agent`, ...), and its `step(...)` calls. See [`workflow inspect`](/community/cli#codemod-workflow).
+- **Experimental:** `workflow inspect -w <file|dir> --format json` describes a workflow for a setup form: declared params with their types, doc comments and `@default`s, imports, which declared steps reach outside the target (`http`, `shell`, `agent`, ...), and its `step(...)` calls. See [`workflow inspect`](/community/cli#codemod-workflow).
