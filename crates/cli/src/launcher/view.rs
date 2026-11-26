@@ -18,6 +18,7 @@ pub enum StepState {
     Running,
     /// Finished in an earlier attempt of the run; its result was reused.
     Replayed,
+    Skipped,
     Succeeded,
     Partial,
     Failed,
@@ -29,6 +30,8 @@ pub enum StepState {
 impl From<StepStatus> for StepState {
     fn from(status: StepStatus) -> Self {
         match status {
+            StepStatus::Started => Self::Running,
+            StepStatus::Skipped => Self::Skipped,
             StepStatus::Succeeded => Self::Succeeded,
             StepStatus::Partial => Self::Partial,
             StepStatus::Failed => Self::Failed,

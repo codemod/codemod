@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use codemod_workflow::events::Event;
-use codemod_workflow::load_workflow;
+use codemod_workflow::interaction::NonInteractive;
+use codemod_workflow::{load_workflow, EngineError, LocalStore, ResumeOptions, StepStatus};
 use common::{output, Harness};
 use serde_json::{json, Value};
 
@@ -350,6 +351,59 @@ export default async function main() {{
         1,
         "the request was sent again"
     );
+}
+
+#[test]
+fn a_sent_http_request_without_a_saved_outcome_needs_a_choice() {
+    let server = server(200);
+    let dir = tempfile::tempdir().unwrap();
+    let h = Harness::with(
+        Arc::new(LocalStore::new(dir.path())),
+        Arc::new(NonInteractive { approve_all: true }),
+    );
+    let report = h.start(
+        &format!(
+            r#"
+import {{ step, http }} from "codemod/workflow";
+export default async function main() {{
+  const response = await step("Publish", http("{url}/write", {{ method: "POST" }}));
+  if (response !== null) throw new Error("stop here");
+  return "skipped";
+}}
+"#,
+            url = server.url
+        ),
+        Value::Null,
+    );
+    assert!(output(&report).unwrap_err().contains("stop here"));
+    assert_eq!(server.hits.load(Ordering::SeqCst), 1);
+    // Keep the actual start marker, discarding the response record to
+    // reproduce exactly what is on disk if the client dies before saving it.
+    let log = dir.path().join(&report.run.id).join("steps.jsonl");
+    let records = std::fs::read_to_string(&log).unwrap();
+    let (started, _) = records.split_once('\n').unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(started).unwrap()["status"],
+        "started"
+    );
+    std::fs::write(log, format!("{started}\n")).unwrap();
+    assert!(matches!(
+        h.engine.resume(&report.run.id),
+        Err(EngineError::InterruptedStep { position: 0, .. })
+    ));
+    let resumed = h
+        .engine
+        .resume_with(
+            &report.run.id,
+            ResumeOptions {
+                skip_steps: vec![0],
+                ..ResumeOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(output(&resumed).unwrap(), json!("skipped"));
+    assert_eq!(resumed.steps[0].status, StepStatus::Skipped);
+    assert_eq!(server.hits.load(Ordering::SeqCst), 1);
 }
 
 #[test]

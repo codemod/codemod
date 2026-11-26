@@ -17,6 +17,8 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 
 /** `"partial"`: the step finished, but some of its files failed. */
 export type StepStatus =
+  | "started"
+  | "skipped"
   | "succeeded"
   | "partial"
   | "failed"
@@ -97,7 +99,7 @@ export interface Outcome {
 /** `host.event(event)`: `HostEvent` in `crates/workflow/src/run.rs`. */
 export type StepEvent =
   | {
-      type: "stepStarted" | "stepReplayed";
+      type: "stepStarted" | "stepReplayed" | "stepSkipped";
       position: number;
       label: string;
       /** The step's task kind (`forEachFile`, `approval`, ...). */
@@ -815,6 +817,7 @@ function ruleList(value: unknown): Json[] {
 
 /** Tasks that wait: their step records when the wait began. */
 const WAITS = new Set(["sleep", "waitForEvent"]);
+const SIDE_EFFECTS = new Set(["shell", "agent", "branch", "commit", "pullRequest", "http", "codemod"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
@@ -929,8 +932,8 @@ export function createRuntime(host: Host) {
   // other steps finish, so it cannot say which step is which. Steps that are
   // the same in both are interchangeable and take the records in turn.
   const recorded = new Map<string, StepRecord[]>();
-  // Recorded steps that did not finish, for a changed step to take over.
-  const unfinished = new Set<StepRecord>();
+  // Steps a changed step can match by label, including a decision to skip.
+  const replaceable = new Set<StepRecord>();
   // A step keeps its position for the whole run; new steps go after.
   let nextPosition = 0;
   // Steps are numbered in the order they finish, across executions of the run.
@@ -939,7 +942,7 @@ export function createRuntime(host: Host) {
     const same = recorded.get(entry.key) ?? [];
     same.push(entry);
     recorded.set(entry.key, same);
-    if (!finished(entry)) unfinished.add(entry);
+    if (!finished(entry) || entry.status === "skipped") replaceable.add(entry);
     nextPosition = Math.max(nextPosition, entry.position + 1);
     if (typeof entry.seq === "number") nextSeq = Math.max(nextSeq, entry.seq + 1);
   }
@@ -957,15 +960,17 @@ export function createRuntime(host: Host) {
   ): { position: number; entry?: StepRecord } {
     const entry = recorded.get(key)?.shift();
     if (entry) {
-      unfinished.delete(entry);
+      replaceable.delete(entry);
       return { position: entry.position, entry };
     }
-    for (const entry of unfinished) {
+    // Editing an interrupted step's content does not override a decision
+    // to skip it. As with other unfinished steps, match it by name.
+    for (const entry of replaceable) {
       if (entry.label !== (label ?? defaultLabel(entry.position, content))) continue;
-      unfinished.delete(entry);
+      replaceable.delete(entry);
       const others = recorded.get(entry.key);
       others?.splice(others.indexOf(entry), 1);
-      return { position: entry.position };
+      return entry.status === "skipped" ? { position: entry.position, entry } : { position: entry.position };
     }
     return { position: nextPosition++ };
   }
@@ -1139,7 +1144,12 @@ export function createRuntime(host: Host) {
           order: prior.seq ?? prior.position,
           settle() {
             settleClock(prior);
-            host.event({ type: "stepReplayed", position, label: name, kind: content.kind });
+            host.event({
+              type: prior.status === "skipped" ? "stepSkipped" : "stepReplayed",
+              position,
+              label: name,
+              kind: content.kind,
+            });
             resolve(prior.result ?? null);
           },
         });
@@ -1163,6 +1173,10 @@ export function createRuntime(host: Host) {
         : started;
     if (since !== undefined) {
       host.record({ position, label: name, key, status: "waiting", since }, 0);
+    } else if (SIDE_EFFECTS.has(content.kind)) {
+      // Persist this before entering the host, including for an HTTP request
+      // that might reach the server but never have its response recorded.
+      host.record({ position, label: name, key, status: "started" }, 0);
     }
     let attempt = 1;
     const record = (entry: Pick<StepRecord, "status"> & Partial<StepRecord>) =>
@@ -1259,7 +1273,7 @@ export function createRuntime(host: Host) {
 
   /** Whether a recorded step finished, so a resume reuses its result. */
   function finished(entry: StepRecord): boolean {
-    return entry.status === "succeeded" || entry.status === "partial";
+    return entry.status === "succeeded" || entry.status === "partial" || entry.status === "skipped";
   }
 
   function interruptionOf(error: Error): "canceled" | "awaiting-approval" | "rejected" | null {

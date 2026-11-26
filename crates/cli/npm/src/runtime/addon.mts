@@ -31,6 +31,8 @@ export interface OpenOptions {
   capabilities?: string[];
   store?: string;
   resume?: string;
+  rerunSteps?: number[];
+  skipSteps?: number[];
   decisionModel?: DecisionModelOptions;
 }
 

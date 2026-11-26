@@ -265,6 +265,10 @@ impl RunRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StepStatus {
+    /// A side-effecting step began, but no final outcome is known.
+    Started,
+    /// The operator chose to continue without repeating an interrupted step.
+    Skipped,
     Succeeded,
     /// The step finished, but some of its files failed; `error` says how
     /// many. It counts as finished: a resume reuses its result.
@@ -285,6 +289,8 @@ pub enum StepStatus {
 impl StepStatus {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Started => "started",
+            Self::Skipped => "skipped",
             Self::Succeeded => "succeeded",
             Self::Partial => "partial",
             Self::Failed => "failed",
@@ -378,7 +384,8 @@ pub trait RunStore: Send + Sync {
     fn list_unreadable(&self) -> StoreResult<Vec<UnreadableRun>> {
         Ok(Vec::new())
     }
-    /// Insert or replace the step at `step.position`.
+    /// Insert or replace the step at `step.position`. Only the executor
+    /// holding the run lease writes steps.
     fn put_step(&self, run_id: &str, step: &StepRecord) -> StoreResult<()>;
     /// Ordered by position.
     fn load_steps(&self, run_id: &str) -> StoreResult<Vec<StepRecord>>;
@@ -390,6 +397,10 @@ pub trait RunStore: Send + Sync {
     fn acquire(&self, run_id: &str) -> StoreResult<Option<Box<dyn RunLease>>>;
     /// Whether something is executing the run now.
     fn is_held(&self, run_id: &str) -> StoreResult<bool>;
+
+    /// Serialize the brief transitions that publish, reopen, finish or
+    /// cancel a run. Never hold this while executing steps or prompting.
+    fn lock_run_state(&self, run_id: &str) -> StoreResult<Box<dyn RunLease>>;
 
     /// Take a target (a repository) for run `run_id` until the lease is
     /// dropped, so two runs never change one repository at once. `Err`
@@ -519,11 +530,14 @@ type MemoryTargets = Arc<Mutex<BTreeMap<PathBuf, String>>>;
 pub struct MemoryStore {
     runs: MemoryRuns,
     targets: MemoryTargets,
+    state: MemoryTargets,
+    state_changed: Arc<std::sync::Condvar>,
 }
 
 struct MemoryTargetLease {
     targets: MemoryTargets,
     target: PathBuf,
+    notify: Option<Arc<std::sync::Condvar>>,
 }
 
 impl RunLease for MemoryTargetLease {}
@@ -534,6 +548,9 @@ impl Drop for MemoryTargetLease {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&self.target);
+        if let Some(notify) = &self.notify {
+            notify.notify_all();
+        }
     }
 }
 
@@ -616,6 +633,21 @@ impl RunStore for MemoryStore {
         Ok(self.with(|runs| runs.get(run_id).is_some_and(|r| r.held)))
     }
 
+    fn lock_run_state(&self, run_id: &str) -> StoreResult<Box<dyn RunLease>> {
+        let path = Path::new(run_id);
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self
+            .state_changed
+            .wait_while(state, |held| held.contains_key(path))
+            .unwrap_or_else(|e| e.into_inner());
+        state.insert(path.to_path_buf(), run_id.to_string());
+        Ok(Box::new(MemoryTargetLease {
+            targets: Arc::clone(&self.state),
+            target: path.to_path_buf(),
+            notify: Some(Arc::clone(&self.state_changed)),
+        }))
+    }
+
     fn lock_target(
         &self,
         target: &Path,
@@ -633,6 +665,7 @@ impl RunStore for MemoryStore {
         Ok(Ok(Box::new(MemoryTargetLease {
             targets: Arc::clone(&self.targets),
             target: target.to_path_buf(),
+            notify: None,
         })))
     }
 
@@ -739,7 +772,7 @@ impl LocalStore {
             source,
         };
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(io)?;
+            Self::create_dir_durable(parent).map_err(io)?;
         }
         let text = serde_json::to_string_pretty(value).map_err(|source| StoreError::Json {
             path: path.to_path_buf(),
@@ -757,17 +790,28 @@ impl LocalStore {
         static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let temporary = path.with_extension(format!("{}-{n}.tmp", std::process::id()));
-        let mut file = fs::File::create(&temporary).map_err(io)?;
-        file.write_all(bytes).map_err(io)?;
-        file.sync_all().map_err(io)?;
-        drop(file);
-        fs::rename(&temporary, path).map_err(io)?;
+        let publish = || {
+            let mut file = fs::File::create(&temporary)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&temporary, path)
+        };
+        if let Err(source) = publish() {
+            let _ = fs::remove_file(&temporary);
+            return Err(io(source));
+        }
         Self::sync_parent(path).map_err(io)
     }
 
     fn sync_parent(path: &Path) -> std::io::Result<()> {
         #[cfg(unix)]
         if let Some(parent) = path.parent() {
+            let parent = if parent.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                parent
+            };
             fs::File::open(parent)?.sync_all()?;
         }
         #[cfg(not(unix))]
@@ -775,12 +819,36 @@ impl LocalStore {
         Ok(())
     }
 
+    fn create_dir_durable(path: &Path) -> std::io::Result<()> {
+        if path.as_os_str().is_empty() || path.is_dir() {
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            Self::create_dir_durable(parent)?;
+        }
+        match fs::create_dir(path) {
+            Ok(()) => Self::sync_parent(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// A writer killed mid-append may leave an uncommitted final line, with
     /// no newline. Drop that tail before starting another append. The common
     /// case reads only the last block, not the history.
-    fn trim_step_tail(file: &mut fs::File) -> std::io::Result<()> {
+    fn trim_log_tail(file: &mut fs::File) -> std::io::Result<()> {
         use std::io::{Read as _, Seek as _, SeekFrom};
         let len = file.metadata()?.len();
+        if len != 0 {
+            let mut last = [0];
+            file.seek(SeekFrom::End(-1))?;
+            file.read_exact(&mut last)?;
+            if last[0] == b'\n' {
+                return Ok(());
+            }
+        }
         let mut end = len;
         let mut buf = [0; 4096];
         while end > 0 {
@@ -801,6 +869,21 @@ impl LocalStore {
             file.set_len(0)?;
         }
         Ok(())
+    }
+
+    /// The run's executor is the only writer. Use write access, not
+    /// append-only access, so truncating a crash tail also works on Windows.
+    fn open_append_log(path: &Path) -> std::io::Result<fs::File> {
+        use std::io::{Seek as _, SeekFrom};
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)?;
+        Self::trim_log_tail(&mut file)?;
+        file.seek(SeekFrom::End(0))?;
+        Ok(file)
     }
 
     /// The run's lock file, opened; `None` when the run does not exist.
@@ -962,7 +1045,8 @@ impl RunStore for LocalStore {
     fn put_step(&self, run_id: &str, step: &StepRecord) -> StoreResult<()> {
         use std::io::Write as _;
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let path = self.run_dir(run_id).join("steps.jsonl");
+        let dir = self.run_dir(run_id);
+        let path = dir.join("steps.jsonl");
         let io = |source| StoreError::Io {
             path: path.clone(),
             source,
@@ -974,13 +1058,8 @@ impl RunStore for LocalStore {
         line.push(b'\n');
         // Only the executor holding the run writes steps. Status readers
         // may run concurrently; a newline is the commit boundary.
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .append(true)
-            .open(&path)
-            .map_err(io)?;
-        Self::trim_step_tail(&mut file).map_err(io)?;
+        Self::create_dir_durable(&dir).map_err(io)?;
+        let mut file = Self::open_append_log(&path).map_err(io)?;
         let first = file.metadata().map_err(io)?.len() == 0;
         file.write_all(&line).map_err(io)?;
         file.sync_all().map_err(io)?;
@@ -1048,7 +1127,7 @@ impl RunStore for LocalStore {
             source,
         };
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(io)?;
+            Self::create_dir_durable(parent).map_err(io)?;
         }
         let holder = TargetHolder {
             run_id: run_id.to_string(),
@@ -1104,6 +1183,25 @@ impl RunStore for LocalStore {
         }
     }
 
+    #[allow(clippy::incompatible_msrv)]
+    fn lock_run_state(&self, run_id: &str) -> StoreResult<Box<dyn RunLease>> {
+        let dir = self.run_dir(run_id);
+        let path = dir.join("state.lock");
+        let io = |source| StoreError::Io {
+            path: path.clone(),
+            source,
+        };
+        Self::create_dir_durable(&dir).map_err(io)?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(io)?;
+        file.lock().map_err(io)?;
+        Ok(Box::new(LocalLease { _file: file }))
+    }
+
     fn request_cancel(&self, run_id: &str) -> StoreResult<()> {
         let dir = self.run_dir(run_id);
         if !dir.join("run.json").exists() {
@@ -1151,8 +1249,6 @@ impl RunStore for LocalStore {
             path: path.clone(),
             source,
         };
-        // One write per line, so a reader never sees half of one followed by
-        // another writer's.
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -1390,7 +1486,7 @@ mod tests {
 
     #[test]
     fn local_store_recovers_an_interrupted_write_and_keeps_legacy_steps() {
-        use std::io::Write as _;
+        use std::time::{Duration, Instant};
         let dir = tempfile::tempdir().unwrap();
         let store = LocalStore::new(dir.path());
         store.put_run(&record("a", 1)).unwrap();
@@ -1400,32 +1496,71 @@ mod tests {
             &[step(0, StepStatus::Failed), step(2, StepStatus::Partial)],
         )
         .unwrap();
-        store.put_step("a", &step(0, StepStatus::Succeeded)).unwrap();
+        store
+            .put_step("a", &step(0, StepStatus::Succeeded))
+            .unwrap();
 
         // Bytes left by a writer that stops halfway through a record, or
         // before publishing a new run.json, must not replace saved data.
+        let mut writer = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "run_store::tests::interrupted_writer",
+            ])
+            .env("CODEMOD_TEST_WRITER_DIR", &run_dir)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !run_dir.join("writer-ready").exists() && Instant::now() < deadline {
+            assert!(writer.try_wait().unwrap().is_none(), "writer exited early");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        writer.kill().unwrap();
+        assert!(!writer.wait().unwrap().success());
+        assert!(run_dir.join("writer-ready").is_file(), "writer never began");
+        let reopened = LocalStore::new(dir.path());
+        let _state = reopened.lock_run_state("a").unwrap();
+        assert_eq!(reopened.get_run("a").unwrap().unwrap().id, "a");
+        assert_eq!(
+            reopened.load_steps("a").unwrap(),
+            [step(0, StepStatus::Succeeded), step(2, StepStatus::Partial),]
+        );
+
+        reopened
+            .put_step("a", &step(1, StepStatus::Succeeded))
+            .unwrap();
+        assert_eq!(
+            reopened.load_steps("a").unwrap(),
+            [
+                step(0, StepStatus::Succeeded),
+                step(1, StepStatus::Succeeded),
+                step(2, StepStatus::Partial),
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore = "subprocess fixture for local_store_recovers_an_interrupted_write_and_keeps_legacy_steps"]
+    fn interrupted_writer() {
+        use std::io::Write as _;
+        let Some(dir) = std::env::var_os("CODEMOD_TEST_WRITER_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let store = LocalStore::new(dir.parent().unwrap());
+        let _state = store.lock_run_state("a").unwrap();
+        let _run = store.acquire("a").unwrap().unwrap();
         let mut log = fs::OpenOptions::new()
             .append(true)
-            .open(run_dir.join("steps.jsonl"))
+            .open(dir.join("steps.jsonl"))
             .unwrap();
         log.write_all(b"{\"position\":1,\"label\":\"unfinished")
             .unwrap();
         log.sync_all().unwrap();
-        drop(log);
-        fs::write(run_dir.join("run.123-0.tmp"), b"{\"status\":").unwrap();
-        let reopened = LocalStore::new(dir.path());
-        assert_eq!(reopened.get_run("a").unwrap().unwrap().id, "a");
-        assert_eq!(reopened.load_steps("a").unwrap(), [
-            step(0, StepStatus::Succeeded),
-            step(2, StepStatus::Partial),
-        ]);
-
-        reopened.put_step("a", &step(1, StepStatus::Succeeded)).unwrap();
-        assert_eq!(reopened.load_steps("a").unwrap(), [
-            step(0, StepStatus::Succeeded),
-            step(1, StepStatus::Succeeded),
-            step(2, StepStatus::Partial),
-        ]);
+        fs::write(dir.join("run.123-0.tmp"), b"{\"status\":").unwrap();
+        fs::write(dir.join("writer-ready"), b"").unwrap();
+        std::thread::park();
     }
 
     #[test]

@@ -71,6 +71,15 @@ impl Engine {
 
     /// Continue a run whose body the caller runs again.
     pub fn open_resumed(&self, run_id: &str) -> Result<HostedRun, EngineError> {
+        self.open_resumed_with(run_id, crate::ResumeOptions::default())
+    }
+
+    /// Continue a hosted run with explicit interrupted-step choices.
+    pub fn open_resumed_with(
+        &self,
+        run_id: &str,
+        options: crate::ResumeOptions,
+    ) -> Result<HostedRun, EngineError> {
         let record = self
             .store()
             .get_run(run_id)?
@@ -81,12 +90,7 @@ impl Engine {
             .unwrap_or_default();
         // Runs opened here never check for uncommitted changes, and do not
         // continue canceled or rejected runs.
-        let execution = self.begin_resumed(
-            record,
-            callbacks,
-            NODE_HOST,
-            crate::ResumeOptions::default(),
-        )?;
+        let execution = self.begin_resumed(record, callbacks, NODE_HOST, options)?;
         let history = execution.context.store.load_steps(run_id)?;
         Ok(HostedRun::new(execution, history))
     }

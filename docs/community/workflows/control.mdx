@@ -48,6 +48,7 @@ A question looks like this:
 | `id` | Asked when |
 | --- | --- |
 | `approval:<step>` | an `approval(...)` step runs |
+| `interrupted-step:<step>` | a resumed side-effect step started but has no saved outcome |
 | `shell:<step>` | a `shell` step is about to run a command |
 | `pull-request:<step>` | a `pullRequest` step is about to push and open a pull request |
 | `capabilities:<step>` | a step's code asks for capabilities the run was not given |
@@ -66,10 +67,12 @@ Questions come one at a time. When one is answered, or closed because the run st
 {"command":"stop","mode":"pause"}
 ```
 
-- `approve` and `reject` answer an approval. `answer` takes `"approve"`, `"reject"` or `"later"` (approval steps only) for approvals, and an available agent's id, or `null` for the built-in agent, for agent questions. `questionId` is accepted for `question_id`.
+- `approve` and `reject` answer an approval. `answer` takes `"approve"`, `"reject"` or `"later"` (only for manual approvals and interrupted steps) for approvals, and an available agent's id, or `null` for the built-in agent, for agent questions. `questionId` is accepted for `question_id`.
 - `stop` stops the run: `"pause"` (the default) leaves it `paused`, to resume; `"cancel"` ends it as `canceled`.
 - A command that cannot be followed (not JSON, no such open question, a wrong answer) gets a `control_error` event with the `message` and the `line`; the run goes on.
 - Closing stdin pauses the run, as `stop` does, and closes the open question. Keep stdin open for as long as the run should go on.
+
+An interrupted-step question comes before `run_started`. Answer `"approve"` to rerun that step, `"reject"` to skip it without rejecting the run, or `"later"` to leave the run as it was and exit `3`. `--approve` does not answer these questions; use `--rerun-step` or `--skip-step` to decide up front.
 
 ## How a run ends
 

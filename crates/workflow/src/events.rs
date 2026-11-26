@@ -276,6 +276,7 @@ impl Event {
             } if nested(&at) => {
                 let text = match (status, error) {
                     (StepStatus::Succeeded, _) => format!("✓ {label}"),
+                    (StepStatus::Skipped, _) => format!("↷ {label}: skipped"),
                     (StepStatus::Partial, Some(error)) => format!("◐ {label}: {error}"),
                     (StepStatus::Partial, None) => format!("◐ {label}"),
                     (StepStatus::Failed, Some(error)) => format!("✗ {label}: {error}"),
@@ -284,7 +285,7 @@ impl Event {
                     (StepStatus::AwaitingApproval, _) => format!("‖ {label}: waiting for approval"),
                     (StepStatus::Rejected, _) => format!("✗ {label}: rejected"),
                     // Never reported: a step that began to wait has not finished.
-                    (StepStatus::Waiting, _) => return None,
+                    (StepStatus::Waiting | StepStatus::Started, _) => return None,
                 };
                 line(&at, text)
             }

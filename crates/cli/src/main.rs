@@ -454,6 +454,12 @@ async fn main() {
             }
             exit_with_code(workflow_exec::EXIT_WAITING);
         }
+        if let Some(step @ codemod_workflow::EngineError::InterruptedStep { .. }) =
+            error.downcast_ref::<codemod_workflow::EngineError>()
+        {
+            eprintln!("{step}");
+            exit_with_code(workflow_exec::EXIT_WAITING);
+        }
         if let Some(failed) = error.downcast_ref::<workflow_exec::FailedByWorkflow>() {
             exit_with_code(failed.exit_code);
         }

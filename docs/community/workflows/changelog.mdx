@@ -19,7 +19,11 @@ To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha wor
 
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
 
-<Update label="2.0.0-alpha.10" description="Unreleased">
+<Update label="2.0.0-alpha.11" description="Unreleased">
+- **Resume no longer silently repeats interrupted side effects.** Check what a step did, then choose **Rerun** or **Skip**. Unattended resumes exit `3` until you pass `--rerun-step` or `--skip-step`. Step records are appended and synced to disk, and alpha.10 runs can still be read.
+</Update>
+
+<Update label="2.0.0-alpha.10" description="November 26, 2026">
 **Breaking changes**
 
 - **A run waiting for an approval exits `3`**. Before, `workflow run --no-interactive` (and `workflow resume`, `codemod <package>`) exited `0` when the run stopped at an approval, so a CI job passed with the migration half done. Now it exits `3`, apart from `1` (failed) and `2` (failed files, `fail()`), and ends with the command that continues it. See [exit codes](/community/cli#exit-codes).

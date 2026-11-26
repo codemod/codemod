@@ -353,8 +353,10 @@ fn reply_to(asked: &Asked, answer: &Value) -> Result<Reply, String> {
                 Value::String(text) if text == "reject" => Decision::Denied,
                 Value::Bool(false) => Decision::Denied,
                 Value::String(text) if text == "later" => {
-                    if !matches!(approval, Approval::Manual { .. }) {
-                        return Err("only an approval(...) step can wait until later".into());
+                    if approval.unanswered() != Decision::Deferred {
+                        return Err(
+                            "only an approval(...) or interrupted step can wait until later".into(),
+                        );
                     }
                     Decision::Deferred
                 }
