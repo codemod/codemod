@@ -128,6 +128,34 @@ impl Approval {
         }
     }
 
+    /// What `--approve=<scope>` names it by: `shell`, `agent`, `http`,
+    /// `pull-request`, and `approval` for manual approvals. `None` for what
+    /// `--approve` never gives.
+    pub fn scope(&self) -> Option<&'static str> {
+        match self {
+            Approval::Manual { .. } => Some("approval"),
+            Approval::ShellCommand { .. } => Some("shell"),
+            Approval::Agent { .. } => Some("agent"),
+            Approval::HttpRequest { .. } => Some("http"),
+            Approval::PullRequest { .. } => Some("pull-request"),
+            Approval::Capabilities { .. } | Approval::UncommittedChanges { .. } => None,
+        }
+    }
+
+    /// A step that runs or sends something asks it: a shell command, a
+    /// coding agent, a request, a pull request. An unattended run of the
+    /// person's own workflow does these without asking
+    /// ([`Ask::trusted`]); a registry package's need `--approve`.
+    pub fn runs_or_sends(&self) -> bool {
+        matches!(
+            self,
+            Approval::ShellCommand { .. }
+                | Approval::Agent { .. }
+                | Approval::HttpRequest { .. }
+                | Approval::PullRequest { .. }
+        )
+    }
+
     /// Whether `--approve` gives it. Capabilities are granted up front, and
     /// writing over uncommitted changes takes `--allow-dirty`.
     pub fn given_by_approve_all(&self) -> bool {
@@ -178,6 +206,12 @@ pub struct Ask {
     /// Set when the asking step must stop (the run was canceled from
     /// elsewhere): a host waiting for an answer gives up then.
     pub stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// The step is of the person's own workflow (a local file or directory
+    /// they ran), not of a package from a registry, nor of a registry package
+    /// nested in theirs. With nobody to ask, what such a step runs or sends
+    /// ([`Approval::runs_or_sends`]) goes ahead; a host that can ask still
+    /// asks.
+    pub trusted: bool,
 }
 
 impl Ask {
@@ -225,6 +259,13 @@ pub struct NonInteractive {
 impl Interaction for NonInteractive {
     fn is_interactive(&self) -> bool {
         false
+    }
+
+    fn ask(&self, ask: &Ask, approval: &Approval) -> Decision {
+        if ask.trusted && approval.runs_or_sends() {
+            return Decision::Approved;
+        }
+        self.approve(approval)
     }
 
     fn approve(&self, approval: &Approval) -> Decision {
@@ -319,6 +360,37 @@ mod tests {
                 "{approval:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_unattended_run_of_ones_own_workflow_runs_its_steps() {
+        let none = NonInteractive { approve_all: false };
+        let own = Ask {
+            trusted: true,
+            ..Ask::default()
+        };
+        let shell = Approval::ShellCommand {
+            command: "ls".into(),
+        };
+        let http = Approval::HttpRequest {
+            method: "GET".into(),
+            url: "https://example.com/".into(),
+            env: Vec::new(),
+        };
+        for approval in [&shell, &http] {
+            assert_eq!(none.ask(&own, approval), Decision::Approved);
+            // A package's steps, and a registry package nested in one's own.
+            assert_eq!(none.ask(&Ask::default(), approval), Decision::Denied);
+        }
+        // Trust is not an answer to a manual approval, nor a capability.
+        let manual = Approval::Manual {
+            message: "go?".into(),
+        };
+        assert_eq!(none.ask(&own, &manual), Decision::Deferred);
+        assert_eq!(none.ask(&own, &capabilities()), Decision::Denied);
+        assert_eq!(shell.scope(), Some("shell"));
+        assert_eq!(http.scope(), Some("http"));
+        assert_eq!(capabilities().scope(), None);
     }
 
     #[test]

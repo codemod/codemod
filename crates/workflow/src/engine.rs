@@ -680,6 +680,8 @@ impl Engine {
                 Arc::clone(&halt),
             )),
             key_prefix: None,
+            // As recorded when the run started, also on a resume.
+            trusted: record.settings.trusted,
             halt,
             store,
             events: Arc::clone(&self.events),
@@ -719,6 +721,7 @@ impl Engine {
             agent: self.services.agent.clone(),
             host: Some(host.to_string()),
             check_uncommitted: false,
+            trusted: self.services.trusted,
         }
     }
 }

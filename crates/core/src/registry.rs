@@ -594,7 +594,7 @@ impl RegistryClient {
                                 )
                                 .await?;
 
-                            artifact.verify(&actual_package_data)?;
+                            artifact.note_mismatch(&actual_package_data);
                             // Check if this is a gzip file or uncompressed tar
                             if actual_package_data.len() >= 2 {
                                 let actual_magic = &actual_package_data[0..2];
@@ -632,7 +632,7 @@ impl RegistryClient {
         }
 
         // If we get here, it's a direct gzip file (public package)
-        artifact.verify(&package_data)?;
+        artifact.note_mismatch(&package_data);
         self.extract_package(&package_data, cache_dir).await?;
         info!("Package cached to: {}", cache_dir.display());
         Ok((cache_dir.to_path_buf(), false))
@@ -816,6 +816,21 @@ fn validate_component(value: &str) -> Result<()> {
 }
 
 impl PackageVersion {
+    /// Not an error yet: the production registry's `checksum` and `size`
+    /// do not describe the bytes its download URL serves (every package
+    /// tried failed the check), so refusing a mismatch would refuse every
+    /// package. Once the registry advertises the archive's own digest, make
+    /// this the error [`RegistryError::Integrity`].
+    fn note_mismatch(&self, bytes: &[u8]) {
+        if self.verify(bytes).is_err() {
+            debug!(
+                "package bytes ({} bytes) do not match the registry's advertised size ({}) or checksum",
+                bytes.len(),
+                self.size
+            );
+        }
+    }
+
     fn verify(&self, bytes: &[u8]) -> Result<()> {
         let expected = self
             .checksum

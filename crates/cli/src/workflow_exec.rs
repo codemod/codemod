@@ -84,13 +84,51 @@ fn parse_decision_model(text: &str) -> Result<DecisionModel> {
 /// packages) share; `workflow resume` has its own `--approve`.
 #[derive(clap::Args, Debug, Default, Clone)]
 pub struct StartFlags {
-    /// Give every approval the workflow asks for (manual steps, pull requests)
-    #[arg(long)]
-    pub approve: bool,
+    /// Give the approvals the workflow asks for: all of them, or only some kinds
+    /// (--approve=shell,http: shell, agent, http, pull-request, approval). A package
+    /// from the registry needs it for what it runs and sends in an unattended run
+    #[arg(
+        long,
+        value_name = "KINDS",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = APPROVE_ALL,
+        value_delimiter = ',',
+        action = clap::ArgAction::Append
+    )]
+    pub approve: Vec<String>,
 
     /// Let branch, commit and pull request steps change the git repository
     #[arg(long)]
     pub managed_git: bool,
+}
+
+/// What `--approve` alone stands for: every approval.
+pub const APPROVE_ALL: &str = "*";
+
+impl StartFlags {
+    /// `--approve` without kinds.
+    pub fn approve_all(&self) -> bool {
+        self.approve.iter().any(|kind| kind == APPROVE_ALL)
+    }
+
+    /// The kinds `--approve=<kinds>` names; unknown ones are an error.
+    pub fn approve_kinds(&self) -> Result<Vec<String>> {
+        const KINDS: [&str; 5] = ["shell", "agent", "http", "pull-request", "approval"];
+        let kinds: Vec<String> = self
+            .approve
+            .iter()
+            .filter(|kind| *kind != APPROVE_ALL)
+            .cloned()
+            .collect();
+        if let Some(unknown) = kinds.iter().find(|kind| !KINDS.contains(&kind.as_str())) {
+            return Err(anyhow!(
+                "--approve={unknown}: unknown kind of approval; use {} (or --approve alone for all)",
+                KINDS.join(", ")
+            ));
+        }
+        Ok(kinds)
+    }
 }
 
 impl RunFlags {
@@ -180,6 +218,7 @@ impl RunFlags {
             }),
             approve_all: false,
             approve_ids: Vec::new(),
+            trusted: false,
             managed_git: false,
             skip_shard_steps: false,
             nested_observer: None,
@@ -209,8 +248,12 @@ pub struct ExecSettings {
     pub install_skill: Option<Arc<dyn InstallSkillExecutor>>,
     /// Treat every approval as given.
     pub approve_all: bool,
-    /// Treat these questions as approved (`workflow resume --approve <id>`).
+    /// Treat these questions as approved (`workflow resume --approve <id>`),
+    /// or these kinds (`--approve=shell,http`).
     pub approve_ids: Vec<String>,
+    /// The workflow is the person's own (a local file or directory), not a
+    /// package from a registry: unattended, its steps run without `--approve`.
+    pub trusted: bool,
     /// Let `branch`, `commit` and `pullRequest` steps touch git.
     pub managed_git: bool,
     pub skip_shard_steps: bool,
@@ -703,6 +746,7 @@ pub(crate) fn engine_with(
 ) -> (Engine, Arc<Summary>) {
     let summary = Arc::new(Summary::default());
     let services = Services {
+        trusted: settings.trusted,
         capabilities: settings.capabilities.clone(),
         registry: settings.registry.clone(),
         install_skill: settings.install_skill.clone(),
@@ -1164,6 +1208,10 @@ impl Interaction for TerminalInteraction {
 
     fn ask(&self, ask: &Ask, approval: &Approval) -> Decision {
         if self.approvals.gives(&ask.id, approval) {
+            return Decision::Approved;
+        }
+        // One's own workflow, with nobody to ask: its steps run.
+        if !self.interactive && ask.trusted && approval.runs_or_sends() {
             return Decision::Approved;
         }
         self.approve(approval)

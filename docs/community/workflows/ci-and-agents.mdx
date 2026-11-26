@@ -26,7 +26,7 @@ npx codemod@alpha @org/my-package --target . --no-interactive
 What changes without a person:
 
 - **Approvals don't block.** A run that reaches an `approval(...)` step stops there, saves itself and exits. The exit code is `3`. Pass `--approve` to give every approval up front.
-- **Nothing a workflow runs or sends is approved for you.** `shell(...)`, `agent(...)`, `http(...)` and `pullRequest(...)` steps ask a person first. With nobody to ask, the step fails and says so. Read what the workflow runs (`codemod workflow inspect`, or its source), then pass `--approve`: its commands run with the job's permissions and environment, secrets included.
+- **Your own workflow runs its steps; a registry package's need `--approve`.** `shell(...)`, `agent(...)`, `http(...)` and `pullRequest(...)` steps ask a person first. With nobody to ask, a workflow file or local directory you run yourself (`workflow run -w <file>`, `codemod run ./dir`) is trusted and goes ahead. A package from the registry is not: the step fails, naming itself and the flag. That also holds for a registry package your own workflow nests with `codemod(...)`. Read what the package runs (`codemod workflow inspect`, or its source), then pass `--approve`, or only the kinds it needs, such as `--approve=shell,http`: its commands run with the job's permissions and environment, secrets included.
 - **A target with uncommitted changes fails the run at its first write**, before anything is written. Commit first, or pass `--allow-dirty`. A run that only reads isn't stopped.
 - **Capabilities are not granted.** A step that needs one the run wasn't given fails. Grant them with `--allow-fs` or `--allow-child-process`, or in the package's `codemod.yaml`.
 

@@ -173,6 +173,12 @@ pub struct RunSettings {
     /// it yet. A resume checks then.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub check_uncommitted: bool,
+    /// The workflow is the person's own (a local file or directory they
+    /// named), not a package from a registry: an unattended run does what
+    /// its steps run and send without `--approve`. Recorded, so a resumed
+    /// run of a registry package does not become trusted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub trusted: bool,
 }
 
 /// How an execution of a run ended, as far as the record goes.

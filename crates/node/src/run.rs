@@ -347,7 +347,12 @@ impl codemod_workflow::interaction::Interaction for Approvals {
         ask: &codemod_workflow::interaction::Ask,
         approval: &codemod_workflow::interaction::Approval,
     ) -> codemod_workflow::interaction::Decision {
-        if approval.given_by_approve_all() && self.ids.contains(&ask.id) {
+        if approval.given_by_approve_all()
+            && self
+                .ids
+                .iter()
+                .any(|given| *given == ask.id || Some(given.as_str()) == approval.scope())
+        {
             return codemod_workflow::interaction::Decision::Approved;
         }
         self.all.approve(approval)

@@ -140,11 +140,17 @@ export default async function main() {
   return step("Keys", async () => {
     let imported;
     try { await import("process"); imported = true; } catch { imported = false; }
+    let exit;
+    try { process.exit(0); exit = "exited"; } catch (error) { exit = String(error.message).includes("process.exit is not available"); }
     return {
       keys: Object.keys(process.env).length,
       secret: process.env.CODEMOD_TEST_CALLBACK_SECRET ?? null,
-      exit: typeof process.exit,
+      exit,
       imported,
+      // What 1.x transforms read that is no secret is still there.
+      cwd: typeof process.cwd(),
+      argv: Array.isArray(process.argv),
+      platform: typeof process.platform,
     };
   });
 }
@@ -153,7 +159,10 @@ export default async function main() {
     );
     assert_eq!(
         output(&report).unwrap(),
-        json!({ "keys": 0, "secret": null, "exit": "undefined", "imported": false })
+        json!({
+            "keys": 0, "secret": null, "exit": true, "imported": false,
+            "cwd": "string", "argv": true, "platform": "string",
+        })
     );
 }
 

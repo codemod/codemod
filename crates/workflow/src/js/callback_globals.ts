@@ -25,12 +25,53 @@ import { unavailable } from "codemod-internal:orchestrator";
     globals[name] = refuse(name);
   }
 
-  // No ambient host environment in this isolate. Keep a compatibility object
-  // for reads and give writes the same diagnostic as the other effect guards.
+  // No ambient host environment in this isolate, and no native `process`
+  // (the engine withholds the module): an inert one with what transforms
+  // read that is no secret. `env` is empty, and writes to it fail like the
+  // other effects.
+  const host = (globals.__codemodHostProcess ?? {}) as {
+    cwd?: string;
+    argv?: string[];
+    platform?: string;
+    arch?: string;
+  };
+  delete globals.__codemodHostProcess;
   const env = new Proxy(Object.freeze(Object.create(null)), {
     set: refuse("process.env"),
     deleteProperty: refuse("process.env"),
     defineProperty: refuse("process.env"),
   });
-  Object.defineProperty(globals, "process", { value: Object.freeze({ env }) });
+  const write = (text: unknown) => {
+    const line = String(text).replace(/\n$/, "");
+    if (line) (globals.console as { log(line: string): void }).log(line);
+    return true;
+  };
+  const stream = Object.freeze({ write, isTTY: false });
+  const process = {
+    env,
+    argv: Object.freeze([...(host.argv ?? [])]),
+    argv0: host.argv?.[0] ?? "codemod",
+    execArgv: Object.freeze([]),
+    platform: host.platform ?? "linux",
+    arch: host.arch ?? "x64",
+    version: "v22.0.0",
+    versions: Object.freeze({ node: "22.0.0" }),
+    pid: 0,
+    exitCode: undefined as number | undefined,
+    stdout: stream,
+    stderr: stream,
+    cwd: () => host.cwd ?? "/",
+    exit: refuse("process.exit"),
+    nextTick: (callback: (...args: unknown[]) => void, ...args: unknown[]) => {
+      void Promise.resolve().then(() => callback(...args));
+    },
+    hrtime: Object.assign(() => [Math.floor(Date.now() / 1000), 0], {
+      bigint: () => BigInt(Date.now()) * 1000000n,
+    }),
+    emitWarning: () => {},
+    on: () => process,
+    off: () => process,
+    once: () => process,
+  };
+  Object.defineProperty(globals, "process", { value: process });
 })();

@@ -262,6 +262,30 @@ impl Worker {
                         .map_err(|e| fail(format!("{e:?}")))?;
                 }
                 globals.attach(&ctx)?;
+                if read_only_fs.is_some() {
+                    // The native process module is withheld: what transforms
+                    // read from it that is no secret (not the environment)
+                    // is handed over for the callback globals to build an
+                    // inert `process` from.
+                    let host = serde_json::json!({
+                        "cwd": std::env::current_dir()
+                            .map(|dir| dir.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        "argv": std::env::args().collect::<Vec<_>>(),
+                        "platform": match std::env::consts::OS {
+                            "windows" => "win32",
+                            "macos" => "darwin",
+                            os => os,
+                        },
+                        "arch": match std::env::consts::ARCH {
+                            "x86_64" => "x64",
+                            "aarch64" => "arm64",
+                            arch => arch,
+                        },
+                    });
+                    let host = ctx.json_parse(host.to_string())?;
+                    ctx.globals().set("__codemodHostProcess", host)?;
+                }
                 ctx.eval::<(), _>(TRACK_TIMERS)?;
                 install_console_bridge(&ctx)
             };

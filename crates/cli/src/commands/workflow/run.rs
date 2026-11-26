@@ -169,7 +169,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         name: Some(workflow_label),
         dry_run,
         settings: ExecSettings {
-            approve_all: args.start.approve || pro_dry_run,
+            approve_all: args.start.approve_all() || pro_dry_run,
+            approve_ids: args.start.approve_kinds()?,
+            // A workflow file the person names is theirs.
+            trusted: true,
             managed_git: args.start.managed_git,
             skip_shard_steps: pro_dry_run,
             nested_observer: Some(nested_observer),

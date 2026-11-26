@@ -520,7 +520,7 @@ const ready = await step("Releases accepting React 19", async () => {
 
 ### Shell commands
 
-A run asks before each command. With nobody to ask (`--no-interactive`, CI), the step fails unless the run was started with `--approve`; see [Approvals](#approvals).
+A run asks before each command. With nobody to ask (`--no-interactive`, CI), your own workflow's steps go ahead, and a registry package's fail unless the run was started with `--approve`; see [Approvals](#approvals).
 
 Give `shell` the command as a string, or write it as a tagged template. In a template, each `${}` value is quoted for the shell, so a path with spaces or quotes stays one argument; an array is one argument per item. The rest of the text is taken as written, backslashes included.
 
@@ -563,7 +563,7 @@ If a `codemod()` step resolves a preview-only registry package during an apply r
 
 Callbacks have no network. A workflow that needs one declares the request as a step with `http()`, from `codemod/workflow`. The response is the step's result: it is recorded with the run, so a resumed run gets it back without sending the request again.
 
-A run asks before each request, showing the method, the URL and the names of the environment variables its headers read: the workflow chooses all three. With nobody to ask (`--no-interactive`, CI), the step fails unless the run was started with `--approve`; see [Approvals](#approvals).
+A run asks before each request, showing the method, the URL and the names of the environment variables its headers read: the workflow chooses all three. With nobody to ask (`--no-interactive`, CI), your own workflow's steps go ahead, and a registry package's fail unless the run was started with `--approve`; see [Approvals](#approvals).
 
 ```ts
 import { http, step } from "codemod/workflow";
@@ -592,7 +592,7 @@ The result is `{ status, statusText, ok, url, headers, body, json? }`: `url` is 
 
 Some adapters check the installed agent’s help output to detect supported options. That check has its own timeout and falls back to defaults if the help command does not finish.
 
-`agent(prompt, options)` runs a coding agent installed on the machine, without asking it questions, in the run's target directory. The run asks before the agent starts, showing the agent and the prompt: with `autonomy: "full"` the agent runs whatever commands the prompt leads it to. With nobody to ask (`--no-interactive`, CI), the step fails unless the run was started with `--approve`; see [Approvals](#approvals).
+`agent(prompt, options)` runs a coding agent installed on the machine, without asking it questions, in the run's target directory. The run asks before the agent starts, showing the agent and the prompt: with `autonomy: "full"` the agent runs whatever commands the prompt leads it to. With nobody to ask (`--no-interactive`, CI), your own workflow's steps go ahead, and a registry package's fail unless the run was started with `--approve`; see [Approvals](#approvals).
 
 ```ts
 const review = await step(
@@ -845,7 +845,14 @@ export default async function main({ params }: { params: { team?: string } }) {
 - A dry run is not saved, so it cannot wait: one that reaches an approval stops, exits with code 1 and says to pass `--approve`.
 - With [`--control stdio`](/community/workflows/control), the run asks the program driving it and waits for the answer, dry runs included.
 
-**Steps that run or send something ask too.** A `shell(...)` step asks before its command, an `agent(...)` step before the agent starts, an `http(...)` step before its request, and a `pullRequest(...)` step before it pushes: a workflow, also one from the registry, decides what they run and where they send it. Answering no fails the step. With nobody to ask (`--no-interactive`, CI) the step fails without running, and says to pass `--approve`, which gives these along with `approval(...)` steps. Their question ids are `shell:<step>`, `agent-run:<step>`, `http:<step>` and `pull-request:<step>`.
+**Steps that run or send something ask too.** A `shell(...)` step asks before its command, an `agent(...)` step before the agent starts, an `http(...)` step before its request, and a `pullRequest(...)` step before it pushes: a workflow, also one from the registry, decides what they run and where they send it. Answering no fails the step. Their question ids are `shell:<step>`, `agent-run:<step>`, `http:<step>` and `pull-request:<step>`.
+
+With nobody to ask (`--no-interactive`, CI), it depends on whose workflow it is:
+
+- **Your own workflow** (`codemod workflow run -w <file>`, or `codemod run ./local-dir`) is trusted: these steps go ahead, as do those of local codemods it nests with `codemod("./path")`.
+- **A package from the registry** (`codemod run <package>`, 1.x packages included) is not: each of these steps fails without running, and the error names the step and the flag. So do the steps of a registry package your own workflow nests with `codemod("@org/package")`, and of anything a registry package nests. Read what the package runs, then pass `--approve` for everything, or only some kinds: `--approve=shell,http` (the kinds are `shell`, `agent`, `http`, `pull-request`, and `approval` for `approval(...)` steps). A resumed run keeps being the package's.
+
+The Node.js host (`codemod/host`, `codemod/testing`) approves everything unless you pass `approve: false`; then `approved: ["shell", "http:0"]` gives kinds or single questions.
 
 Each approval has a **question id** that stays the same across resumes: `approval:<step>`, where `<step>` is the step's key (`approval:3`, or `approval:2/0` inside a codemod that step 2 runs). The run's last lines, `workflow status` and `run_finished` name the one it waits for.
 
