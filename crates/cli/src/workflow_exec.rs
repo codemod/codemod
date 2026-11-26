@@ -845,6 +845,12 @@ impl crate::journal::Stamped for Renderer {
             return;
         };
         match event {
+            // A dry run is not saved, so its id names nothing to look up.
+            Event::RunStarted { dry_run: true, .. } => self.line(format!(
+                "{} {}",
+                style("Dry run").bold(),
+                style("(not saved)").dim()
+            )),
             Event::RunStarted {
                 run_id, resumed, ..
             } => self.line(format!(

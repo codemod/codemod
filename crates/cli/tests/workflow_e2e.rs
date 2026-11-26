@@ -160,6 +160,13 @@ fn a_dry_run_changes_nothing() {
     let output = fixture.run(&["--dry-run"]);
     assert!(output.status.success(), "{}", text(&output));
     assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
+    // It is not saved, so no run id to look up.
+    assert!(
+        text(&output).contains("Dry run (not saved)"),
+        "{}",
+        text(&output)
+    );
+    assert!(!text(&output).contains("Run "), "{}", text(&output));
 }
 
 #[test]
