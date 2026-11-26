@@ -23,6 +23,22 @@ You can also pass a single workflow file, for example `npx codemod workflow upgr
 
 `upgrade` writes `workflow.ts` next to `workflow.yaml`, points `codemod.yaml` at it, and removes the YAML file. Keep the YAML file with `--keep-yaml`. In a repository with many packages, run it once at the root to convert them all.
 
+### What else upgrade changes
+
+Some codemod 1.x transforms use what 2.0 removed. `upgrade` rewrites what has a 2.0 equivalent and lists each change:
+
+- **`codemod:metrics`.** The transform's import points at `__codemod_v1/metrics.ts`, a small module `upgrade` adds to the package, and the workflow calls the transform through a wrapper that returns each file's counts as its data (`{ edit, data: { metrics } }`). The counts are in the step's `outputs`. Port the transform to return `{ edit, data }` itself when you can, then delete `__codemod_v1/`.
+- **Transforms that import `fs` or `child_process`.** `upgrade` names the file and warns, leaving the import in place. Callbacks can read the target with `fs` but cannot write through it or start processes. Use the file API to edit the current file, and move other writes and commands to a `shell()` step.
+
+`upgrade --dry-run` prints the files it would add or change after the workflow.
+
+`upgrade` stops with an error, and changes nothing, when the workflow has:
+
+- a transform that uses workflow state: `getState`, `setState`, `unsetState`, `acquireLock` or the step-output functions from `codemod:workflow`. Port it to return what it finds as `{ edit, data }`, and read that from the step's result;
+- a node or template with `runtime: docker` or `runtime: podman`.
+
+Fields that never had an effect, such as a `codemod` step's `args`, `env` and `working_dir`, are dropped with a warning.
+
 For example, this `workflow.yaml`:
 
 ```yaml workflow.yaml
@@ -116,7 +132,8 @@ npm install --save-dev codemod
 | `shard` | `shard({ method, target, files, filter, previous })`, its result passed to the steps that use it. A shard `function` is imported; the shard's `js-ast-grep` transform becomes a `filter` that keeps the files it would change |
 | `if:` | An `if` statement whose condition runs through `__evaluate(...)`, the YAML engine's own evaluator, so it means exactly what it did |
 | `${{ params.name }}` | `params.name`. In a list field, such as `include` or a commit's `add`, a value that is an array expands into one entry per item, as before. Inside any other text it becomes `asText(params.name, "params.name")`, which prints arrays and objects as JSON and null as nothing, and fails if the value is not set, as workflow.yaml did. Strings are printed as written (workflow.yaml printed `"007"` as `7`), and an object's integer-like keys such as `"10"` come first, in numeric order, as in JavaScript |
-| `${{ state.name }}` | `state.name`, a local object. Shell steps get it as `CODEMOD_STATE_<KEY>` variables, and the lines they write to `$STATE_OUTPUTS` are printed at the end of their stdout and copied into it by `applyStateOutputs`. JSSG transforms that call `getState` or `setState` cannot be translated; `upgrade` flags them |
+| `${{ state.name }}` | `state.name`, a local object. Shell steps get it as `CODEMOD_STATE_<KEY>` variables, and the lines they write to `$STATE_OUTPUTS` are printed at the end of their stdout and copied into it by `applyStateOutputs`. JSSG transforms that call `getState` or `setState` cannot be translated; `upgrade` stops with an error that names them |
+| `codemod:metrics` in a transform | An import of `__codemod_v1/metrics.ts`, a module `upgrade` adds, and a wrapper that returns the counts as the file's data. Port the transform to return `{ edit, data }` when you can |
 | `trigger: manual` | `await step(approval("<node name>"))` |
 | `branch_name`, `pull_request`, step `commit` | `branch`, `pullRequest` and `commit` steps, imported from `codemod/git` |
 | `templates` and `use:` | Functions |
