@@ -31,6 +31,7 @@
 //!   `pull_request` and step `commit` become git steps.
 
 pub mod expr;
+mod legacy;
 mod print;
 mod transform_module;
 
@@ -55,6 +56,10 @@ pub struct Translated {
     pub source: String,
     /// Features that have no effect after translation.
     pub warnings: Vec<String>,
+    /// For `codemod workflow upgrade`: files to write besides the workflow
+    /// (what [`legacy::rewrite`] adds or changes), and what they change.
+    pub files: Vec<(PathBuf, String)>,
+    pub notes: Vec<String>,
 }
 
 /// Parse, validate and translate a workflow.yaml (or JSON) file, as
@@ -69,15 +74,49 @@ pub fn translate_file(path: &Path) -> Result<Translated, String> {
 /// `codemod workflow upgrade` writes: a jssg transform is imported and
 /// called from a plain `forEachFile` callback, unless it needs what only
 /// the compatibility adapter does (see [`transform_module`]).
+///
+/// What 1.x transforms used that 2.0 removed is rewritten where it can be
+/// (see [`legacy::rewrite`]): the files to write come back in
+/// `Translated::files`. What cannot be is an error.
 pub fn upgrade_file(path: &Path) -> Result<Translated, String> {
-    let workflow = parse_and_validate(path)?;
+    let mut workflow = parse_and_validate(path)?;
     let bundle = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut problems = legacy::container_runtimes(&workflow);
+    let rewrites = match legacy::rewrite(&mut workflow, &bundle) {
+        Ok(rewrites) => Some(rewrites),
+        Err(found) => {
+            problems.extend(found);
+            None
+        }
+    };
+    let Some(rewrites) = rewrites.filter(|_| problems.is_empty()) else {
+        return Err(format!(
+            "{} cannot be upgraded:\n  - {}",
+            path.display(),
+            problems.join("\n  - ")
+        ));
+    };
+    let mut translated = upgrade_workflow(&workflow, &bundle, rewrites.analyses);
+    translated.files = rewrites.files;
+    translated.notes = rewrites.notes;
+    Ok(translated)
+}
+
+/// The workflow.ts `codemod workflow upgrade` writes for `workflow`, whose
+/// transforms are read from `bundle`; `analyses` says how to call the
+/// ones that are not written yet.
+fn upgrade_workflow(
+    workflow: &Workflow,
+    bundle: &Path,
+    analyses: HashMap<String, Analysis>,
+) -> Translated {
     let mut generator = Generator {
-        upgrade: Some(bundle),
+        upgrade: Some(bundle.to_path_buf()),
+        analyses,
         ..Generator::default()
     };
-    generator.workflow(&workflow);
-    Ok(generator.finish())
+    generator.workflow(workflow);
+    generator.finish()
 }
 
 fn parse_and_validate(path: &Path) -> Result<Workflow, String> {
@@ -1552,6 +1591,8 @@ impl Generator {
         Translated {
             source,
             warnings: self.warnings,
+            files: Vec::new(),
+            notes: Vec::new(),
         }
     }
 }

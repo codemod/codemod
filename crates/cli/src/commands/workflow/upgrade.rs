@@ -204,6 +204,12 @@ fn upgrade_package(package_dir: &Path, conversions: &[Conversion], args: &Comman
                 style(format!("// {}", conversion.typescript.display())).dim(),
                 translation.source
             );
+            for (path, _) in &translation.files {
+                println!(
+                    "{}",
+                    style(format!("// also writes {}", relative(package_dir, path))).dim()
+                );
+            }
         }
         return Ok(());
     }
@@ -218,6 +224,15 @@ fn upgrade_package(package_dir: &Path, conversions: &[Conversion], args: &Comman
     let manifest = read_manifest(package_dir)?;
     let mut updated_manifest = manifest.clone();
     for (conversion, translation) in conversions.iter().zip(&translated) {
+        // What the transforms used that 2.0 removed, rewritten.
+        for (path, text) in &translation.files {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("cannot write {}", parent.display()))?;
+            }
+            std::fs::write(path, text)
+                .with_context(|| format!("cannot write {}", path.display()))?;
+        }
         std::fs::write(&conversion.typescript, &translation.source)
             .with_context(|| format!("cannot write {}", conversion.typescript.display()))?;
         if let (Some(text), Some(old)) = (updated_manifest.as_mut(), &conversion.manifest_path) {
@@ -240,6 +255,9 @@ fn upgrade_package(package_dir: &Path, conversions: &[Conversion], args: &Comman
             relative(package_dir, &conversion.yaml),
             relative(package_dir, &conversion.typescript)
         );
+        for note in &translation.notes {
+            println!("  {} {note}", style("↻").cyan());
+        }
         for warning in &translation.warnings {
             println!("  {} {warning}", style("!").yellow());
         }
@@ -675,6 +693,74 @@ mod tests {
         );
         assert!(!source.contains("jssg-compat"), "{source}");
         assert!(codemod_workflow::load_workflow(&dir.path().join("workflow.ts")).is_ok());
+    }
+
+    #[test]
+    fn upgrading_a_transform_that_used_metrics_adds_the_module_and_a_wrapper() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("codemod.yaml"),
+            "schema_version: \"1.0\"\nname: demo\nversion: 0.1.0\ndescription: d\nauthor: a\nworkflow: workflow.yaml\n",
+        )
+        .unwrap();
+        std::fs::create_dir(dir.path().join("scripts")).unwrap();
+        std::fs::write(
+            dir.path().join("scripts/codemod.ts"),
+            "import { useMetricAtom } from 'codemod:metrics';\nconst hits = useMetricAtom('hits');\nexport default function transform(root) {\n  hits.increment();\n  return null;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("workflow.yaml"),
+            "version: \"1\"\nnodes:\n  - id: a\n    name: A\n    steps:\n      - name: Rewrite\n        js-ast-grep:\n          js_file: scripts/codemod.ts\n          language: typescript\n",
+        )
+        .unwrap();
+        handler(&Command {
+            path: Some(dir.path().to_path_buf()),
+            keep_yaml: false,
+            dry_run: false,
+        })
+        .unwrap();
+        let transform = std::fs::read_to_string(dir.path().join("scripts/codemod.ts")).unwrap();
+        assert!(
+            transform.contains("from '../__codemod_v1/metrics.ts'"),
+            "{transform}"
+        );
+        assert!(dir.path().join("__codemod_v1/metrics.ts").is_file());
+        assert!(dir
+            .path()
+            .join("__codemod_v1/scripts__codemod.ts")
+            .is_file());
+        let source = std::fs::read_to_string(dir.path().join("workflow.ts")).unwrap();
+        assert!(
+            source.contains("./__codemod_v1/scripts__codemod.ts"),
+            "{source}"
+        );
+        assert!(codemod_workflow::load_workflow(&dir.path().join("workflow.ts")).is_ok());
+    }
+
+    #[test]
+    fn a_transform_that_uses_workflow_state_is_an_upgrade_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = "version: \"1\"\nnodes:\n  - id: a\n    name: A\n    steps:\n      - name: Rewrite\n        js-ast-grep:\n          js_file: codemod.ts\n";
+        std::fs::write(dir.path().join("workflow.yaml"), yaml).unwrap();
+        std::fs::write(
+            dir.path().join("codemod.ts"),
+            "import { setState } from \"codemod:workflow\";\nexport default function t(root) { setState('a', 1); return null; }\n",
+        )
+        .unwrap();
+        let error = handler(&Command {
+            path: Some(dir.path().to_path_buf()),
+            keep_yaml: false,
+            dry_run: false,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("codemod.ts calls setState"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("workflow.yaml")).unwrap(),
+            yaml
+        );
+        assert!(!dir.path().join("workflow.ts").exists());
     }
 
     #[test]
