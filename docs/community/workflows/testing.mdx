@@ -226,7 +226,7 @@ test("uses the mocked lookup", async () => {
 
 ### Where the workflow runs
 
-`codemod/testing` runs TypeScript workflows in your test process, on [the Node.js host](/community/workflows/node). The CLI runs them in the engine's own sandboxed runtime. The two run the same orchestrator and the same tasks, but a workflow can rely on something only one of them has. For example, Node.js lets any code read files, while the CLI's runtime only grants the capabilities `codemod.yaml` declares.
+`codemod/testing` runs TypeScript workflows in your test process, on [the Node.js host](/community/workflows/node). The CLI runs them in the engine's own sandboxed runtime. The two run the same orchestrator and the same tasks, and the Node.js host holds callbacks to the same [rules](/community/workflows/reference#callbacks-are-pure) and replays the body's clock as the CLI does, so a test that passes there does not fail under the CLI for using `fetch` or a timer. A few things still differ, such as reads outside the target; see [what differs on the Node.js host](/community/workflows/node#how-it-differs-from-the-cli).
 
 To test against the runtime `codemod run` uses, pass `host: "quickjs"`:
 
@@ -264,7 +264,7 @@ YAML workflows always run with the CLI.
 | `until` | | Stop after the step with this label |
 | `given` | `{}` | Results for steps that should not run, by label |
 | `approve` | `true` | Give every approval the workflow asks for. With `false`, a manual approval ends the run as `"awaiting-approval"` |
-| `capabilities` | `[]` | `"fs"`, `"fetch"`, `"child_process"`, granted on top of those `codemod.yaml` declares |
+| `capabilities` | `[]` | Deprecated, does nothing: callbacks (and `shard`'s functions) no longer get capabilities |
 | `workflowName` | | Which workflow to run when `codemod.yaml` declares several |
 | `keep` | `false` | Keep the temporary directory (`run.dir`) to inspect it |
 | `signal` | | An `AbortSignal` that stops the run |
@@ -274,11 +274,10 @@ YAML workflows always run with the CLI.
 ## How test runs differ from real runs
 
 - Every approval is given unless you pass `approve: false` (or `--no-approve`).
-- The capabilities `codemod.yaml` declares are granted without asking.
 - Git steps (`branch`, `commit`, `pullRequest`) do nothing, as in a run without `--managed-git`. One started while other steps are still running still fails, as it would with `--managed-git`.
 - Shell steps run for real, in the temporary copy.
 - `agent` steps would call a coding agent: give their result with `given` instead.
 - `waitForEvent` steps have nobody to send their event: give the event's data with `given`, under the label `wait for <name>`. Without it the step waits until its `timeout`, or for as long as your test runner allows. `sleep` steps wait as usual.
-- On the Node.js host, capabilities only apply to what still runs in the engine (`shard`'s functions, `astGrep`); callbacks run in Node.js with whatever it gives them. See [what differs on the Node.js host](/community/workflows/node#how-it-differs-from-the-cli).
+- `http()` steps send their requests: point them at a local server, or give their result with `given`. A dry run (`dryRun: true`) skips them unless they set `dryRun: "perform"`.
 
 `codemod/testing` uses the native addon and the `codemod` CLI that the package installed. To test against other builds, set `CODEMOD_NODE_ADDON` and `CODEMOD_BINARY` to their paths.

@@ -14,7 +14,7 @@ The codemod CLI runs workflows in its own sandboxed JavaScript runtime. To run a
 `codemod/testing` uses this host for TypeScript workflows. See [Testing workflows](/community/workflows/testing).
 
 <Warning>
-  On this host, the workflow's code can do anything Node.js allows: the capabilities `codemod.yaml` declares are not enforced. Run packages you did not write with the CLI (`npx codemod <package>`), which runs them sandboxed.
+  This host holds the workflow's code to the CLI's rules (no network, commands, writes or timers in callbacks; a replayed clock in the body), so tests fail where the CLI would. It does that by checking Node.js's own functions while a run's code runs; it is not a sandbox. Run packages you did not write with the CLI (`npx codemod <package>`).
 </Warning>
 
 ## Run a workflow
@@ -55,7 +55,7 @@ The first argument is a workflow file or a package directory. In a package direc
 | `params` | `{}` | The workflow's parameters |
 | `dryRun` | `false` | Run every step but change no files |
 | `approve` | `true` | Give every approval the workflow asks for. With `false`, a manual approval ends the run as `"awaiting-approval"` |
-| `capabilities` | `[]` | `"fs"`, `"fetch"`, `"child_process"` for what runs in the engine (`shard`'s functions), on top of those `codemod.yaml` declares |
+| `capabilities` | `[]` | Deprecated, does nothing: callbacks (and `shard`'s functions) no longer get capabilities |
 | `store` | `"memory"` | `"local"` records the run where `codemod workflow list` and `codemod workflow resume` find it |
 | `resume` | | Continue a recorded run by its id (with `store: "local"`) |
 | `workflowName` | | Which workflow to run when `codemod.yaml` declares several |
@@ -97,16 +97,16 @@ A workflow file is checked as the CLI checks it before it runs: a callback that 
 
 On the Node.js host:
 
-- **Capabilities** are not enforced for the workflow's own code, callbacks included. They still apply to `shard`'s functions, which run in the engine.
+- **[Pure callbacks](/community/workflows/reference#callbacks-are-pure) are checked as in the CLI.** While the workflow's code runs, in the body or a callback, `fetch`, `XMLHttpRequest`, `WebSocket`, timers (also from `node:timers`), `child_process`, `fs` writes (`writeFile`, `mkdir`, `rm`, `rename`, `open` for writing, …) and setting `process.env` throw the CLI's errors. Reading files is not limited to the target here. Code outside the run, such as your test, is not affected. A function saved before `codemod/host` loaded escapes the check.
 - **Semantic analysis** (`semanticAnalysis`) is not available to callbacks on this host: `definition()` and `references()` find nothing. Run the workflow with the CLI for it.
-- **The workflow body's clock and randomness are real.** The CLI makes `Date.now()` and `Math.random()` in the body give the same answers when a run resumes; Node.js does not. Read them inside steps.
+- **The workflow body's clock and randomness are replayed, as in the CLI.** In the body, `Date`, `performance.now()`, `Math.random()` and the global `crypto.getRandomValues()` and `crypto.randomUUID()` start from the run's start time and seed, and give the same answers when the run resumes; in callbacks they are real. `node:crypto` imported in the body is not seeded.
 - **`codemod/llm`** is not available yet.
 - **`codemod(...)` steps** run local packages only; run workflows that use registry packages with the CLI.
 - **`definition()` and `references()`** find nothing in roots that `forEachFile` callbacks parse, as in the CLI.
 - **Callbacks run one at a time**, in this process. The CLI runs `forEachFile` callbacks on several threads, so a callback that relies on running after another file's callback works here and not there; return values instead.
 - **A step's `timeout` cannot stop JavaScript that is running.** When a function step or a `forEachFile` callback runs out of time here, the step fails and its file changes are not written, but its code runs on until it returns; code that never waits is not interrupted at all. The CLI stops them. Tasks such as `shell` are stopped on both.
 - **Events are sent with the CLI.** `waitForEvent` works here for runs kept with `store: "local"`; send to them with `codemod workflow send`.
-- **The workflow body may wait on anything.** The CLI stops a body that waits on a timer, or on a promise no step will settle.
+- **The workflow body may wait on a promise no step will settle**, which the CLI stops.
 - **A run is resumed where it started.** Runs started here are resumed with `runWorkflow(..., { resume })`, and runs the CLI started with `codemod workflow resume`: the two record steps differently.
 - **YAML workflows** do not run here. Run them with the CLI, or convert them with `codemod workflow upgrade`.
 

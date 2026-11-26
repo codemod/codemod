@@ -96,4 +96,4 @@ It ends when the run stops executing. It only watches: the questions are answere
 ## Read runs and workflows
 
 - `workflow list --format json` and `workflow status --id <ID> --format json` print runs; `status` has `question`, the approval a waiting run needs.
-- `workflow inspect -w <file|dir> --format json` describes a workflow for a setup form: declared params with their types, doc comments and `@default`s, imports, the capabilities its package asks for, and its `step(...)` calls. See [`workflow inspect`](/community/cli#codemod-workflow).
+- `workflow inspect -w <file|dir> --format json` describes a workflow for a setup form: declared params with their types, doc comments and `@default`s, imports, which declared steps reach outside the target (`http`, `shell`, `agent`, ...), and its `step(...)` calls. See [`workflow inspect`](/community/cli#codemod-workflow).

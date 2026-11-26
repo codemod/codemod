@@ -19,6 +19,27 @@ To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha wor
 
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
 
+<Update label="2.0.0-alpha.10" description="Unreleased">
+**Breaking changes**
+
+- **Callbacks are pure.** Function steps, `forEachFile` callbacks and reducers, `dependencyGraph` callbacks and `shard`'s functions no longer get `fetch`, `child_process`, `fs` writes, `process.env` changes or timers, whatever the run grants. Each fails with the step to use instead. They read the target through a read-only `fs` without any flag. `fetch` and timers written in a workflow file are build errors. See [Callbacks are pure](/community/workflows/reference#callbacks-are-pure).
+
+  ```ts
+  // before (with --allow-fetch)
+  const latest = await step("Latest", async () => (await fetch(url)).json());
+
+  // after
+  const latest = (await step("Latest", http(url))).json;
+  ```
+- **`--allow-fs`, `--allow-fetch` and `--allow-child-process` do nothing** for workflow runs. They are accepted with a warning; `capabilities` in `codemod.yaml` and in a `forEachFile` selector are ignored (the step's log says so). The launcher no longer shows capability toggles.
+- **The Node.js host enforces the same rules** (`codemod/host`, `codemod/testing`), and replays the body's clock and random numbers as the CLI does, so a test that passes does not fail under the CLI. See [the Node.js host](/community/workflows/node#how-it-differs-from-the-cli).
+
+**New**
+
+- **`http(url, options)`** in `codemod/workflow`: an HTTP request as a step. Its response is recorded and replayed on resume, not sent again. Header values can come from the environment (`{ env: "GITHUB_TOKEN" }`) so tokens stay out of the run's records. A dry run skips it unless it sets `dryRun: "perform"`. See [HTTP requests](/community/workflows/reference#http-requests).
+- `workflow inspect` lists `http` in `uses`, and shows which declared steps reach outside the target.
+</Update>
+
 <Update label="2.0.0-alpha.9" description="November 25, 2026">
 ```bash
 npx codemod@2.0.0-alpha.9 --version   # codemod 2.0.0-alpha.9

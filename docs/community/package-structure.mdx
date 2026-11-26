@@ -367,7 +367,7 @@ During scaffolding, the CLI sets <code>public</code>/<code>private</code> based 
 </ParamField>
 
 <ParamField path="capabilities" type="string[]" default="[]">
-Array of capabilities required by this codemod for accessing sensitive operations.
+Array of capabilities required by this codemod's jssg transforms when they run with `codemod jssg run`. Workflows ignore it: their callbacks are pure, and reach the network and run commands through `http()` and `shell()` steps (see [Callbacks are pure](/community/workflows/reference#callbacks-are-pure)).
 
 **Available capabilities:**
 - `fs` - File system access (`fs`, `fs/promises`)

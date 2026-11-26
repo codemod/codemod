@@ -156,6 +156,7 @@ Most codemods run exactly as before. These are the differences, for both `workfl
 - **A step `if:` that fails to evaluate is reported.** The step is still skipped, as before, and the run's log says why.
 - **`runtime: docker` and `runtime: podman` are not supported.** Their steps run directly on the machine.
 - **Shell state output requires a POSIX shell.** On Windows, a translated workflow that needs `$STATE_OUTPUTS` fails before any step runs. Run it on a POSIX system, or port the workflow so steps pass results directly.
+- **Transforms are pure.** A `jssg` transform that calls `fetch`, `child_process` or writes files with `fs` fails on each file, even with `capabilities` in `codemod.yaml` or `--allow-*` flags, which are now ignored for workflows. Reading the target with `fs` still works. Move network requests to an `http()` step and commands to a `shell` step before the transform runs, and give the transform what they returned. See [Callbacks are pure](/community/workflows/reference#callbacks-are-pure).
 - **`state.schema` is accepted but not checked.**
 - **Runs are resumed by id:** `codemod workflow resume --id <run-id>`. A manual node waits as an approval step; resume it with `--approve`. Runs started with an earlier CLI version can't be resumed.
 - **`codemod workflow tui` was removed.** Runs show their progress in the terminal.

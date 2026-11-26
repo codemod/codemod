@@ -377,24 +377,22 @@ npx codemod <package-name>
 
 </CodeGroup>
 
-A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>`) takes the same run flags as `workflow run`: `--target`, `--param`, `--dry-run`, `--approve`, `--managed-git`, `--allow-dirty`, `--allow-fs`, `--allow-fetch`, `--allow-child-process`, `--allow-ai`, `--no-interactive`, `--install-skill`, `--agent`, `--model` and `--format`. It picks one of the package's workflows with `--workflow <NAME>` instead of `--workflow-name`.
+A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>`) takes the same run flags as `workflow run`: `--target`, `--param`, `--dry-run`, `--approve`, `--managed-git`, `--allow-dirty`, `--allow-ai`, `--no-interactive`, `--install-skill`, `--agent`, `--model` and `--format`. It picks one of the package's workflows with `--workflow <NAME>` instead of `--workflow-name`.
 
 <ResponseField name="-w, --workflow <PATH>" type="string" required>
   Path to a workflow file or a package directory. In a directory, the workflow declared in `codemod.yaml` runs, otherwise `workflow.ts`, otherwise `workflow.yaml`.
 </ResponseField>
 
 <ResponseField name="--dry-run" type="boolean">
-  Run every step without changing files. Later steps see what earlier steps would have changed, and the run ends by printing the diff of all of it (`run_diff` events with `--format jsonl`). Shell commands, agents and skill installs are skipped, and the run is not saved.
+  Run every step without changing files. Later steps see what earlier steps would have changed, and the run ends by printing the diff of all of it (`run_diff` events with `--format jsonl`). Shell commands, HTTP requests (unless the step sets `dryRun: "perform"`), agents and skill installs are skipped, and the run is not saved.
 </ResponseField>
 
 <ResponseField name="--allow-dirty" type="boolean">
-  Let the run change a target that has uncommitted changes, or that is not in a git repository. Without it, the run checks just before it first changes the target: before a step writes, renames or deletes a file, and before a `shell`, `agent` or `installSkill` step, a git step with `--managed-git`, or a step whose code gets `fs` or `child_process`. An interactive run asks; an unattended one fails that step and writes nothing. A run that only reads (a check or a report) is never stopped by uncommitted changes. Dry runs are not checked. `workflow resume` checks only a run that stopped before it first wrote (the changes a run made itself don't count); `workflow resume --allow-dirty` skips that.
+  Let the run change a target that has uncommitted changes, or that is not in a git repository. Without it, the run checks just before it first changes the target: before a step writes, renames or deletes a file, and before a `shell`, `agent` or `installSkill` step, or a git step with `--managed-git`. An interactive run asks; an unattended one fails that step and writes nothing. A run that only reads (a check or a report) is never stopped by uncommitted changes. Dry runs are not checked. `workflow resume` checks only a run that stopped before it first wrote (the changes a run made itself don't count); `workflow resume --allow-dirty` skips that.
 </ResponseField>
 
 <ResponseField name="--approve" type="boolean">
   Give every approval the workflow asks for (`approval(...)` steps, manual nodes in `workflow.yaml`, pull requests). Without it, a run nobody can answer for pauses at the first approval and can be continued with `workflow resume --approve`.
-
-  `--approve` does not grant capabilities: those come from `--allow-fs`, `--allow-fetch` and `--allow-child-process`, or from your answer when the package asks.
 
   ```bash
   npx codemod workflow run -w ./my-codemod --approve --no-interactive
@@ -414,7 +412,7 @@ A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>
   The decision model `assess()` uses, e.g. `openai/gpt-6-luna`; a bare model name is System One's (`systemone/jev-latest`). It comes before the model saved in the launcher (`"decisionModel"` in the CLI's `config.json`) and the `DECISION_PROVIDER` / `DECISION_MODEL` variables; a `decision_model` in the package's `codemod.yaml`, or a model named in the `assess()` call, still comes first.
 </ResponseField>
 
-**The launcher.** In an interactive terminal, `workflow run`, `codemod <package>` and `workflow resume` open a terminal UI. A new run starts on a setup screen (target, dry run, params, capabilities, coding agent, decision model; your agent and model are saved for next time); then the screen shows the run's steps, logs and diffs, with approvals answered in place (`y` approves, `n` rejects, which ends the run, and `l` stops it there to resume later). After a dry run, `a` runs it for real. It does not open with `--no-interactive`, `--format jsonl`, in CI, when input or output is piped, or with `CODEMOD_LAUNCHER=0`; those runs print the plain output.
+**The launcher.** In an interactive terminal, `workflow run`, `codemod <package>` and `workflow resume` open a terminal UI. A new run starts on a setup screen (target, dry run, params, coding agent, decision model; your agent and model are saved for next time); then the screen shows the run's steps, logs and diffs, with approvals answered in place (`y` approves, `n` rejects, which ends the run, and `l` stops it there to resume later). After a dry run, `a` runs it for real. It does not open with `--no-interactive`, `--format jsonl`, in CI, when input or output is piped, or with `CODEMOD_LAUNCHER=0`; those runs print the plain output.
 
 A run is unattended when you pass `--no-interactive`, and also when there is no terminal to ask on (in CI, or with input piped in). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something.
 
@@ -521,7 +519,7 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 
 Continue a run that failed, was paused (Ctrl-C) or interrupted, or is waiting for approval. A run that was canceled or rejected is over: resuming it takes `--force`. Steps that already finished are not run again: their recorded results are reused, in the order the steps finished the first time. If you changed the workflow, steps you left alone keep their results wherever they now are in the file; a step you added or changed runs, also when it had finished before.
 
-The run continues with what it was started with: its capabilities, `--managed-git` and `--agent` carry over (a new `--agent` or `--model` wins), and flags you pass add to them. A run that another process is still executing cannot be resumed; wait for it or cancel it. A run started with `runWorkflow` in Node.js is resumed there, not here.
+The run continues with what it was started with: `--managed-git` and `--agent` carry over (a new `--agent` or `--model` wins), and flags you pass add to them. A run that another process is still executing cannot be resumed; wait for it or cancel it. A run started with `runWorkflow` in Node.js is resumed there, not here.
 
 ```bash
 npx codemod workflow resume --id <ID> [--approve [<QUESTION_ID>]] [--force]
@@ -635,7 +633,7 @@ Transform files and their tests are not changed: `codemod jssg test` keeps worki
 
 
 <ResponseField name="--allow-fs, --allow-fetch, --allow-child-process" type="boolean">
-  Grant capabilities on top of those `codemod.yaml` declares.
+  Deprecated, and do nothing: workflow callbacks no longer get capabilities. They are accepted with a warning. Declare network requests as `http()` steps and commands as `shell()` steps; callbacks read the target without a flag. See [Callbacks are pure](/community/workflows/reference#callbacks-are-pure).
 </ResponseField>
 
 <ResponseField name="--no-approve" type="boolean">
@@ -715,7 +713,7 @@ Describe a workflow without running it: what a setup form needs.
 npx codemod workflow inspect -w <workflow.ts|workflow.yaml|directory> [--format json]
 ```
 
-`json` prints `workflow`, `language`, `params` (each declared param's `name`, `type` as written, `optional`, `description` from its doc comment, and `default` from an `@default` tag), `modules` (what it imports), `capabilities` (what its `codemod.yaml` asks for), `uses` (whether it has `approval`, `agent`, `shell`, `git`, `codemod`, `install_skill`, `wait` and `assess` calls) and `steps`: each `step(...)` call in the source, with its `label` when it is a string and its `kind`. A step in a loop is listed once.
+`json` prints `workflow`, `language`, `params` (each declared param's `name`, `type` as written, `optional`, `description` from its doc comment, and `default` from an `@default` tag), `modules` (what it imports), `capabilities` (always empty: callbacks get none), `requestedCapabilities` (what its `codemod.yaml` asks for, which is ignored), `uses` (whether it has `http`, `approval`, `agent`, `shell`, `git`, `codemod`, `install_skill`, `wait` and `assess` calls) and `steps`: each `step(...)` call in the source, with its `label` when it is a string and its `kind`. A step in a loop is listed once.
 
 **`workflow send`**
 
