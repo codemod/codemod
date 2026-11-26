@@ -73,6 +73,10 @@ pub(crate) struct SgRootInner {
     /// The current file being processed (for write() validation)
     #[cfg(feature = "native")]
     pub(crate) current_file_path: Option<String>,
+    /// Made by `jssgTransform` for a file it changes: `rename()` is part of
+    /// that change, which the step commits, so callbacks may call it.
+    #[cfg(feature = "native")]
+    pub(crate) transformed_file: bool,
 }
 
 #[derive(Trace, Clone)]
@@ -127,6 +131,13 @@ impl<'js> SgRootRjs<'js> {
         Ok(document_source(&self.inner.grep).into_owned())
     }
 
+    /// Internal JSSG compatibility diagnostic for a recovered target tree.
+    #[cfg(feature = "native")]
+    #[qjs(rename = "_jssgHasSyntaxErrors")]
+    pub fn jssg_has_syntax_errors(&self) -> bool {
+        self.inner.grep.root().get_inner_node().has_error()
+    }
+
     /// Write content to this file.
     ///
     /// This method is only valid for files obtained via `definition()` or `references()`.
@@ -139,6 +150,13 @@ impl<'js> SgRootRjs<'js> {
     /// If the path is relative, it is resolved against the current file's parent directory.
     /// If absolute, it is used as-is.
     pub fn rename(&self, new_path: String, ctx: Ctx<'js>) -> Result<()> {
+        #[cfg(feature = "native")]
+        if in_callback_isolate(&ctx) && !self.inner.transformed_file {
+            return Err(Exception::throw_message(
+                &ctx,
+                "root.rename() is for jssg transforms; in a forEachFile callback, call file.rename(path)",
+            ));
+        }
         if new_path.is_empty() {
             return Err(Exception::throw_message(
                 &ctx,
@@ -147,15 +165,24 @@ impl<'js> SgRootRjs<'js> {
         }
 
         let resolved_path = if std::path::Path::new(&new_path).is_absolute() {
+            #[cfg(feature = "native")]
+            let new_path = crate::sandbox::engine::execution_engine::native_path(&new_path)
+                .to_string_lossy()
+                .into_owned();
             new_path
         } else {
-            // Resolve relative to current file's parent directory
+            // Resolve relative to current file's parent directory, part by
+            // part so the separators are the platform's.
             match &self.inner.filename {
                 Some(filename) => {
                     let parent = std::path::Path::new(filename)
                         .parent()
                         .unwrap_or(std::path::Path::new("."));
-                    parent.join(&new_path).to_string_lossy().to_string()
+                    std::path::Path::new(&new_path)
+                        .components()
+                        .fold(parent.to_path_buf(), |path, part| path.join(part))
+                        .to_string_lossy()
+                        .to_string()
                 }
                 None => new_path,
             }
@@ -202,6 +229,13 @@ impl<'js> SgRootRjs<'js> {
                 }
             };
 
+            if self.inner.current_file_path.is_none() && in_callback_isolate(&ctx) {
+                return Err(Exception::throw_message(
+                    &ctx,
+                    "root.write() is for files found through definition() or references(), which roots parsed in a forEachFile callback have none of; call file.write(text) for the callback's file",
+                ));
+            }
+
             if let Some(current_file) = &self.inner.current_file_path {
                 let file_path_normalized = std::path::Path::new(file_path)
                     .canonicalize()
@@ -243,7 +277,24 @@ impl<'js> SgRootRjs<'js> {
     }
 }
 
+/// Whether this context runs workflow callbacks, whose file changes go
+/// through the step's commit.
+#[cfg(feature = "native")]
+fn in_callback_isolate(ctx: &Ctx<'_>) -> bool {
+    ctx.userdata::<crate::sandbox::engine::execution_engine::CallbackIsolate>()
+        .is_some()
+}
+
 impl<'js> SgRootRjs<'js> {
+    /// Mark a root `jssgTransform` made for the file it changes.
+    #[cfg(feature = "native")]
+    pub(crate) fn into_transformed_file(mut self) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.transformed_file = true;
+        }
+        self
+    }
+
     /// Get the rename target path, if rename() was called.
     pub fn get_rename_to(&self) -> Option<String> {
         self.inner
@@ -310,6 +361,8 @@ impl<'js> SgRootRjs<'js> {
                     semantic_provider: None,
                     #[cfg(feature = "native")]
                     current_file_path: None,
+                    #[cfg(feature = "native")]
+                    transformed_file: false,
                 }),
                 _phantom: PhantomData,
             })
@@ -334,6 +387,8 @@ impl<'js> SgRootRjs<'js> {
                     semantic_provider: None,
                     #[cfg(feature = "native")]
                     current_file_path: None,
+                    #[cfg(feature = "native")]
+                    transformed_file: false,
                 }),
                 _phantom: PhantomData,
             })
@@ -356,6 +411,8 @@ impl<'js> SgRootRjs<'js> {
                 semantic_provider: None,
                 #[cfg(feature = "native")]
                 current_file_path: None,
+                #[cfg(feature = "native")]
+                transformed_file: false,
             }),
             _phantom: PhantomData,
         })
@@ -379,6 +436,7 @@ impl<'js> SgRootRjs<'js> {
                 rename_to: Mutex::new(None),
                 semantic_provider,
                 current_file_path,
+                transformed_file: false,
             }),
             _phantom: PhantomData,
         })
@@ -766,7 +824,8 @@ impl<'js> SgNodeRjs<'js> {
     #[qjs(rename = "getTransformed")]
     pub fn get_transformed(&self, meta_var: String, ctx: Ctx<'js>) -> Result<Value<'js>> {
         match self.inner_node.get_env().get_transformed(&meta_var) {
-            Some(s) => s.into_js(&ctx),
+            // The transformed text, not its bytes.
+            Some(bytes) => String::from_utf8_lossy(bytes).into_owned().into_js(&ctx),
             None => Ok(Value::new_null(ctx)),
         }
     }
@@ -818,7 +877,7 @@ impl<'js> SgNodeRjs<'js> {
     }
 
     #[qjs(rename = "commitEdits")]
-    pub fn commit_edits(&self, edits: Vec<JsEdit>) -> Result<String> {
+    pub fn commit_edits(&self, edits: Vec<JsEdit>, ctx: Ctx<'js>) -> Result<String> {
         // tree-sitter starts the root node at its first token, so the root node's text omits
         // leading blank lines, whitespace, and a BOM. Committing against that text silently
         // dropped those bytes from every file, even when `edits` was empty. When committing on
@@ -831,30 +890,18 @@ impl<'js> SgNodeRjs<'js> {
             (self.inner_node.text(), self.inner_node.range().start)
         };
 
-        if edits.is_empty() {
-            return Ok(old_content.into_owned());
-        }
-
-        let mut sorted_edits = edits;
-        sorted_edits.sort_by_key(|edit| edit.start_pos);
-
-        let mut new_content = String::with_capacity(old_content.len());
-        let mut start = 0;
-
-        for edit in sorted_edits {
-            let pos = edit.start_pos as usize - offset;
-            // Skip overlapping edits
-            if start > pos {
-                continue;
-            }
-            new_content.push_str(&old_content[start..pos]);
-            new_content.push_str(&edit.inserted_text);
-            start = edit.end_pos as usize - offset;
-        }
-
-        // Add trailing content
-        new_content.push_str(&old_content[start..]);
-        Ok(new_content)
+        let edits = edits
+            .into_iter()
+            .map(|edit| {
+                (
+                    edit.start_pos as usize,
+                    edit.end_pos as usize,
+                    edit.inserted_text,
+                )
+            })
+            .collect();
+        splice_edits(&old_content, offset, edits)
+            .map_err(|message| Exception::throw_message(&ctx, &message))
     }
 
     pub fn debug(&self) -> Result<String> {
@@ -926,6 +973,7 @@ impl<'js> SgNodeRjs<'js> {
         ctx: Ctx<'js>,
         options: Opt<rquickjs::Object<'js>>,
     ) -> Result<Value<'js>> {
+        crate::sandbox::runtime_module::experimental(&ctx, "SgNode.definition()");
         #[cfg(not(feature = "native"))]
         {
             let _ = options;
@@ -1061,6 +1109,7 @@ impl<'js> SgNodeRjs<'js> {
     /// In accurate mode, this searches the entire workspace.
     #[qjs(rename = "references")]
     pub fn references(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        crate::sandbox::runtime_module::experimental(&ctx, "SgNode.references()");
         #[cfg(not(feature = "native"))]
         {
             return rquickjs::Array::new(ctx.clone())?.into_js(&ctx);
@@ -1244,4 +1293,60 @@ fn get_language(grep: &AstGrep<TSDoc>) -> Lang {
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 fn get_language(grep: &AstGrep<TSDoc>) -> crate::ast_grep::wasm_lang::WasmLang {
     grep.lang().clone()
+}
+
+/// Apply `(start, end, text)` edits, positions in document bytes, to `old`,
+/// the text that starts at document byte `offset`. Of two edits that overlap
+/// the first stands. An edit outside `old` is an error: it belongs to another
+/// node.
+pub fn splice_edits(
+    old: &str,
+    offset: usize,
+    mut edits: Vec<(usize, usize, String)>,
+) -> std::result::Result<String, String> {
+    edits.sort_by_key(|(start, _, _)| *start);
+    let mut text = String::with_capacity(old.len());
+    let mut done = 0;
+    for (start, end, inserted) in edits {
+        let inside = start >= offset && end >= start && end - offset <= old.len();
+        let (from, to) = (start.wrapping_sub(offset), end.wrapping_sub(offset));
+        if !inside || !old.is_char_boundary(from) || !old.is_char_boundary(to) {
+            return Err(format!(
+                "commitEdits: the edit at {start}..{end} is outside this node ({offset}..{}); commit edits on a node that contains them, such as the root",
+                offset + old.len()
+            ));
+        }
+        if done > from {
+            continue;
+        }
+        text.push_str(&old[done..from]);
+        text.push_str(&inserted);
+        done = to;
+    }
+    text.push_str(&old[done..]);
+    Ok(text)
+}
+
+#[cfg(test)]
+mod splice_tests {
+    use super::splice_edits;
+
+    #[test]
+    fn edits_are_applied_in_order_and_overlaps_dropped() {
+        let edits = vec![
+            (14, 15, "2".to_string()),
+            (10, 11, "b".to_string()),
+            (10, 12, "x".to_string()),
+        ];
+        assert_eq!(splice_edits("a = 1;", 10, edits).unwrap(), "b = 2;");
+        assert_eq!(splice_edits("same", 3, Vec::new()).unwrap(), "same");
+    }
+
+    #[test]
+    fn an_edit_outside_the_node_is_an_error() {
+        for edit in [(2, 4, String::new()), (12, 30, String::new())] {
+            let error = splice_edits("a = 1;", 10, vec![edit]).unwrap_err();
+            assert!(error.contains("outside this node"), "{error}");
+        }
+    }
 }

@@ -1,9 +1,13 @@
 ---
 title: "Workflow Context"
-description: "Parameters, matrix values, shared state, and runtime hooks for JSSG steps."
+description: "Parameters, matrix values, passing values between steps, and runtime hooks for JSSG steps."
 ---
 
-Wire a transform into a workflow: user parameters, matrix sharding values, cross-file state, and structured runtime signals.
+Wire per-file logic into a workflow: user parameters, matrix sharding values, values handed between steps, and structured runtime signals.
+
+<Note>
+In `workflow.ts`, per-file logic is a `forEachFile` callback, inline or imported from its file: `jssg(...)` is not part of the workflow API. A jssg transform file (`(root, options) => ...`) is what `codemod jssg run` and `codemod jssg test` run, and what `workflow.yaml`'s `js-ast-grep` steps run; there it gets `options.params` and `options.matrixValues` as below. A callback gets the same values as variables it captures.
+</Note>
 
 ## Parameters and Configuration
 
@@ -17,8 +21,8 @@ You can access parameters via `options.params`.
 
 <CodeGroup>
 ```ts codemod.ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = async (root, options) => {
   // Access user-configured parameters
@@ -35,37 +39,21 @@ const codemod: Codemod<TSX> = async (root, options) => {
 export default codemod;
 ```
 
-```yaml workflow.yaml
-# --- Basic schema example ---
-version: "1"
-params:
-  schema:
-    library:
-      name: "Library"
-      description: "Internationalization library to use"
-      type: string
-      default: "next-intl"
-    shardingMethod:
-      name: "Sharding Method"
-      type: string
-      default: "directory"
-    prSize:
-      name: "PR Size"
-      type: string
-      default: "50"
+```ts workflow.ts
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
 
----
-# --- Enum schema example (multi-document YAML) ---
-version: "1"
-params:
-  schema:
-    format:
-      name: "Module format"
-      type: string
-      default: "esm"
-      oneOf:
-        - type: string
-          enum: ["esm", "cjs"]
+export default async function main({ params }: { params: Record<string, string> }) {
+  // Run parameters (--param key=value) reach the workflow as `params`; a
+  // callback gets the values it uses as frozen copies.
+  const library = params.library ?? "next-intl";
+  await step(forEachFile({ language: "tsx" }, (file) => {
+    const root = parse(file);
+    if (library === "react-i18next") {
+      // Apply react-i18next specific transformations
+    }
+  }));
+}
 ```
 </CodeGroup>
 
@@ -90,8 +78,8 @@ Matrix values are particularly useful for:
 Access matrix values via `options.matrixValues`:
 
 ```ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";    
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";    
 
 const codemod: Codemod<TSX> = async (root, options) => {
   // Access matrix values passed from the workflow (if matrix strategy is used)
@@ -124,181 +112,85 @@ export default codemod;
 Prefer checking sharding against a project-relative path (e.g., `path.relative(process.cwd(), root.filename())`) to avoid mismatches across environments.
 </Tip>
 
-### Matrix Strategy Configuration
+### Passing matrix values
 
-Matrix strategy is defined in your workflow:
+In `workflow.ts`, a callback gets a shard's values as variables. A common pattern is one step per shard:
 
-```yaml workflow.yaml
-version: "1"
-state:
-  schema:
-    shards:
-      type: array
-      items:
-        type: object
-        properties:
-          team: { type: string }
-          shard: { type: string }
-          shardId: { type: string }
-```
+```ts workflow.ts
+import { step, shard, forEachFile } from "codemod/workflow";
 
-<Note>
-**Parameters vs Matrix Values**: `options.params` contains user-configured workflow settings, while `options.matrixValues` contains values from matrix strategy (e.g., `team`, `shard`, `shardId` from the `shards` state array). See [Matrix Strategy](/community/workflows/reference#matrix-strategy) for details.
-</Note>
-
-
-## State Management
-
-The `codemod:workflow` module provides shared state that is accessible across all parallel file executions within a step, and can be persisted across workflow steps.
-
-### API Reference
-
-```ts
-import { setState, getState, unsetState, acquireLock } from "codemod:workflow";
-```
-
-<ParamField path="setState" type="<T>(name: string, value: T, persist?: boolean) => void">
-  Sets a named state value. Values are stored as native JavaScript objects (no manual JSON serialization needed). When `persist` is `true` (the default), the value is saved at the end of the execution batch and available to subsequent workflow steps.
-</ParamField>
-
-<ParamField path="getState" type="<T>(name: string) => T | undefined">
-  Gets a named state value, or `undefined` if it doesn't exist.
-</ParamField>
-
-<ParamField path="unsetState" type="(name: string) => void">
-  Removes a named state value. If the key was persisted, a removal is propagated to persistent storage.
-</ParamField>
-
-<ParamField path="acquireLock" type="(name: string) => () => void">
-  Acquires a named mutex lock. Returns a `release` function that **must** be called when done. While held, other threads' `getState`, `setState`, and `unsetState` calls on the same key block until released.
-</ParamField>
-
-### Basic Usage
-
-State is shared across all files processed in parallel within a single step:
-
-<Warning>
-Do not rebuild a repo-wide index or rewrite a full-repo `setState` payload on every file. Each file runs in a fresh QuickJS runtime (module caches reset), and `getState` clones the entire JSON value. Build once under `acquireLock`, store a built sentinel plus small per-file shards, then look up. See [Performant codemods](/community/jssg/advanced/performance#performant-codemods).
-</Warning>
-
-```ts codemod.ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
-import { setState, getState, acquireLock } from "codemod:workflow";
-
-const codemod: Codemod<TSX> = async (root) => {
-  const rootNode = root.root();
-  const imports = rootNode.findAll({ rule: { kind: "import_statement" } });
-
-  // Safely accumulate results across parallel file executions
-  const release = acquireLock("results");
-  try {
-    const results = getState<string[]>("importedFiles") ?? [];
-    results.push(root.filename());
-    setState("importedFiles", results);
-  } finally {
-    release();
-  }
-
-  return null;
-};
-
-export default codemod;
-```
-
-### When to Use Locks
-
-Use `acquireLock` when you need to read-modify-write shared state from parallel threads. Without it, concurrent `getState` → `setState` sequences can overwrite each other:
-
-```ts
-// Without lock — RACE CONDITION:
-// Thread A reads count=0, Thread B reads count=0,
-// both write count=1 instead of count=2
-const count = getState<number>("count") ?? 0;
-setState("count", count + 1);
-
-// With lock — SAFE:
-const release = acquireLock("count");
-try {
-  const count = getState<number>("count") ?? 0;
-  setState("count", count + 1);
-} finally {
-  release();
+export default async function main() {
+  const shards = await step(shard({ method: { type: "codeowner", maxFilesPerShard: 30 }, files: "**/*.tsx" }));
+  await Promise.all(shards.map((current) => {
+    const team = current.team;
+    return step(`Migrate ${current.name}`, forEachFile({ include: current._meta_files, language: "tsx" }, (file) => {
+      console.log(`Processing ${file.path} for team ${team}`);
+    }));
+  }));
 }
 ```
 
-<Warning>
-Always call `release()` in a `finally` block. Failing to release a lock will block all other threads waiting on that key.
-</Warning>
+<Note>
+**Parameters vs matrix values**: in a jssg transform, `options.params` holds run parameters, while `options.matrixValues` holds a matrix node's values. In `workflow.yaml`, matrix values come from a node's matrix strategy; see the [workflow.yaml reference](/community/workflows/yaml).
+</Note>
+
+## Passing Values Between Steps
+
+Workflows have no shared state. A callback gets values as the variables it captures and reports what it found by returning it; a later step gets those values the same way.
+
+| Need | Use |
+|---|---|
+| Give a callback a value | A variable it uses, copied in when the step starts |
+| Report what a callback saw, or collect a value from every file | Return it; the step's `result.outputs` lists them in path order |
+| A shell command's values | What it prints; parse the step's `result.stdout` |
 
 <Info>
-Simple `setState` calls that don't depend on the current value (e.g., `setState("status", "done")`) don't need locking — they are individually atomic.
+`getState`, `setState`, `unsetState` and `acquireLock` were removed from `codemod/workflow`. Importing them is a build error that names what replaced them.
 </Info>
 
-### Persisting State Across Workflow Steps
+### Collect, then apply
 
-State set with `persist: true` (the default) is automatically saved after a `js-ast-grep` step completes. Subsequent steps in the same workflow node can read this state:
+A step that needs something found across the repository runs after a step that finds it. Files are processed in parallel, so a value gathered and read inside one step depends on file order; two steps do not.
 
 <CodeGroup>
-```yaml workflow.yaml
-nodes:
-  - id: analyze
-    steps:
-      - name: "Scan files"
-        js-ast-grep:
-          js_file: scripts/scan.ts
-          language: "tsx"
-      - name: "Process results"
-        run: |
-          codemod jssg exec $CODEMOD_PATH/scripts/process.ts
+```ts workflow.ts
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+import { updateImports } from "./scripts/update-imports.ts";
+
+export default async function main() {
+  // Pass 1: every file returns the components it exports.
+  const scan = await step("Find exported components", forEachFile({ language: "tsx" }, (file) =>
+    parse(file).root().findAll("export function $NAME($$$) { $$$ }").map((m) => m.getMatch("NAME")!.text()),
+  ));
+  const components = scan.outputs.flat();
+
+  // Pass 2: the callback gets the list as a variable.
+  await step("Update imports", forEachFile({ language: "tsx" }, (file) => updateImports(file, components)));
+}
 ```
 
-```ts scripts/scan.ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
-import { setState, getState, acquireLock } from "codemod:workflow";
+```ts scripts/update-imports.ts
+import { parse } from "codemod/ast-grep";
+import type { WorkflowFile } from "codemod/workflow";
 
-const codemod: Codemod<TSX> = async (root) => {
-  // Collect file paths that match criteria
-  const release = acquireLock("files");
-  try {
-    const files = getState<string[]>("filesToProcess") ?? [];
-    files.push(root.filename());
-    setState("filesToProcess", files); // persisted by default
-  } finally {
-    release();
-  }
-  return null;
-};
-
-export default codemod;
-```
-
-```ts scripts/process.ts
-import { getState } from "codemod:workflow";
-
-// This runs in a subsequent "run" step via jssg exec.
-// State from the previous js-ast-grep step is available.
-const files = getState<string[]>("filesToProcess") ?? [];
-console.log(`Processing ${files.length} files`);
+export function updateImports(file: WorkflowFile, components: readonly string[]) {
+  const names = new Set(components);
+  const root = parse(file);
+  // ... rewrite imports of `names`, then file.write(...)
+  return { file: file.path };
+}
 ```
 </CodeGroup>
 
-### Transient State
-
-Pass `persist: false` to keep state only for the current step execution (useful for in-memory coordination that doesn't need to survive across steps):
-
-```ts
-setState("processingQueue", queue, false); // not persisted
-```
-
+The first pass parses each file once more than a single pass would. In exchange, the second pass sees the complete list on every file, whatever order files run in.
 
 ## Runtime Hooks
 
-The `codemod:runtime` module lets a codemod send structured execution signals to the engine without relying on `console.log` parsing.
+The `codemod/runtime` module lets a codemod send structured execution signals to the engine without relying on `console.log` parsing.
 
 ```ts
-import runtime from "codemod:runtime";
+import runtime from "codemod/runtime";
 ```
 
 Use runtime hooks when you want to:
@@ -337,9 +229,9 @@ Use runtime hooks when you want to:
 ### Example: Report progress and fail explicitly
 
 ```ts codemod.ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
-import runtime from "codemod:runtime";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
+import runtime from "codemod/runtime";
 
 const codemod: Codemod<TSX> = async (root) => {
   const relativeFile = root.filename();
@@ -370,6 +262,6 @@ export default codemod;
 - The engine's idle timeout is only a backstop for silent hangs. Hooks are the preferred way to report semantic failures.
 
 <Warning>
-`codemod:runtime` requires a runtime version that supports runtime hooks. If a codemod must run in mixed-version environments, prefer a dynamic import with a clear upgrade error message when the module is unavailable.
+`codemod/runtime` requires a runtime version that supports runtime hooks. If a codemod must run in mixed-version environments, prefer a dynamic import with a clear upgrade error message when the module is unavailable.
 </Warning>
 

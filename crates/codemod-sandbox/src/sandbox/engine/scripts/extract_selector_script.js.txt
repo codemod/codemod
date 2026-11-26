@@ -1,4 +1,4 @@
-import astGrep from "codemod:ast-grep";
+import astGrep from "codemod/ast-grep";
 
 export async function runSelector() {{
     const exports = await import("./{script_name}");

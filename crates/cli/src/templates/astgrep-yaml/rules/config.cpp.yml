@@ -3,8 +3,11 @@
 id: modernize-raw-pointers
 language: cpp
 rule:
-  any:
-    - pattern: $TYPE* $VAR = new $CONSTRUCTOR($$$ARGS)
-    - pattern: $TYPE* $VAR = new $TYPE[$SIZE]
-fix: |
-  auto $VAR = std::make_unique<$TYPE>($ARGS)
+  pattern: $TYPE* $VAR = new $CONSTRUCTOR($$$ARGS);
+fix: auto $VAR = std::make_unique<$TYPE>($$$ARGS);
+---
+id: modernize-raw-arrays
+language: cpp
+rule:
+  pattern: $TYPE* $VAR = new $TYPE[$SIZE];
+fix: std::vector<$TYPE> $VAR($SIZE);

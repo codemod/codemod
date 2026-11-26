@@ -1,6 +1,9 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use codemod_llrt_capabilities::module_builder::supported_runtime_external_modules;
 use rolldown::{BundleOutput, Bundler, BundlerOptions, InputItem, IsExternal, SourceMapType};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Simple rolldown-based bundler configuration
 #[derive(Debug, Clone)]
@@ -13,10 +16,11 @@ pub struct RolldownBundlerConfig {
     pub output_path: Option<PathBuf>,
     /// Enable source maps
     pub source_maps: bool,
-    /// Module specifiers that may remain external in the bundle
-    pub external_modules: Vec<String>,
     /// Treat Rolldown unresolved import diagnostics as bundle failures
     pub fail_on_unresolved_imports: bool,
+    /// Imports to leave as written, besides the modules the runtime provides:
+    /// a workflow's transforms, which the engine runs from their own files.
+    pub externals: Vec<String>,
 }
 
 /// Result of bundling operation
@@ -85,8 +89,13 @@ impl RolldownBundler {
             }]),
             cwd: Some(base_dir.clone()),
             sourcemap: self.config.source_maps.then_some(SourceMapType::File),
-            external: (!self.config.external_modules.is_empty())
-                .then(|| IsExternal::from(self.config.external_modules.clone())),
+            // What the runtime provides stays an import. Left to resolution,
+            // `codemod/ast-grep` would be found in an installed `codemod`
+            // package and its Node.js files bundled.
+            external: Some(externals(
+                &base_dir.join(&entry_str),
+                self.config.externals.clone(),
+            )),
             ..Default::default()
         };
 
@@ -95,7 +104,7 @@ impl RolldownBundler {
         let result = bundler
             .generate()
             .await
-            .map_err(|e| anyhow::anyhow!("Rolldown bundling failed: {:?}", e))?;
+            .context("Rolldown bundling failed")?;
         if self.config.fail_on_unresolved_imports {
             if let Some(warning) = result
                 .warnings
@@ -118,6 +127,30 @@ impl RolldownBundler {
             output_path: self.config.output_path.clone(),
         })
     }
+}
+
+/// What stays an import: the modules the runtime provides, from any file,
+/// and `entry_externals` (relative specifiers) only as the entry file
+/// imports them. A file the entry imports may use the same specifier for
+/// another file, next to it, which is bundled.
+fn externals(entry: &Path, entry_externals: Vec<String>) -> IsExternal {
+    let runtime: HashSet<String> = supported_runtime_external_modules()
+        .into_iter()
+        // What the YAML translation's callbacks use; the engine has it.
+        .chain(["codemod-internal:jssg-compat".to_string()])
+        .collect();
+    let entry_externals: HashSet<String> = entry_externals.into_iter().collect();
+    let entry = std::fs::canonicalize(entry).unwrap_or_else(|_| entry.to_path_buf());
+    IsExternal::Fn(Some(Arc::new(
+        move |specifier: &str, importer: Option<&str>, _resolved: bool| {
+            let external = runtime.contains(specifier)
+                || (entry_externals.contains(specifier)
+                    && importer.is_some_and(|importer| {
+                        std::fs::canonicalize(importer).is_ok_and(|importer| importer == entry)
+                    }));
+            Box::pin(async move { Ok(external) })
+        },
+    )))
 }
 
 fn normalize_rolldown_path(path: &Path) -> PathBuf {
@@ -150,14 +183,32 @@ mod tests {
             base_dir: None,
             output_path: None,
             source_maps: false,
-            external_modules: Vec::new(),
             fail_on_unresolved_imports: false,
+            externals: Vec::new(),
         };
 
         let bundler = RolldownBundler::new(config.clone());
 
         assert_eq!(bundler.config.entry_path, config.entry_path);
         assert_eq!(bundler.config.source_maps, config.source_maps);
+    }
+
+    #[tokio::test]
+    async fn bundling_error_displays_the_diagnostic_not_debug_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundler = RolldownBundler::new(RolldownBundlerConfig {
+            entry_path: dir.path().join("missing-entry.ts"),
+            base_dir: None,
+            output_path: None,
+            source_maps: false,
+            fail_on_unresolved_imports: false,
+            externals: Vec::new(),
+        });
+        let error = bundler.bundle().await.unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("Rolldown bundling failed"), "{message}");
+        assert!(message.contains("missing-entry.ts"), "{message}");
+        assert!(!message.contains("BuildDiagnostic"), "{message}");
     }
 
     #[cfg(windows)]
@@ -195,8 +246,8 @@ mod tests {
             base_dir: Some(temp_dir.path().canonicalize().unwrap()),
             output_path: None,
             source_maps: false,
-            external_modules: Vec::new(),
             fail_on_unresolved_imports: false,
+            externals: Vec::new(),
         };
 
         let bundler = RolldownBundler::new(config);

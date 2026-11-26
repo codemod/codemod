@@ -1,300 +1,126 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::commands::run_telemetry::{nested_codemod_run_observer, persisted_workflow_root_name};
-use crate::engine::create_engine;
-use crate::utils::path_safety::normalize_target_path;
-use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
-use crate::workflow_runner::resolve_workflow_source;
-use crate::TelemetrySenderMutex;
-use anyhow::{Context, Result};
-use butterflow_models::{Task, TaskStatus, WorkflowStatus};
+use anyhow::Result;
 use clap::Args;
-use log::{error, info};
-use tabled::settings::{object::Columns, Alignment, Modify, Style};
-use tabled::Table;
-use uuid::Uuid;
 
-use super::status::TaskRow;
+use crate::engine::create_registry_client;
+use crate::workflow_exec::{self, ExecSettings, RunFlags};
+use crate::TelemetrySenderMutex;
+
+/// What `--approve` alone stands for: every approval.
+const ALL: &str = "*";
 
 #[derive(Args, Debug)]
 pub struct Command {
-    /// Path to workflow file or directory
-    #[arg(short, long, value_name = "PATH")]
-    workflow: String,
-
     /// Workflow run ID
     #[arg(short, long)]
-    id: Uuid,
+    id: String,
 
-    /// Task ID to trigger (can be specified multiple times)
-    #[arg(long = "tasks_ids")]
-    task: Vec<Uuid>,
+    /// Give an approval: the one with this question id (e.g. approval:3, as `workflow status`
+    /// shows it). Without an id, give the one the run is waiting for and every later one.
+    /// Repeat it to give several
+    #[arg(
+        long,
+        value_name = "QUESTION_ID",
+        num_args = 0..=1,
+        default_missing_value = ALL,
+        action = clap::ArgAction::Append
+    )]
+    approve: Vec<String>,
 
-    /// Trigger all awaiting tasks
-    #[arg(long)]
+    /// Same as --approve (kept for existing scripts)
+    #[arg(long, hide = true)]
     trigger_all: bool,
 
-    /// Allow dirty git status
+    /// Continue a run that was canceled or rejected, or one another codemod version made whose
+    /// finished function steps would run again
+    #[arg(long)]
+    force: bool,
+
+    /// Repeat an interrupted side-effect step, even if it already took effect. Repeat for more steps
+    #[arg(long, value_name = "STEP_ID")]
+    rerun_step: Vec<u64>,
+
+    /// Continue without repeating an interrupted step (its result will be null). Repeat for more steps
+    #[arg(long, value_name = "STEP_ID")]
+    skip_step: Vec<u64>,
+
+    /// Let branch, commit and pull request steps change the git repository (experimental)
+    #[arg(long)]
+    managed_git: bool,
+
+    #[command(flatten)]
+    flags: RunFlags,
+
+    /// Ignored: the run remembers its workflow
+    #[arg(short, long, hide = true)]
+    workflow: Option<String>,
+
+    /// Ignored: the run remembers its target
+    #[arg(long = "target", short = 't', hide = true)]
+    target_path: Option<PathBuf>,
+
+    /// Write even if the target has uncommitted changes, for a run that stopped before it first
+    /// wrote (a run that already wrote is not checked again)
     #[arg(long)]
     allow_dirty: bool,
 
-    /// Dry run mode - don't make actual changes
-    #[arg(long)]
-    dry_run: bool,
+    /// Removed in 2.0 (refused with what replaced it): approvals have question ids
+    #[arg(long = "tasks_ids", value_name = "TASK", hide = true, action = clap::ArgAction::Append)]
+    tasks_ids: Vec<String>,
 
-    /// Optional target path to run the codemod on (default: current directory)
-    #[arg(long = "target", short = 't')]
-    target_path: Option<PathBuf>,
-
-    /// Allow fs access
-    #[arg(long)]
-    allow_fs: bool,
-
-    /// Allow fetch access
-    #[arg(long)]
-    allow_fetch: bool,
-
-    /// Allow child process access
-    #[arg(long)]
-    allow_child_process: bool,
-
-    /// No interactive mode
-    #[arg(long)]
-    no_interactive: bool,
-
-    /// Execute install-skill steps when running in non-interactive mode
-    #[arg(long)]
-    install_skill: bool,
-
-    /// Output format: "text" (default) or "jsonl" for structured logging
-    #[arg(long, default_value = "text")]
-    format: String,
-
-    /// Exit once the triggered tasks reach a terminal state.
+    /// Removed in 2.0 (refused with what replaced it): dry runs are not saved
     #[arg(long, hide = true)]
-    exit_when_triggered_tasks_finish: bool,
+    dry_run: bool,
 }
 
-/// Resume a workflow
-pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
-    let target_path = normalize_target_path(
-        args.target_path
-            .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap()),
-    )?;
-
-    let (workflow_file_path, _) = resolve_workflow_source(&args.workflow)?;
-
-    let workflow_dir = workflow_file_path.parent().unwrap();
-
-    let capabilities = resolve_capabilities(
-        ResolveCapabilitiesArgs {
-            allow_fs: args.allow_fs,
-            allow_fetch: args.allow_fetch,
-            allow_child_process: args.allow_child_process,
-        },
-        None,
-        Some(workflow_dir.to_path_buf()),
-    );
-    println!(
-        "Resuming workflow {} with capabilities: {:?}",
-        args.id, capabilities
-    );
-    info!(
-        "workflow resume invoked: workflow={}, id={}, target={}, trigger_all={}, task_count={}, dry_run={}, no_interactive={}",
-        args.workflow,
-        args.id,
-        target_path.display(),
-        args.trigger_all,
-        args.task.len(),
-        args.dry_run,
-        args.no_interactive
-    );
-
-    let output_format: butterflow_core::structured_log::OutputFormat = args
-        .format
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!(e))?;
-
-    let (mut engine, _) = create_engine(
-        workflow_file_path,
-        target_path,
-        args.dry_run,
-        args.allow_dirty,
-        // TODO: Load params from workflow run
-        HashMap::new(),
-        None,
-        Some(capabilities),
-        args.no_interactive,
-        None,
-        args.no_interactive && !args.install_skill,
-        output_format,
-        None,
-        None,
-        Some(crate::commands::package_skill::create_install_skill_executor(telemetry.clone())),
-    )?;
-    let workflow_run = engine
-        .get_workflow_run(args.id)
-        .await
-        .context("Failed to load persisted workflow run")?;
-    let root_codemod_name = persisted_workflow_root_name(&workflow_run);
-    engine
-        .workflow_run_config_mut()
-        .execution
-        .nested_codemod_run_observer = Some(nested_codemod_run_observer(
-        telemetry,
-        args.id.to_string(),
-        root_codemod_name,
-        args.dry_run,
-    ));
-
-    let tracked_task_ids = if args.trigger_all {
-        engine
-            .get_tasks(args.id)
-            .await
-            .context("Failed to load tasks before trigger-all")?
-            .into_iter()
-            .filter(|task| !task.is_master && task.status == TaskStatus::AwaitingTrigger)
-            .map(|task| task.id)
-            .collect::<Vec<_>>()
-    } else {
-        args.task.clone()
-    };
-
-    if args.trigger_all {
-        info!("Triggering all awaiting tasks for workflow {}", args.id);
-        // Trigger all awaiting tasks
-        let triggered = engine
-            .trigger_all(args.id)
-            .await
-            .context("Failed to trigger all tasks")?;
-        if !triggered {
-            println!("No tasks awaiting trigger");
-            return Ok(());
-        }
-
-        println!("Triggered all awaiting tasks");
-    } else if !args.task.is_empty() {
-        info!(
-            "Triggering specific tasks for workflow {}: {:?}",
-            args.id, args.task
+/// Why a 1.x flag `resume` no longer takes is refused, and what to use.
+fn removed_flag(args: &Command) -> Option<String> {
+    if !args.tasks_ids.is_empty() {
+        return Some(format!(
+            "--tasks_ids was removed in codemod 2.0. Approvals now have question ids: see them with `codemod workflow status --id {id}`, then resume with `--approve <question-id>` (or `--approve` to give every approval).",
+            id = args.id
+        ));
+    }
+    if args.dry_run {
+        return Some(
+            "--dry-run was removed from resume in codemod 2.0: a dry run is not saved, so there is nothing to resume. Start a new one with `codemod workflow run --dry-run`."
+                .to_string(),
         );
-        // Trigger specific tasks
-        engine
-            .resume_workflow(args.id, args.task.to_vec())
-            .await
-            .context("Failed to resume workflow")?;
-
-        println!("Triggered {} tasks", args.task.len());
-    } else {
-        error!("No tasks specified to trigger. Use --task or --trigger-all");
-        return Ok(());
     }
-
-    if args.exit_when_triggered_tasks_finish {
-        wait_for_triggered_tasks(&engine, args.id, &tracked_task_ids).await?;
-        return Ok(());
-    }
-
-    loop {
-        let status = engine
-            .get_workflow_status(args.id)
-            .await
-            .context("Failed to get workflow status")?;
-
-        match status {
-            WorkflowStatus::Completed => {
-                println!("✅ Workflow completed successfully");
-                break;
-            }
-            WorkflowStatus::Failed => {
-                println!("❌ Workflow failed");
-                break;
-            }
-            WorkflowStatus::AwaitingTrigger => {
-                // Get tasks awaiting trigger
-                let tasks = engine
-                    .get_tasks(args.id)
-                    .await
-                    .context("Failed to get tasks")?;
-
-                let awaiting_tasks: Vec<&Task> = tasks
-                    .iter()
-                    .filter(|t| t.status == TaskStatus::AwaitingTrigger)
-                    .collect();
-
-                println!("⏸️ Workflow paused: Manual triggers still required");
-                println!("Workflow is still awaiting manual triggers for the following tasks:");
-                let mut tasks_table = Table::new(awaiting_tasks.iter().map(|t| TaskRow {
-                    id: t.id.to_string(),
-                    node_id: t.node_id.clone(),
-                    status: format!("{:?}", t.status),
-                    matrix_info: "-".to_string(),
-                }));
-
-                tasks_table
-                    .with(Style::rounded())
-                    .with(Modify::new(Columns::new(..)).with(Alignment::left())); // align all columns left
-                println!("Tasks:");
-                println!("{tasks_table}");
-
-                break;
-            }
-            WorkflowStatus::Canceled => {
-                println!("❌ Workflow was canceled");
-                break;
-            }
-            _ => {
-                // Wait a bit before checking again
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            }
-        }
-    }
-
-    Ok(())
+    None
 }
 
-fn is_terminal_task_status(status: TaskStatus) -> bool {
-    matches!(
-        status,
-        TaskStatus::Completed | TaskStatus::Failed | TaskStatus::WontDo
+/// Resume a failed, paused or waiting workflow run
+pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+    if let Some(message) = removed_flag(args) {
+        anyhow::bail!(message);
+    }
+    let approve_all = args.trigger_all || args.approve.iter().any(|id| id == ALL);
+    let approve_ids = args
+        .approve
+        .iter()
+        .filter(|id| *id != ALL)
+        .cloned()
+        .collect();
+    args.flags.warn_deprecated_capabilities();
+    let outcome = workflow_exec::resume(
+        &args.id,
+        ExecSettings {
+            approve_all,
+            approve_ids,
+            managed_git: args.managed_git,
+            force: args.force,
+            rerun_steps: args.rerun_step.clone(),
+            skip_steps: args.skip_step.clone(),
+            allow_dirty: args.allow_dirty,
+            ..args.flags.settings(
+                std::collections::HashSet::new(),
+                create_registry_client(None)?,
+                &telemetry,
+            )
+        },
     )
-}
-
-async fn wait_for_triggered_tasks(
-    engine: &butterflow_core::engine::Engine,
-    workflow_run_id: Uuid,
-    tracked_task_ids: &[Uuid],
-) -> Result<()> {
-    if tracked_task_ids.is_empty() {
-        return Ok(());
-    }
-
-    loop {
-        let tasks = engine
-            .get_tasks(workflow_run_id)
-            .await
-            .context("Failed to get tasks while waiting for triggered tasks")?;
-        let tracked_tasks = tasks
-            .iter()
-            .filter(|task| tracked_task_ids.contains(&task.id))
-            .collect::<Vec<_>>();
-
-        if tracked_tasks.len() == tracked_task_ids.len()
-            && tracked_tasks
-                .iter()
-                .all(|task| is_terminal_task_status(task.status))
-        {
-            info!(
-                "All triggered tasks reached terminal state for workflow {}: {:?}",
-                workflow_run_id, tracked_task_ids
-            );
-            break;
-        }
-
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    }
-
-    Ok(())
+    .await?;
+    outcome.result()
 }

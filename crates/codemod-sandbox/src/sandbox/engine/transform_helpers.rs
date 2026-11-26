@@ -102,11 +102,78 @@ pub fn build_transform_options<'js>(
         })
 }
 
-/// Process the result value returned by a transform function.
+/// Process the result value returned by a transform function: the new
+/// content (a string), no change (`null` or `undefined`), or
+/// `{ edit, data }`, where `edit` is either of those and `data` is any JSON
+/// value the transform hands back for this file. Missing or `undefined` data
+/// is omitted; explicit `null` is returned as JSON data.
 ///
-/// Handles string results, null/undefined, and rename_to logic.
 /// Uses `ModificationCheck` to determine whether content was actually modified.
 pub fn process_transform_result(
+    result_obj: &Value<'_>,
+    sg_root_inner: &Arc<SgRootInner>,
+    modification_check: ModificationCheck<'_>,
+) -> Result<(ExecutionResult, Option<serde_json::Value>), ExecutionError> {
+    let failed = |message: String| ExecutionError::Runtime {
+        source: crate::sandbox::errors::RuntimeError::ExecutionFailed { message },
+    };
+    if let Some(object) = result_obj
+        .as_object()
+        .filter(|_| !result_obj.is_array() && !result_obj.is_function())
+    {
+        let ctx = result_obj.ctx();
+        for key in object.keys::<String>() {
+            let key = key.map_err(|e| failed(e.to_string()))?;
+            if key != "edit" && key != "data" {
+                return Err(failed(format!(
+                    "A transform's result object takes only `edit` and `data`. Received `{key}`"
+                )));
+            }
+        }
+        // The edit is checked first, so a file that fails returns no data.
+        let edit: Value = object.get("edit").map_err(|e| failed(e.to_string()))?;
+        let result = process_edit(&edit, sg_root_inner, modification_check)?;
+        let data: Value = object.get("data").map_err(|e| failed(e.to_string()))?;
+        let data = if data.is_undefined() {
+            None
+        } else {
+            Some(data_json(ctx, data).map_err(failed)?)
+        };
+        return Ok((result, data));
+    }
+    Ok((
+        process_edit(result_obj, sg_root_inner, modification_check)?,
+        None,
+    ))
+}
+
+/// `data` as JSON, the form it leaves the transform in.
+fn data_json<'js>(ctx: &Ctx<'js>, data: Value<'js>) -> Result<serde_json::Value, String> {
+    let type_name = data.type_name();
+    let text = ctx
+        .json_stringify(data)
+        .map_err(|e| format!("A transform's `data` must be JSON: {}", caught(ctx, e)))?
+        .ok_or_else(|| format!("A transform's `data` must be JSON. Received {type_name}"))?
+        .to_string()
+        .map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+/// The message of a thrown JavaScript error.
+fn caught(ctx: &Ctx<'_>, error: rquickjs::Error) -> String {
+    if matches!(error, rquickjs::Error::Exception) {
+        let thrown = ctx.catch();
+        if let Some(message) = thrown
+            .as_object()
+            .and_then(|object| object.get::<_, String>("message").ok())
+        {
+            return message;
+        }
+    }
+    error.to_string()
+}
+
+fn process_edit(
     result_obj: &Value<'_>,
     sg_root_inner: &Arc<SgRootInner>,
     modification_check: ModificationCheck<'_>,
@@ -160,8 +227,46 @@ pub fn process_transform_result(
         let type_name = result_obj.type_name();
         Err(ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                message: format!("Codemod transform functions must return either a string or null/undefined. Received {type_name}"),
+                message: format!("Codemod transform functions must return a string, null/undefined, or {{ edit, data }}. Received {type_name}"),
             },
         })
+    }
+}
+
+#[cfg(all(test, feature = "native"))]
+mod tests {
+    use super::*;
+    use crate::ast_grep::sg_node::SgRootRjs;
+
+    #[test]
+    fn explicit_null_data_is_distinct_from_no_data() {
+        let runtime = rquickjs::Runtime::new().unwrap();
+        let context = rquickjs::Context::full(&runtime).unwrap();
+        let original_content = "const x = 1;";
+        let root =
+            SgRootRjs::try_new("typescript".into(), original_content.into(), None, None).unwrap();
+
+        context.with(|ctx| {
+            for (source, expected) in [
+                (
+                    "({ edit: null, data: null })",
+                    Some(serde_json::Value::Null),
+                ),
+                ("({ edit: null, data: undefined })", None),
+                ("({ edit: null })", None),
+                ("null", None),
+                ("undefined", None),
+            ] {
+                let value = ctx.eval::<Value, _>(source).unwrap();
+                let (edit, data) = process_transform_result(
+                    &value,
+                    &root.inner,
+                    ModificationCheck::StringEquality { original_content },
+                )
+                .unwrap();
+                assert!(matches!(edit, ExecutionResult::Unmodified), "{source}");
+                assert_eq!(data, expected, "{source}");
+            }
+        });
     }
 }

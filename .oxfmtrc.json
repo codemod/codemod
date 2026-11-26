@@ -1,11 +1,15 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "ignorePatterns": [
+    ".claude/**",
     "docs/**",
     ".all-contributorsrc",
     "*.md",
     "crates/cli/src/templates/**",
-    "packages/jssg-types/src/llrt/**",
+    "crates/cli/npm/types/llrt/**",
+    "crates/cli/npm/type-tests/protocol-samples.ts",
+    "crates/cli/npm/tests/snapshots/stable-api.d.ts",
+    "packages/jssg-types/src/**",
     "schemas/*.json"
   ]
 }

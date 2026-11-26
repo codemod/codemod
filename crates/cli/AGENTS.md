@@ -23,12 +23,12 @@ commands, workflow subcommands, report UI serving, and terminal UI.
   JSONL formatting.
 - Route interaction through workflow/TUI events and task logs. Non-quiet text runs may print only
   through CLI-owned output paths.
-- For terminal dependencies, keep `crossterm` usage centralized; CI checks this with
-  `bash ./scripts/check-single-crossterm.sh`.
+- For terminal dependencies, keep `crossterm` usage centralized; CI checks this with the
+  repo health workflow (`.codemod/workflows/health.ts`).
 
 ## Validation
 
 - CLI crate: `cargo test -p codemod`
-- CLI wrapper: `pnpm --filter codemod test`
-- Terminal dependency check: `bash ./scripts/check-single-crossterm.sh`
-- TUI perf-sensitive changes: inspect or run the scripts under `scripts/` and `crates/cli/src/tui`.
+- CLI wrapper: `pnpm --filter codemod test` (builds `crates/cli/npm/src` first), and
+  `pnpm --filter codemod typecheck`
+- Terminal dependency check (and `codemod@latest` pins): `cargo run -p codemod -- workflow run -w .codemod/workflows/health.ts --target . --no-interactive`

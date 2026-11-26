@@ -1,0 +1,5 @@
+{"event":"init","init":{"cwd":"/work","tools":["write_file"],"permission_mode":"always-proceed","model":"gemini-3-pro"}}
+{"event":"step_update","step_update":{"conversation_id":"a-123","step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"write_file","tool_info":{"name":"write_file","parameters":{"path":"hello.txt","content":"hi"}}}}
+{"event":"step_update","step_update":{"conversation_id":"a-123","step_index":1,"state":"DONE","step_type":"tool","tool_name":"write_file","tool_info":{"name":"write_file","parameters":{"path":"hello.txt","content":"hi"},"output":"ok"}}}
+{"event":"step_update","step_update":{"conversation_id":"a-123","step_index":2,"state":"ACTIVE","step_type":"agent_response","text_delta":"DONE"}}
+{"event":"result","result":{"conversation_id":"a-123","status":"SUCCESS","response":"DONE","duration_seconds":3.1,"num_turns":2,"usage":{"input_tokens":900,"output_tokens":20,"total_tokens":920}}}

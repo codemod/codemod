@@ -1,6 +1,6 @@
 import { ok as assert } from "assert";
 import { parse } from "codemod:ast-grep";
-import type TS from "@codemod.com/jssg-types/langs/typescript";
+import type TS from "codemod/langs/typescript";
 import {
   importBindingOf,
   renameReferences,

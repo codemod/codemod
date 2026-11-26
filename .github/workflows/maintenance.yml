@@ -1,0 +1,40 @@
+name: Maintenance
+
+# Repo checks written as codemod workflows (.codemod/), run with the codemod
+# CLI built from this commit: the checks dogfood the CLI they ship with.
+on:
+  push:
+    branches: ["main", "engine/code-first"]
+  pull_request:
+    branches: ["main", "engine/code-first"]
+permissions:
+  contents: read
+
+jobs:
+  repo-health:
+    name: Repo health
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build the codemod CLI
+        run: cargo build -p codemod
+      # Fails (exit 2) when a check fails; the report is in run_finished.output.
+      - name: Health checks
+        run: ./target/debug/codemod workflow run -w .codemod/workflows/health.ts --target . --no-interactive
+      - name: Workflow tests
+        working-directory: .codemod
+        env:
+          CODEMOD_BINARY: ${{ github.workspace }}/target/debug/codemod
+        run: npm ci && npm test

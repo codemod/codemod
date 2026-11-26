@@ -8,6 +8,7 @@ pub type RuntimeEventCallback = Arc<dyn Fn(RuntimeEvent) + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeEventKind {
+    Experimental(&'static str),
     Progress,
     Warn,
     SetCurrentUnit,
@@ -124,6 +125,17 @@ impl ModuleDef for RuntimeModule {
         exports.export("isCanceled", is_canceled)?;
         exports.export("default", default)?;
         Ok(())
+    }
+}
+
+/// Report a use to the host, if this invocation has an event consumer.
+pub fn experimental(ctx: &Ctx<'_>, api: &'static str) {
+    if let Some(hooks) = ctx.userdata::<RuntimeHooksContext>() {
+        hooks.emit(RuntimeEvent {
+            kind: RuntimeEventKind::Experimental(api),
+            message: String::new(),
+            meta: None,
+        });
     }
 }
 

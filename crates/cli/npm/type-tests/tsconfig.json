@@ -1,0 +1,29 @@
+{
+  "extends": "@codemod.com/tsconfig/base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Workflows import their transforms by file name, extension included.
+    "allowImportingTsExtensions": true,
+    "incremental": false,
+    "lib": ["ESNext"],
+    "types": [],
+    // Check the module declarations themselves, not only their use. The vendored
+    // LLRT globals are left out: they are written against Node and DOM types.
+    "skipLibCheck": false
+  },
+  "include": [
+    "../types/modules/ast-grep.d.ts",
+    "../types/modules/langs.d.ts",
+    "../types/modules/workflow.d.ts",
+    "../types/modules/deps.d.ts",
+    "../types/modules/git.d.ts",
+    "../types/modules/assess.d.ts",
+    "../types/modules/protocol.d.ts",
+    "../testing/index.d.mts",
+    "../runtime/host.d.mts",
+    "../register.d.mts",
+    "../vite.d.mts",
+    "./*.ts",
+    "./*.mts"
+  ]
+}

@@ -69,6 +69,24 @@ pub type ExecutionFn<'a> = Box<
         + 'a,
 >;
 
+/// A test case whose files have all run (or stopped, with `--fail-fast`).
+#[derive(Debug, Clone)]
+pub struct CaseEnd {
+    /// The case's name: its assertions' names start with it.
+    pub name: String,
+    /// The [`ExecutionRequest::test_case_root`] its files ran with.
+    pub root: PathBuf,
+    /// A failed file stopped the case before all its files ran.
+    pub stopped_early: bool,
+}
+
+/// A check of a whole case, run as soon as the case ends: for a result its
+/// files build together, such as a snapshot of the data they all returned.
+/// Gives the check's assertion name and result, or nothing to report. The
+/// assertion counts as the case's own: `--filter` keeps it whenever the case
+/// runs, and `--fail-fast` stops at it.
+pub type CaseHook<'a> = Box<dyn Fn(CaseEnd) -> Option<(String, Result<()>)> + 'a>;
+
 /// Individual test result with name and optional error message.
 #[derive(Debug, Clone)]
 pub struct TestResultDetail {
@@ -151,13 +169,26 @@ impl TestRunner {
         execution_fn: ExecutionFn<'a>,
         capabilities: Option<HashSet<LlrtSupportedModules>>,
     ) -> Result<TestSummary> {
+        self.run_tests_with_case_hook(extensions, execution_fn, None, capabilities)
+            .await
+    }
+
+    /// [`Self::run_tests`], with `case_hook` checking each case once its
+    /// files have run.
+    pub async fn run_tests_with_case_hook<'a>(
+        &mut self,
+        extensions: &[&str],
+        execution_fn: ExecutionFn<'a>,
+        case_hook: Option<CaseHook<'a>>,
+        capabilities: Option<HashSet<LlrtSupportedModules>>,
+    ) -> Result<TestSummary> {
         if self.options.watch {
             return self
-                .run_with_watch(extensions, execution_fn, capabilities)
+                .run_with_watch(extensions, execution_fn, case_hook, capabilities)
                 .await;
         }
 
-        self.run_tests_once(extensions, execution_fn, capabilities)
+        self.run_tests_once(extensions, execution_fn, case_hook, capabilities)
             .await
     }
 
@@ -165,6 +196,7 @@ impl TestRunner {
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
+        case_hook: Option<CaseHook<'a>>,
         capabilities: Option<HashSet<LlrtSupportedModules>>,
     ) -> Result<TestSummary> {
         let discovered_cases = self
@@ -184,7 +216,7 @@ impl TestRunner {
 
         let mut test_results = Vec::new();
         for discovered_case in discovered_cases {
-            let case_results = match discovered_case {
+            let (case_results, case_end) = match discovered_case {
                 DiscoveredTestCase::Unified(test_case) => {
                     let result = timeout(
                         self.options.timeout,
@@ -205,23 +237,38 @@ impl TestRunner {
                         ))
                     });
 
-                    vec![AssertionResult {
+                    let case_end = CaseEnd {
+                        name: test_case.name.clone(),
+                        root: Self::unified_case_root(&test_case),
+                        stopped_early: false,
+                    };
+                    let results = vec![AssertionResult {
                         name: test_case.name.clone(),
                         result: final_result,
-                    }]
+                    }];
+                    (results, case_end)
                 }
                 DiscoveredTestCase::Directory(test_case) => {
-                    Self::execute_directory_test_case(
+                    let (results, stopped_early) = Self::execute_directory_test_case(
                         &test_case,
                         &execution_fn,
                         &self.options,
                         capabilities.clone(),
                     )
-                    .await?
+                    .await?;
+                    let case_end = CaseEnd {
+                        name: test_case.name.clone(),
+                        root: test_case.path.clone(),
+                        stopped_early,
+                    };
+                    (results, case_end)
                 }
             };
 
-            let filtered_results = self.filter_assertion_results(case_results);
+            let mut filtered_results = self.filter_assertion_results(case_results);
+            if let Some((name, result)) = case_hook.as_ref().and_then(|hook| hook(case_end)) {
+                filtered_results.push(AssertionResult { name, result });
+            }
             if filtered_results.is_empty() {
                 continue;
             }
@@ -281,10 +328,7 @@ impl TestRunner {
             .input_path
             .clone()
             .unwrap_or_else(|| PathBuf::from("test_input"));
-        let test_case_root = input_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf();
+        let test_case_root = Self::unified_case_root(test_case);
         let execution_result = execution_fn(
             ExecutionRequest {
                 input_code: test_case.input_code.clone(),
@@ -354,6 +398,17 @@ impl TestRunner {
         }
 
         Ok(())
+    }
+
+    /// The directory of a single-file case's input.
+    fn unified_case_root(test_case: &UnifiedTestCase) -> PathBuf {
+        test_case
+            .input_path
+            .as_deref()
+            .unwrap_or(Path::new("test_input"))
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
     }
 
     fn discover_test_cases(
@@ -450,7 +505,7 @@ impl TestRunner {
         execution_fn: &ExecutionFn<'a>,
         options: &TestOptions,
         capabilities: Option<HashSet<LlrtSupportedModules>>,
-    ) -> Result<Vec<AssertionResult>> {
+    ) -> Result<(Vec<AssertionResult>, bool)> {
         let (input_dir, expected_dir) = Self::directory_layout(test_case)?;
         let workspace = Self::create_directory_workspace(input_dir)?;
         let mut execution = Self::execute_directory_entrypoints(
@@ -464,7 +519,7 @@ impl TestRunner {
         .await?;
 
         if execution.stopped_early {
-            return Ok(execution.assertion_results);
+            return Ok((execution.assertion_results, true));
         }
 
         let actual_files = Self::collect_workspace_files(workspace.path())?;
@@ -494,7 +549,7 @@ impl TestRunner {
             }
         }
 
-        Ok(execution.assertion_results)
+        Ok((execution.assertion_results, false))
     }
 
     fn planned_directory_assertion_names(test_case: &FileSystemTestCase) -> Vec<String> {
@@ -540,8 +595,6 @@ impl TestRunner {
             fixed_results: HashMap::new(),
             stopped_early: false,
         };
-        let entrypoint_counts = Self::directory_entrypoint_counts(test_case);
-
         let mut deferred_deletions: Vec<PathBuf> = Vec::new();
 
         for relative_path in &test_case.entrypoint_files {
@@ -553,7 +606,6 @@ impl TestRunner {
                 execution_fn,
                 options,
                 capabilities.clone(),
-                &entrypoint_counts,
                 &mut deferred_deletions,
             )
             .await?
@@ -591,7 +643,6 @@ impl TestRunner {
         execution_fn: &ExecutionFn<'a>,
         options: &TestOptions,
         capabilities: Option<HashSet<LlrtSupportedModules>>,
-        entrypoint_counts: &HashMap<PathBuf, usize>,
         deferred_deletions: &mut Vec<PathBuf>,
     ) -> Result<Option<Result<()>>> {
         let actual_path = workspace_root.join(relative_path);
@@ -608,11 +659,8 @@ impl TestRunner {
             &options.expect_errors,
         );
 
-        let metrics_group = relative_path
-            .parent()
-            .unwrap_or_else(|| Path::new(""))
-            .to_path_buf();
-        let entrypoint_count = entrypoint_counts.get(&metrics_group).copied().unwrap_or(1);
+        // The case's data is collected from all of its files, in subfolders too.
+        let entrypoint_count = test_case.entrypoint_files.len();
 
         let execution_result = timeout(
             options.timeout,
@@ -677,18 +725,6 @@ impl TestRunner {
                 .cloned(),
         );
         known_paths
-    }
-
-    fn directory_entrypoint_counts(test_case: &FileSystemTestCase) -> HashMap<PathBuf, usize> {
-        let mut counts = HashMap::new();
-        for relative_path in &test_case.entrypoint_files {
-            let key = relative_path
-                .parent()
-                .unwrap_or_else(|| Path::new(""))
-                .to_path_buf();
-            *counts.entry(key).or_insert(0) += 1;
-        }
-        counts
     }
 
     fn evaluate_directory_assertion(
@@ -938,11 +974,12 @@ impl TestRunner {
         &mut self,
         extensions: &[&str],
         execution_fn: ExecutionFn<'a>,
+        case_hook: Option<CaseHook<'a>>,
         capabilities: Option<HashSet<LlrtSupportedModules>>,
     ) -> Result<TestSummary> {
         println!("Running in watch mode. Press Ctrl+C to exit.");
         let initial_summary = self
-            .run_tests_once(extensions, execution_fn, capabilities)
+            .run_tests_once(extensions, execution_fn, case_hook, capabilities)
             .await?;
 
         println!("Watch mode not fully implemented yet. Use --no-watch for now.");
@@ -1030,7 +1067,8 @@ impl TestRunner {
     }
 
     fn should_ignore_snapshot_path(relative_path: &Path) -> bool {
-        relative_path == Path::new("metrics.json")
+        // data.json is the jssg data snapshot; metrics.json is its old name.
+        relative_path == Path::new("data.json") || relative_path == Path::new("metrics.json")
     }
 
     /// Apply a transformation output, writing content to the (possibly renamed) path.
@@ -1368,6 +1406,63 @@ mod tests {
         assert!(summary.is_success());
         assert_eq!(summary.total, 1);
         assert_eq!(summary.details[0].name, "single");
+    }
+
+    #[tokio::test]
+    async fn a_case_hook_is_the_cases_own_result_under_filter_and_fail_fast() {
+        use super::{CaseEnd, CaseHook};
+        use std::sync::{Arc, Mutex};
+
+        let temp = TempDir::new().expect("temp dir");
+        let tests_dir = temp.path().join("tests");
+        for case in ["a_case", "b_case"] {
+            for file in ["one.js", "two.js"] {
+                write_fixture_file(tests_dir.join(format!("{case}/input/{file}")), "x");
+                write_fixture_file(tests_dir.join(format!("{case}/expected/{file}")), "x");
+            }
+        }
+        let identity = || {
+            boxed_execution_fn(|request| async move {
+                Ok(TransformationResult::Success(TransformOutput {
+                    content: request.input_code,
+                    rename_to: None,
+                }))
+            })
+        };
+        let ended = Arc::new(Mutex::new(Vec::new()));
+        let hook = |ended: Arc<Mutex<Vec<String>>>| -> CaseHook<'static> {
+            Box::new(move |case: CaseEnd| {
+                assert!(case.root.ends_with(&case.name), "{case:?}");
+                ended.lock().unwrap().push(case.name.clone());
+                Some((
+                    format!("{}: whole case", case.name),
+                    Err(anyhow::anyhow!("case check failed")),
+                ))
+            })
+        };
+
+        // The filter drops the case's files, not its own check.
+        let mut options = test_options(false);
+        options.filter = Some("a_case_one".to_string());
+        let mut runner = TestRunner::new(options, TestSource::Directory(tests_dir.clone()));
+        let summary = runner
+            .run_tests_with_case_hook(&[".js"], identity(), Some(hook(ended.clone())), None)
+            .await
+            .expect("run tests");
+        let names: Vec<&str> = summary.details.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["a_case_one.js", "a_case: whole case"]);
+        assert!(!summary.is_success());
+
+        // --fail-fast stops at the first case's check.
+        ended.lock().unwrap().clear();
+        let mut options = test_options(false);
+        options.fail_fast = true;
+        let mut runner = TestRunner::new(options, TestSource::Directory(tests_dir));
+        runner
+            .run_tests_with_case_hook(&[".js"], identity(), Some(hook(ended.clone())), None)
+            .await
+            .expect("run tests");
+        assert_eq!(*ended.lock().unwrap(), ["a_case"]);
     }
 
     #[tokio::test]

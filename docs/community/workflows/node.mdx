@@ -1,0 +1,119 @@
+---
+title: "Run workflows from Node.js"
+sidebarTitle: "Node.js and Bun"
+description: "Run a TypeScript workflow inside your own Node.js or Bun process, to debug it, test it, or build it into a tool."
+tag: "Experimental"
+---
+
+import Experimental from "/snippets/experimental.mdx";
+
+<Experimental />
+
+The codemod CLI runs workflows in its own sandboxed JavaScript runtime. To run a workflow inside a Node.js or Bun process instead, use `codemod/host`. The workflow's body, function steps and `forEachFile` callbacks then run in your process, so you can:
+
+- set breakpoints in them and step through them,
+- measure their coverage,
+- mock the modules they import,
+- start them from your own scripts and tools.
+
+`codemod/testing` uses this host for TypeScript workflows. See [Testing workflows](/community/workflows/testing).
+
+<Warning>
+  This host holds the workflow's code to the CLI's rules (no network, commands, writes or timers in callbacks; a replayed clock in the body), so tests fail where the CLI would. It does that by checking Node.js's own functions while a run's code runs; it is not a sandbox. Run packages you did not write with the CLI (`npx codemod <package>`).
+</Warning>
+
+## Run a workflow
+
+`codemod/host` ships with the `codemod` package:
+
+```bash
+npm install codemod
+```
+
+```ts scripts/migrate.ts
+import { runWorkflow } from "codemod/host";
+
+const report = await runWorkflow("./codemods/moment-to-dayjs", {
+  target: "./src",
+  params: { keepLocale: true },
+});
+
+if (report.status !== "succeeded") {
+  throw new Error(report.error ?? `the run ended as ${report.status}`);
+}
+console.log(`${report.stats.filesModified} files changed`);
+```
+
+```bash
+node scripts/migrate.ts
+```
+
+The first argument is a workflow file or a package directory. In a package directory, the workflow comes from `codemod.yaml` (pick one by name with `workflowName`), or is `workflow.ts`.
+
+`runWorkflow` resolves for every outcome. Check `report.status`: `"succeeded"`, `"failed"`, `"canceled"`, `"awaiting-approval"` or `"stopped"`. It rejects only when the workflow cannot be loaded.
+
+### Options
+
+| Option | Default | |
+| --- | --- | --- |
+| `target` | the current directory | The directory the workflow changes |
+| `params` | `{}` | The workflow's parameters |
+| `dryRun` | `false` | Run every step but change no files |
+| `approve` | `true` | Give every approval the workflow asks for. With `false`, a manual approval ends the run as `"awaiting-approval"` |
+| `capabilities` | `[]` | Deprecated, does nothing: callbacks (and `shard`'s functions) no longer get capabilities |
+| `store` | `"memory"` | `"local"` records the run where `codemod workflow list` and `codemod workflow resume` find it |
+| `resume` | | Continue a recorded run by its id (with `store: "local"`) |
+| `rerunSteps` / `skipSteps` | | On resume, choose by numeric position what to do with each side-effect step that started but has no saved outcome. Skipped steps return `null`. |
+| `workflowName` | | Which workflow to run when `codemod.yaml` declares several |
+| `signal` | | An `AbortSignal` that cancels the run |
+
+## Import workflows yourself
+
+Workflows import `codemod/workflow`, `codemod/ast-grep`, `codemod/runtime` and `codemod/llm`. These are exports of the `codemod` package, so Node.js, Bun, Vite and Vitest resolve them like any other import, once the package is installed:
+
+```ts
+const workflow = await import("./workflow.ts");
+```
+
+Code written for older CLI versions imports the same modules as `codemod:workflow`, `codemod:ast-grep`, and so on. The CLI still accepts that spelling. Node.js and Bun need the resolver for it: `codemod/host` and `codemod/testing` register it themselves, and anywhere else, import `codemod/register` first. With Vite and Vitest, add the `codemod/vite` plugin instead:
+
+```ts vitest.config.ts
+import { defineConfig } from "vitest/config";
+import codemod from "codemod/vite";
+
+export default defineConfig({ plugins: [codemod()] });
+```
+
+You can pass an imported module to `runWorkflow`, with `path` set to the workflow file so relative task paths resolve:
+
+```ts
+const report = await runWorkflow(await import("./workflow.ts"), {
+  path: "./workflow.ts",
+  target: "./src",
+});
+```
+
+A module you import yourself is loaded without the build's changes, which `runWorkflow(path)` applies on Node.js as it loads the file. That is fine for most workflows, with two differences: imported `forEachFile` callbacks are loaded with the workflow and run as plain functions (a step is then identified by the function's text, not by its file and the files it imports), and `shard`'s `method.function` and `filter` fail with "was not extracted by the build", as the engine runs them from the build's modules. For workflows that give `shard` functions, use `runWorkflow(path)` on Node.js, or the CLI. Bun loads workflow files without the build's changes too, even through `runWorkflow(path)`.
+
+## How it differs from the CLI
+
+Both hosts run the same orchestrator: `step()`, replay on resume, `until` and `given` work the same way. Tasks the engine owns run in the engine on both: `astGrep`, `shell`, `shard` (with its function and filter, in the engine's isolates), `codemod`, `agent` and the git steps, and so do selecting files for `forEachFile` and writing what callbacks change. `forEachFile` callbacks, inline or imported, run in Node.js; `codemod/host` applies the build's changes to the workflow file as it loads it, when it loads it by path on Node.js (not for a module you imported yourself, nor on Bun: see [Import workflows yourself](#import-workflows-yourself)).
+
+A workflow file is checked as the CLI checks it before it runs: a callback that assigns to an outer variable, `fs` in the workflow body, and the other things the CLI refuses are errors here too, so a workflow that passes its tests also runs with the CLI. `codemod/runtime` logs and failures behave the same in steps and callbacks on both.
+
+On the Node.js host:
+
+- **[Pure callbacks](/community/workflows/reference#callbacks-are-pure) are checked as in the CLI.** While the workflow's code runs, in the body or a callback, `fetch`, `XMLHttpRequest`, `WebSocket`, timers (also from `node:timers`), `child_process`, `fs` writes (`writeFile`, `mkdir`, `rm`, `rename`, `open` for writing, …) and setting `process.env` throw the CLI's errors. Callbacks see an empty `process.env` but keep `process.cwd()` and `process.argv`. Reading files is not limited to the target here. Code outside the run, such as your test, is not affected. These checks are not a sandbox: references to host APIs saved before `codemod/host` loaded can escape them.
+- **Semantic analysis** (`semanticAnalysis`) is not available to callbacks on this host: `definition()` and `references()` find nothing. Run the workflow with the CLI for it.
+- **The workflow body's clock and randomness are replayed, as in the CLI.** In the body, `Date`, `performance.now()`, `Math.random()` and the global `crypto.getRandomValues()` and `crypto.randomUUID()` start from the run's start time and seed, and give the same answers when the run resumes; in callbacks they are real. `node:crypto` imported in the body is not seeded.
+- **`codemod/llm`** is not available yet.
+- **`codemod(...)` steps** run local packages only; run workflows that use registry packages with the CLI.
+- **`definition()` and `references()`** find nothing in roots that `forEachFile` callbacks parse, as in the CLI.
+- **Callbacks run one at a time**, in this process. The CLI runs `forEachFile` callbacks on several threads, so a callback that relies on running after another file's callback works here and not there; return values instead.
+- **A step's `timeout` cannot stop JavaScript that is running.** When a function step or a `forEachFile` callback runs out of time here, the step fails and its file changes are not written, but its code runs on until it returns; code that never waits is not interrupted at all. The CLI stops them. Tasks such as `shell` are stopped on both.
+- **Events are sent with the CLI.** `waitForEvent` works here for runs kept with `store: "local"`; send to them with `codemod workflow send`.
+- **The workflow body may wait on a promise no step will settle**, which the CLI stops.
+- **A run is resumed where it started.** Runs started here are resumed with `runWorkflow(..., { resume })`, and runs the CLI started with `codemod workflow resume`: the two record steps differently.
+- **YAML workflows** do not run here. Run them with the CLI, or convert them with `codemod workflow upgrade`.
+
+Requires Node.js 20.6 or later, or Bun. Node.js runs TypeScript workflow files directly from version 23.6.

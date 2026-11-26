@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/work","session_id":"c-123","model":"gpt-5","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Create hello.txt"}]},"session_id":"c-123"}
+{"type":"tool_call","subtype":"started","call_id":"call_1","tool_call":{"writeToolCall":{"args":{"path":"hello.txt","fileText":"hi"}}},"session_id":"c-123"}
+{"type":"tool_call","subtype":"completed","call_id":"call_1","tool_call":{"writeToolCall":{"args":{"path":"hello.txt","fileText":"hi"},"result":{"success":{"path":"hello.txt","linesCreated":1}}}},"session_id":"c-123"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"DONE"}]},"session_id":"c-123"}
+{"type":"result","subtype":"success","duration_ms":1234,"duration_api_ms":1100,"is_error":false,"result":"DONE","session_id":"c-123"}

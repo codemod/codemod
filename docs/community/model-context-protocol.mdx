@@ -1,7 +1,12 @@
 ---
 title: "Codemod MCP"
 sidebarTitle: 'MCP'
+tag: "Experimental"
 ---
+
+import Experimental from "/snippets/experimental.mdx";
+
+<Experimental />
 
 <Info>
   This page covers the local Codemod MCP for building and testing codemods. To connect an AI assistant to your Codemod account so it can search your code and manage migrations, see the [hosted MCP](/enterprise/codemod-mcp).
@@ -44,11 +49,13 @@ This is the main setup path for the AI-native CLI experience. It installs Codemo
     "mcpServers": {
       "codemod": {
         "command": "npx",
-        "args": ["codemod@latest", "mcp"]
+        "args": ["codemod@alpha", "mcp"]
       }
     }
   }
   ```
+
+  `codemod@alpha` is the v2 CLI these docs describe; `codemod@latest` is still 1.x. `npx codemod ai` writes this entry for you, pinned to the version that ran it.
 
   For Cursor IDE:
   - Open Cursor Settings
@@ -74,7 +81,7 @@ The Codemod MCP server provides these operational tools for AI assistants:
 The Codemod MCP server provides these guidance resources for AI assistants:
 
 - **`jssg-instructions`** - Docs-backed JSSG guidance for creating and testing transformation scripts
-- **`jssg-gotchas`** - Highest-priority JSSG gotchas before implementing transforms, including metrics API and Performant codemods
+- **`jssg-gotchas`** - Highest-priority JSSG gotchas before implementing transforms, including returned data and Performant codemods
 - **`ast-grep-gotchas`** - Highest-priority ast-grep gotchas before implementing transforms
 - **`jssg-utils-instructions`** - Docs-backed JSSG utility guidance, including JavaScript imports, Java helpers, and XML helpers
 - **`jssg-runtime-capabilities-instructions`** - Runtime and capability guidance for LLRT/Node APIs and multi-file JSSG work
@@ -84,7 +91,9 @@ The Codemod MCP server provides these guidance resources for AI assistants:
 - **`codemod-maintainer-monorepo-instructions`** - Maintainer guidance for codemod monorepos and version-hop workspaces
 - **`sharding-instructions`** - Docs-backed sharding guidance
 
-For codemod authoring, start by reading `codemod-creation-workflow-instructions`, then read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code. For JavaScript/TypeScript/Java transforms, also read `jssg-utils-instructions` before hand-rolling import gates, style insertion, or renames—prefer `@jssg/utils`. Decide whether each `js-ast-grep` step needs `semantic_analysis` when matching generic method names, renaming symbols, or following aliases (see semantic analysis docs via `jssg-instructions` / `npx codemod ai docs semantic analysis`). Each transform step should emit metrics (`useMetricAtom` in that step’s script; prefer one metric per step with cardinality dimensions; snapshot `metrics.json`). Follow the Performant codemods section inside `jssg-gotchas` (no per-file full-repo walks; time a no-op against the real package on the same entry path). For Insights mining packages, put `useMetricAtom` in each Insights-bound step script and `return null`.
+For codemod authoring, start by reading `codemod-creation-workflow-instructions`, then read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code. For JavaScript, TypeScript, or Java transforms, also read `jssg-utils-instructions` and prefer `@jssg/utils` over hand-written import gates, style helpers, or renames. Decide whether each step needs [semantic analysis](/community/jssg/semantic-analysis) when matching generic method names, renaming symbols, or following aliases. Set `semanticAnalysis` in `workflow.ts` or `semantic_analysis` in legacy YAML.
+
+Follow the Performant codemods section inside `jssg-gotchas`: avoid per-file full-repo walks and time a no-op against the real package on the same entry path. To count edits, [return `{ edit, data }`](/community/jssg/metrics) with an entry per real edit and a field such as `kind` so the workflow can group by variant. Snapshot `data.json` for standalone JSSG fixtures that produce data. For read-only mining, return `{ edit: null, data }`.
 
 When registry discovery does not find an exact package, agents should scaffold with direct `codemod init`. In non-interactive flows, agents should pass only values supplied by the user or task and rely on the CLI defaults/auth-derived author handling for optional metadata.
 
@@ -152,7 +161,7 @@ Do not include source code, secrets, auth tokens, private repository paths, user
   <Accordion title="Server won't start">
     If the MCP server fails to start:
     - Ensure you have Node.js 16.0.0 or higher installed
-    - Try running `npx codemod@latest mcp` manually to test
+    - Try running `npx codemod@alpha mcp` manually to test
   </Accordion>
   <Accordion title="Tools not available">
     If MCP tools aren't showing up:

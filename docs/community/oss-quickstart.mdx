@@ -3,9 +3,13 @@ title: "Quickstart"
 sidebarTitle: "Quickstart"
 ---
 
+import Experimental from "/snippets/experimental.mdx";
+
 This guide walks you through setting up Codemod in your agent, building a JSSG codemod, and testing and publishing it to the registry. It assumes you are familiar with codemods. If not, check out this [intro to codemods](https://codemod.com/blog/what-are-codemods#what-is-a-codemod).
 
 ## 1. Set up Codemod in your coding agent
+
+<Experimental />
 
 Start by installing Codemod Master Skill and Codemod MCP for your preferred coding agent:
 
@@ -27,7 +31,9 @@ The starter package gives your agent a concrete structure to refine or replace w
 
 Once the package is scaffolded, you can ask your AI agent to help you build codemods for things like framework upgrades, design system migrations, i18n work, code-mining tasks, and more.
 
-Tell the agent to follow [Performant codemods](/community/jssg/advanced/performance#performant-codemods) in `jssg-gotchas`: discriminating selectors or token gates, no per-file full-repo walks, and a timed no-op vs real run on the same entry path before publish. For JavaScript/TypeScript/Java packages, prefer [`@jssg/utils`](/community/jssg/utils) over hand-rolled import/style/rename helpers, and enable [semantic analysis](/community/jssg/semantic-analysis) when symbol origin matters (generic method names, renames, aliases). Each transform `js-ast-grep` step should emit [metrics](/community/jssg/metrics) (`useMetricAtom` + cardinality on edits; keep one metric per step when possible). For **read-only mining**, put `useMetricAtom` in each Insights-bound step script and `return null`.
+Tell the agent to follow [Performant codemods](/community/jssg/advanced/performance#performant-codemods) in `jssg-gotchas`: use discriminating selectors or token gates, avoid per-file full-repo walks, and time a no-op vs. a real run on the same entry path before publishing. For JavaScript, TypeScript, or Java packages, prefer [`@jssg/utils`](/community/jssg/utils) over hand-written import, style, and rename helpers. Use [semantic analysis](/community/jssg/semantic-analysis) when symbol origin matters, such as for generic method names, renames, or aliases.
+
+To count edits, [return `{ edit, data }`](/community/jssg/metrics) with an entry per real edit and a field such as `kind` so the workflow can group by variant. For **read-only mining**, return `{ edit: null, data }`. Use `codemod jssg test` to snapshot the data in `data.json` beside the standalone fixtures.
 
 For example:
 
@@ -50,9 +56,12 @@ You will end up with a [Codemod package](/community/package-structure):
 <Tree>
   <Tree.Folder name="my-codemod" defaultOpen>
     <Tree.File name="codemod.yaml" />
-    <Tree.File name="workflow.yaml" />
-    <Tree.Folder name="scripts" defaultOpen>
-      <Tree.File name="codemod.ts" />
+    <Tree.File name="package.json" />
+    <Tree.Folder name="src" defaultOpen>
+      <Tree.File name="workflow.ts" />
+      <Tree.Folder name="scripts" defaultOpen>
+        <Tree.File name="hoist-components.ts" />
+      </Tree.Folder>
     </Tree.Folder>
     <Tree.Folder name="tests" defaultOpen>
       <Tree.Folder name="fixtures" defaultOpen>
@@ -73,7 +82,6 @@ version: "0.1.0"
 description: "Move React components defined inside other components to module scope"
 author: "Your Name <you@example.com>"
 license: "MIT"
-workflow: "workflow.yaml"
 
 targets:
   languages: ["tsx"]
@@ -85,55 +93,49 @@ registry:
   visibility: "public"
 
 capabilities: []
+
+workflows:
+  - name: main
+    default: true
+    path: src/workflow.ts
 ```
 
-```yaml workflow.yaml expandable
-# yaml-language-server: $schema=https://raw.githubusercontent.com/codemod/codemod/refs/heads/main/schemas/workflow.json
+```ts src/workflow.ts expandable
+import { step, forEachFile, agent } from "codemod/workflow";
+import hoistComponents from "./scripts/hoist-components.ts";
 
-version: "1"
+export default async function main({ params }: { params: { run_ai_step?: string } }) {
+  await step(
+    "Move inner components to module scope",
+    forEachFile({ language: "tsx" }, hoistComponents),
+  );
 
-params:
-  schema:
-    run_ai_step:
-      name: "Run AI step"
-      description: "Enable AI-powered fixups for edge cases"
-      type: string
-      default: "false"
+  if (params.run_ai_step === "true") {
+    await step("AI fixups for complex cases", agent(`
+The previous AST step extracted inner React components to module scope.
+Some cases could not be handled deterministically. Scan for remaining
+components defined inside other components and fix them:
 
-nodes:
-  - id: extract-inner-components
-    name: Extract inner React components to module scope
-    type: automatic
-    steps:
-      - name: "Move inner components to module scope"
-        js-ast-grep:
-          js_file: scripts/codemod.ts
-          language: "tsx"
+1. If the inner component closes over parent state or props, convert those
+   to explicit props on the extracted component and update the call site.
+2. If the inner component uses generics from the parent, lift the type
+   parameters to the extracted component's signature.
+3. Add a TODO comment for any case you cannot safely transform.
 
-      - name: "AI fixups for complex cases"
-        if: params.run_ai_step == "true"
-        ai:
-          prompt: |
-            The previous AST step extracted inner React components to module scope.
-            Some cases could not be handled deterministically. Scan for remaining
-            components defined inside other components and fix them:
-
-            1. If the inner component closes over parent state or props, convert those
-               to explicit props on the extracted component and update the call site.
-            2. If the inner component uses generics from the parent, lift the type
-               parameters to the extracted component's signature.
-            3. Add a TODO comment for any case you cannot safely transform.
-
-            Only modify files that still contain inner component definitions.
+Only modify files that still contain inner component definitions.`));
+  }
+}
 ```
 
-```ts scripts/codemod.ts expandable
-import type { Codemod, Edit } from "codemod:ast-grep";
-import type { SgNode } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+```ts src/scripts/hoist-components.ts expandable
+import type { FileCallback } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+import type { Edit, SgNode } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
-const codemod: Codemod<TSX> = async (root) => {
-  const rootNode = root.root();
+// A forEachFile callback: it gets each selected file, and writes the new text.
+const hoistComponents: FileCallback = (file) => {
+  const rootNode = parse<TSX>(file).root();
   const edits: Edit[] = [];
 
   // Find function components defined inside other function components.
@@ -188,7 +190,7 @@ const codemod: Codemod<TSX> = async (root) => {
   });
 
   if (innerFuncComponents.length === 0 && innerArrowComponents.length === 0) {
-    return null;
+    return;
   }
 
   const allInner = [...innerFuncComponents, ...innerArrowComponents];
@@ -245,10 +247,10 @@ const codemod: Codemod<TSX> = async (root) => {
     });
   }
 
-  return rootNode.commitEdits(edits);
+  file.write(rootNode.commitEdits(edits));
 };
 
-export default codemod;
+export default hoistComponents;
 ```
 
 </CodeGroup>
@@ -260,18 +262,18 @@ From your scaffolded codemod package directory, validate the workflow and run th
 Validate the workflow schema:
 
 ```bash
-npx codemod workflow validate -w workflow.yaml
+npx codemod workflow validate -w src/workflow.ts
 ```
 
-Run tests against your input/expected fixtures:
+Run the tests, which run the workflow against your input/expected fixtures:
 
 ```bash
-npx codemod jssg test -l tsx ./scripts/codemod.ts
+npm test
 ```
 
-Tests use fixtures in the `tests/` directory. You can use simple `input.*`/`expected.*` file pairs or `input/` + `expected/` directory snapshots when your codemod creates or deletes files. If MCP generated test fixtures, they will run automatically.
+The tests are in `tests/workflow.test.ts`: it runs the workflow on each fixture in `tests/fixtures` and compares the files it leaves with the expected ones. A fixture is a directory with simple `input.*`/`expected.*` file pairs, or `input/` + `expected/` directory snapshots when your codemod creates or deletes files. Fixtures you add there, including ones MCP generates, are picked up by the test file.
 
-For test structure, CI integration, and debugging strategies, see [Testing](/community/jssg/testing).
+For test structure, CI integration, and debugging strategies, see [Testing workflows](/community/workflows/testing).
 
 ## 4. Run your codemod
 
@@ -288,7 +290,7 @@ npx codemod workflow run -w . -t /path/to/your/project
   LLM_API_KEY=your-key npx codemod workflow run -w . -t /path/to/project --param run_ai_step=true
   ```
 
-  Set `LLM_API_KEY` as an environment variable for your chosen provider. With an API key, the built-in AI step runs normally. Without one, Codemod prints `[AI INSTRUCTIONS]`, which parent agents such as Codex- or Claude-style tooling can pick up. See [Workflow Reference — AI steps](/community/workflows/reference#ai-step) for provider configuration.
+  Set `LLM_API_KEY` as an environment variable for your chosen provider. With an API key, the built-in AI step runs normally. Without one, Codemod prints `[AI INSTRUCTIONS]`, which parent agents such as Codex- or Claude-style tooling can pick up. See [AI step](/community/workflows/ai-harness-rig) for provider configuration.
 </Tip>
 
 For all CLI options, see [CLI reference](/community/cli#codemod-workflow).

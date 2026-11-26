@@ -1,3 +1,8 @@
 {
-  "ignorePatterns": ["**/fixtures/**", "generated/**", "packages/jssg-types/src/llrt/**"]
+  "ignorePatterns": [
+    "**/fixtures/**",
+    "generated/**",
+    "crates/cli/npm/types/llrt/**",
+    "packages/jssg-types/src/**"
+  ]
 }

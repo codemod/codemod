@@ -10,7 +10,6 @@ use butterflow_core::utils::validate_workflow;
 use butterflow_core::Workflow;
 use butterflow_models::step::StepAction;
 use clap::Args;
-use codemod_llrt_capabilities::module_builder::supported_runtime_external_modules;
 use console::style;
 use log::{debug, info, warn};
 use regex::Regex;
@@ -21,7 +20,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use walkdir::WalkDir;
 
 #[cfg(test)]
 use crate::utils::package_validation::DEFAULT_WORKFLOW_FILE_NAME;
@@ -29,6 +27,7 @@ use crate::utils::package_validation::DEFAULT_WORKFLOW_FILE_NAME;
 use crate::utils::skill_layout::expected_authored_skill_file;
 
 use crate::auth::TokenStorage;
+use crate::commands::output::TextOrJson;
 use crate::commands::TelemetrySenderExt;
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use codemod_telemetry::send_event::BaseEvent;
@@ -41,17 +40,20 @@ pub struct Command {
     /// Release channel to update
     #[arg(long, default_value = "latest")]
     tag: String,
+
+    /// Output format
+    #[arg(long, default_value = "text")]
+    format: TextOrJson,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, serde::Serialize, Debug)]
 struct PublishResponse {
     success: bool,
     package: PublishedPackage,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, serde::Serialize, Debug)]
 struct PublishedPackage {
-    #[allow(dead_code)]
     id: String,
     name: String,
     version: String,
@@ -123,25 +125,37 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         )
         .await;
 
-    println!(
-        "{} Package published successfully!",
-        style("✓").green().bold()
-    );
-    println!(
-        "  {} {}",
-        style("Package:").dim(),
-        style(format_package_name(&response.package)).cyan()
-    );
-    println!(
-        "  {} {}",
-        style("Version:").dim(),
-        style(&response.package.version).cyan()
-    );
-    println!(
-        "  {} {}",
-        style("Published:").dim(),
-        style(&response.package.published_at).cyan()
-    );
+    if args.format == TextOrJson::Json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "success": true,
+                "registry": registry_url,
+                "tag": args.tag,
+                "package": response.package,
+            })
+        );
+    } else {
+        println!(
+            "{} Package published successfully!",
+            style("✓").green().bold()
+        );
+        println!(
+            "  {} {}",
+            style("Package:").dim(),
+            style(format_package_name(&response.package)).cyan()
+        );
+        println!(
+            "  {} {}",
+            style("Version:").dim(),
+            style(&response.package.version).cyan()
+        );
+        println!(
+            "  {} {}",
+            style("Published:").dim(),
+            style(&response.package.published_at).cyan()
+        );
+    }
 
     // Clean up temporary bundle
     if let Err(e) = fs::remove_file(&bundle_path) {
@@ -194,7 +208,7 @@ fn find_js_files_in_workflow(workflow: &Workflow, package_path: &Path) -> Result
                         js_file_path.display()
                     ));
                 }
-                js_files.push(js_step.js_file.clone());
+                js_files.push(package_relative(package_path, &js_file_path));
             }
         }
     }
@@ -207,6 +221,54 @@ fn find_js_files_in_workflow(workflow: &Workflow, package_path: &Path) -> Result
     Ok(js_files)
 }
 
+/// Check that a workflow.ts builds, and find the files to bundle for it,
+/// relative to the package: the workflow itself, and the callbacks it
+/// imports for `forEachFile` and `shard`. Bundling takes in what they import
+/// from `node_modules`, which is not published. Imported YAML is checked to
+/// exist and published as it is.
+fn typescript_workflow_scripts(package_path: &Path, workflow_path: &Path) -> Result<Vec<String>> {
+    codemod_workflow::load_workflow(workflow_path).map_err(|e| anyhow!("Invalid workflow: {e}"))?;
+    let source = fs::read_to_string(workflow_path)?;
+    let inspection = codemod_workflow::inspect(&workflow_path.display().to_string(), &source)
+        .map_err(|e| anyhow!("Invalid workflow: {e}"))?;
+    let workflow_dir = workflow_path.parent().unwrap_or(package_path);
+    let mut js_files = vec![package_relative(package_path, workflow_path)];
+    for file in inspection.files {
+        let resolved = resolve_relative_path_within_root(workflow_dir, &file).ok_or_else(|| {
+            anyhow!("File referenced in workflow must stay within the package: {file}")
+        })?;
+        if !resolved.exists() {
+            return Err(anyhow!(
+                "File referenced in workflow not found: {}",
+                resolved.display()
+            ));
+        }
+        let is_script = matches!(
+            resolved.extension().and_then(|e| e.to_str()),
+            Some("js" | "ts" | "mjs" | "mts" | "jsx" | "tsx")
+        );
+        if !is_script {
+            continue;
+        }
+        js_files.push(package_relative(package_path, &resolved));
+    }
+    Ok(js_files)
+}
+
+/// A file's path inside the package, in the one spelling bundles are keyed
+/// by: relative, `/` separators, no `.` parts.
+fn package_relative(package_path: &Path, path: &Path) -> String {
+    let relative = path.strip_prefix(package_path).unwrap_or(path);
+    relative
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Bundle a JavaScript file and return the bundled code
 async fn bundle_js_file(package_path: &Path, js_file: &str) -> Result<String> {
     let js_file_path = resolve_relative_path_within_root(package_path, js_file).ok_or_else(|| {
@@ -217,16 +279,24 @@ async fn bundle_js_file(package_path: &Path, js_file: &str) -> Result<String> {
 
     debug!("Bundling JS file: {}", js_file_path.display());
 
+    // A workflow's imported callbacks and YAML stay imports of their own
+    // files: callbacks are bundled on their own, as the modules the build
+    // extracts import them, and the module loader reads YAML as data.
+    let externals = fs::read_to_string(&js_file_path)
+        .ok()
+        .and_then(|source| {
+            codemod_workflow::inspect(&js_file_path.display().to_string(), &source).ok()
+        })
+        .map(|inspection| inspection.external_imports)
+        .unwrap_or_default();
+
     let config = RolldownBundlerConfig {
         entry_path: js_file_path.clone(),
         base_dir: Some(package_path.to_path_buf()),
         output_path: None, // Return code directly, don't write to file
         source_maps: false,
-        external_modules: supported_runtime_external_modules()
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
         fail_on_unresolved_imports: true,
+        externals,
     };
 
     let bundler = RolldownBundler::new(config);
@@ -339,6 +409,10 @@ fn validate_common_package_metadata(package_path: &Path, manifest: &CodemodManif
 }
 
 fn validate_workflow_behavior(package_path: &Path, workflow_path: &Path) -> Result<Vec<String>> {
+    if codemod_workflow::is_typescript(workflow_path) {
+        return typescript_workflow_scripts(package_path, workflow_path);
+    }
+
     // Validate workflow file
     let workflow_content = fs::read_to_string(workflow_path)?;
     let workflow: Workflow = serde_yaml::from_str(&workflow_content)
@@ -383,41 +457,40 @@ async fn create_package_bundle(
 
     // Add files to archive
     let mut file_count = 0;
-    for entry in WalkDir::new(package_path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path() != package_path) // Skip the root directory itself
-        .filter(|e| should_include_file(e.path(), package_path))
-    {
-        if entry.file_type().is_file() {
-            let relative_path = entry.path().strip_prefix(package_path)?;
-            let relative_path_str = relative_path.to_string_lossy().to_string();
+    for path in package_files(package_path)? {
+        let relative_path = path.strip_prefix(package_path)?;
+        let relative_path_str = package_relative(package_path, &path);
 
-            debug!("Adding file to bundle: {}", relative_path.display());
+        debug!("Adding file to bundle: {}", relative_path.display());
 
-            // Check if this is a JS file that should be replaced with bundled version
-            if let Some(bundled_code) = bundled_files.get(&relative_path_str) {
-                // Add bundled version instead of original
-                let mut header = tar::Header::new_gnu();
-                header.set_path(relative_path)?;
-                header.set_size(bundled_code.len() as u64);
-                header.set_mode(0o644);
-                header.set_cksum();
-                tar.append(&header, bundled_code.as_bytes())?;
-                info!(
-                    "Replaced {} with bundled version ({} bytes)",
-                    relative_path_str,
-                    bundled_code.len()
-                );
-            } else {
-                // Add original file
-                tar.append_path_with_name(entry.path(), relative_path)?;
-            }
-            file_count += 1;
+        // Check if this is a JS file that should be replaced with bundled version
+        if let Some(bundled_code) = bundled_files.remove(&relative_path_str) {
+            // Add bundled version instead of original
+            let mut header = tar::Header::new_gnu();
+            header.set_path(relative_path)?;
+            header.set_size(bundled_code.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append(&header, bundled_code.as_bytes())?;
+            info!(
+                "Replaced {} with bundled version ({} bytes)",
+                relative_path_str,
+                bundled_code.len()
+            );
+        } else {
+            // Add original file
+            tar.append_path_with_name(&path, relative_path)?;
         }
+        file_count += 1;
     }
 
     info!("Added {file_count} files to bundle");
+    // A bundle that replaced no file would ship the unbundled original.
+    if let Some(missed) = bundled_files.keys().next() {
+        return Err(anyhow!(
+            "Cannot publish: '{missed}' was bundled but is not among the package's published files (is it gitignored?)"
+        ));
+    }
 
     // Finish the tar archive and flush the gzip encoder
     let enc = tar.into_inner()?;
@@ -444,6 +517,44 @@ async fn create_package_bundle(
     Ok(output_path)
 }
 
+/// Directories never published, at any depth.
+const EXCLUDED_DIRECTORIES: [&str; 2] = ["node_modules", ".git"];
+
+/// The files a publish packs: every file under the package, minus what the
+/// package's `.gitignore` files (nested ones too) ignore, `node_modules` and
+/// `.git` directories at any depth, and the development artifacts
+/// [`should_include_file`] leaves out. Sorted, so bundles are reproducible.
+fn package_files(package_path: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let walk = ignore::WalkBuilder::new(package_path)
+        .hidden(false)
+        // The package's own `.gitignore` files apply whether or not it is
+        // in a git repository; ones above it, and global excludes, do not.
+        .require_git(false)
+        .parents(false)
+        .git_global(false)
+        .git_exclude(false)
+        .ignore(false)
+        .filter_entry(|entry| {
+            !(entry.file_type().is_some_and(|t| t.is_dir())
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| EXCLUDED_DIRECTORIES.contains(&name)))
+        })
+        .build();
+    for entry in walk {
+        let entry = entry?;
+        if entry.file_type().is_some_and(|t| t.is_file())
+            && should_include_file(entry.path(), package_path)
+        {
+            files.push(entry.into_path());
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
 fn should_include_file(file_path: &Path, package_root: &Path) -> bool {
     let relative_path = match file_path.strip_prefix(package_root) {
         Ok(path) => path,
@@ -454,6 +565,12 @@ fn should_include_file(file_path: &Path, package_root: &Path) -> bool {
     };
 
     let path_str = relative_path.to_string_lossy();
+    if relative_path
+        .file_name()
+        .is_some_and(|name| name == ".gitignore")
+    {
+        return false;
+    }
 
     // Exclude common development/build artifacts
     const EXCLUDED_PATTERNS: &[&str] = &[
@@ -550,7 +667,8 @@ async fn upload_package(
             ));
         } else if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(anyhow!(
-                "Authentication failed. Please run 'npx codemod@latest login' again."
+                "Authentication failed. Please run '{}' again.",
+                crate::utils::cli_command::npx_codemod("login")
             ));
         }
 
@@ -563,14 +681,8 @@ async fn upload_package(
 
 fn calculate_package_size(package_path: &Path) -> Result<u64> {
     let mut total_size = 0;
-
-    for entry in WalkDir::new(package_path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| should_include_file(e.path(), package_path))
-    {
-        total_size += entry.metadata()?.len();
+    for path in package_files(package_path)? {
+        total_size += fs::metadata(path)?.len();
     }
 
     Ok(total_size)
@@ -630,8 +742,9 @@ fn get_stored_auth_token(storage: &TokenStorage, registry_url: &str) -> Result<S
         .get_auth_for_registry(registry_url)?
         .ok_or_else(|| {
             anyhow!(
-                "Not authenticated with registry: {}. Run 'npx codemod@latest login' first, or set CODEMOD_AUTH_TOKEN environment variable.",
-                registry_url
+                "Not authenticated with registry: {}. Run '{}' first, or set CODEMOD_AUTH_TOKEN environment variable.",
+                registry_url,
+                crate::utils::cli_command::npx_codemod("login")
             )
         })?;
     Ok(auth.tokens.access_token)
@@ -887,6 +1000,273 @@ nodes:
         assert!(error.to_string().contains("install-skill"));
     }
 
+    #[tokio::test]
+    async fn a_workflow_ts_package_bundles_its_workflow_and_imported_callbacks() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("workflow.ts", "example");
+        fs::write(
+            temp_dir.path().join("workflow.ts"),
+            r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
+import { forEachFile, step } from "codemod/workflow";
+import rewrite from "./src/rewrite.ts";
+
+export default async function main() {
+  await step("Rewrite", forEachFile({ include: ["**/*.ts"], language: "typescript" }, rewrite));
+}
+"#,
+        )
+        .unwrap();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::write(
+            temp_dir.path().join("src/helper.ts"),
+            "export const marker = \"bundled-helper\";\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/rewrite.ts"),
+            "import { marker } from \"./helper.ts\";\nexport default function rewrite(file: { write(text: string): void }) { file.write(marker); }\n",
+        )
+        .unwrap();
+
+        // The workflow itself is bundled too, with the callbacks it imports.
+        let files = validate_package_structure(temp_dir.path(), &manifest).unwrap();
+        assert_eq!(files, ["workflow.ts", "src/rewrite.ts"]);
+
+        let bundle = create_package_bundle(temp_dir.path(), &manifest, &files)
+            .await
+            .unwrap();
+        let archive = flate2::read::GzDecoder::new(fs::File::open(&bundle).unwrap());
+        let mut tar = tar::Archive::new(archive);
+        let mut transform = String::new();
+        let mut workflow = String::new();
+        let mut names = Vec::new();
+        for entry in tar.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let name = entry.path().unwrap().to_string_lossy().into_owned();
+            if name == "src/rewrite.ts" {
+                std::io::Read::read_to_string(&mut entry, &mut transform).unwrap();
+            }
+            if name == "workflow.ts" {
+                std::io::Read::read_to_string(&mut entry, &mut workflow).unwrap();
+            }
+            names.push(name);
+        }
+        assert!(names.contains(&"workflow.ts".to_string()), "{names:?}");
+        assert!(transform.contains("bundled-helper"), "{transform}");
+        // The workflow's bundle still imports its callback, which is not
+        // bundled into it.
+        assert!(workflow.contains("\"./src/rewrite.ts\""), "{workflow}");
+        assert!(!workflow.contains("bundled-helper"), "{workflow}");
+
+        // What a consumer installs runs: the callback comes from its own file.
+        let installed = tempdir().unwrap();
+        let archive = flate2::read::GzDecoder::new(fs::File::open(&bundle).unwrap());
+        tar::Archive::new(archive).unpack(installed.path()).unwrap();
+        let target = tempdir().unwrap();
+        fs::write(target.path().join("a.ts"), "const a = 1;\n").unwrap();
+        let loaded = codemod_workflow::load_workflow(&installed.path().join("workflow.ts"))
+            .unwrap_or_else(|e| panic!("the bundle does not build: {e}\n{workflow}"));
+        let engine = codemod_workflow::Engine::new(
+            std::sync::Arc::new(codemod_workflow::MemoryStore::default()),
+            std::sync::Arc::new(codemod_workflow::events::CollectEvents::default()),
+            std::sync::Arc::new(codemod_workflow::interaction::NonInteractive {
+                approve_all: false,
+            }),
+            codemod_workflow::Services::default(),
+        );
+        let target_path = target.path().to_path_buf();
+        let report = tokio::task::spawn_blocking(move || {
+            engine.start(codemod_workflow::StartRequest {
+                run_id: None,
+                workflow: loaded,
+                target: target_path,
+                params: serde_json::Value::Null,
+                name: None,
+                dry_run: false,
+                test: None,
+                check_uncommitted: false,
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            matches!(report.ending, codemod_workflow::Ending::Succeeded(_)),
+            "{:?}",
+            report.ending
+        );
+        assert_eq!(
+            fs::read_to_string(target.path().join("a.ts")).unwrap(),
+            "bundled-helper"
+        );
+    }
+
+    /// The workflow's imported callback stays an import; a helper's import
+    /// with the same specifier names another file, which is bundled.
+    #[tokio::test]
+    async fn only_the_workflows_own_imports_stay_external() {
+        let temp_dir = tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join("workflow.ts"),
+            r#"import { forEachFile, step } from "codemod/workflow";
+import migrate from "./migrate.ts";
+import { label } from "./lib/helper.ts";
+
+export default async function main() {
+  await step(label, forEachFile("**/*.ts", migrate));
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("migrate.ts"),
+            "export default function migrate(file: any) { file.write(\"root-migrate\"); }\n",
+        )
+        .unwrap();
+        fs::create_dir_all(temp_dir.path().join("lib")).unwrap();
+        fs::write(
+            temp_dir.path().join("lib/helper.ts"),
+            "import name from \"./migrate.ts\";\nexport const label = name();\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("lib/migrate.ts"),
+            "export default function name() { return \"helper-label\"; }\n",
+        )
+        .unwrap();
+
+        let bundle = bundle_js_file(temp_dir.path(), "workflow.ts")
+            .await
+            .unwrap();
+        assert!(bundle.contains("helper-label"), "{bundle}");
+        assert!(!bundle.contains("root-migrate"), "{bundle}");
+        assert_eq!(bundle.matches("\"./migrate.ts\"").count(), 1, "{bundle}");
+    }
+
+    /// Imported YAML rules are published as they are, the workflow's bundle
+    /// still imports them, and the installed package runs them.
+    #[tokio::test]
+    async fn a_workflow_ts_package_publishes_its_imported_rules() {
+        let temp_dir = tempdir().unwrap();
+        // Its own name: bundles go to one path per name in the temp directory,
+        // and tests run in parallel.
+        let manifest = manifest_with("workflow.ts", "example-rules");
+        fs::write(
+            temp_dir.path().join("workflow.ts"),
+            r#"import { astGrep, forEachFile, step } from "codemod/workflow";
+import rules from "./rules/config.yml";
+
+export default async function main() {
+  await step("Rules", forEachFile(astGrep(rules)));
+}
+"#,
+        )
+        .unwrap();
+        fs::create_dir_all(temp_dir.path().join("rules")).unwrap();
+        fs::write(
+            temp_dir.path().join("rules/config.yml"),
+            "id: no-var\nlanguage: javascript\nrule:\n  pattern: var $A = $B\nfix: let $A = $B;\n",
+        )
+        .unwrap();
+
+        let files = validate_package_structure(temp_dir.path(), &manifest).unwrap();
+        assert_eq!(files, ["workflow.ts"]);
+        let bundle = create_package_bundle(temp_dir.path(), &manifest, &files)
+            .await
+            .unwrap();
+        let installed = tempdir().unwrap();
+        let archive = flate2::read::GzDecoder::new(fs::File::open(&bundle).unwrap());
+        tar::Archive::new(archive).unpack(installed.path()).unwrap();
+        assert!(installed.path().join("rules/config.yml").is_file());
+        let workflow = fs::read_to_string(installed.path().join("workflow.ts")).unwrap();
+        assert!(workflow.contains("\"./rules/config.yml\""), "{workflow}");
+
+        let target = tempdir().unwrap();
+        fs::write(target.path().join("a.js"), "var a = 1;\n").unwrap();
+        let loaded = codemod_workflow::load_workflow(&installed.path().join("workflow.ts"))
+            .unwrap_or_else(|e| panic!("the bundle does not build: {e}\n{workflow}"));
+        let engine = codemod_workflow::Engine::new(
+            std::sync::Arc::new(codemod_workflow::MemoryStore::default()),
+            std::sync::Arc::new(codemod_workflow::events::CollectEvents::default()),
+            std::sync::Arc::new(codemod_workflow::interaction::NonInteractive {
+                approve_all: false,
+            }),
+            codemod_workflow::Services::default(),
+        );
+        let target_path = target.path().to_path_buf();
+        let report = tokio::task::spawn_blocking(move || {
+            engine.start(codemod_workflow::StartRequest {
+                run_id: None,
+                workflow: loaded,
+                target: target_path,
+                params: serde_json::Value::Null,
+                name: None,
+                dry_run: false,
+                test: None,
+                check_uncommitted: false,
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            matches!(report.ending, codemod_workflow::Ending::Succeeded(_)),
+            "{:?}",
+            report.ending
+        );
+        assert_eq!(
+            fs::read_to_string(target.path().join("a.js")).unwrap(),
+            "let a = 1;\n"
+        );
+    }
+
+    /// A rule file named by path would be missing from the package.
+    #[test]
+    fn a_workflow_ts_package_with_a_rule_path_is_refused() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("workflow.ts", "example");
+        fs::write(
+            temp_dir.path().join("workflow.ts"),
+            r#"import { astGrep, forEachFile, step } from "codemod/workflow";
+export default async function main() {
+  await step(forEachFile(astGrep("./rules.yml" as any)));
+}
+"#,
+        )
+        .unwrap();
+        let error = validate_package_structure(temp_dir.path(), &manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("astGrep takes rules, not a file path"),
+            "{error}"
+        );
+    }
+
+    /// A path the build cannot read would be missing from the package:
+    /// publishing refuses it, with the build's error.
+    #[test]
+    fn a_workflow_ts_package_with_a_callback_path_is_refused() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("workflow.ts", "example");
+        fs::write(
+            temp_dir.path().join("workflow.ts"),
+            r#"import { forEachFile, step } from "codemod/workflow";
+export default async function main() {
+  await step(forEachFile("**/*.ts", "./transforms/rename.ts" as any));
+}
+"#,
+        )
+        .unwrap();
+        let error = validate_package_structure(temp_dir.path(), &manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("forEachFile takes a callback, not a file path"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn workflow_file_is_required() {
         let temp_dir = tempdir().unwrap();
@@ -1095,6 +1475,54 @@ nodes:
         assert!(error.to_string().contains("missing compatibility marker"));
     }
 
+    /// react-to-solid-codemod's gitignored `src/lint/node_modules` (49 MB)
+    /// made publish fail with "Package too large".
+    #[tokio::test]
+    async fn publish_leaves_out_gitignored_files_and_nested_node_modules_and_git() {
+        let package = tempdir().unwrap();
+        let root = package.path();
+        let write = |path: &str, text: &str| {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        write("codemod.yaml", "name: example\n");
+        write(".gitignore", "*.log\ncoverage/\n");
+        write("src/lint/.gitignore", "dist\n");
+        write("src/lint/index.ts", "export {};\n");
+        write("src/lint/dist/index.js", "built\n");
+        write("src/lint/node_modules/big/index.js", &"x".repeat(1024));
+        write("tests/fixture/node_modules/dep/index.js", "kept out\n");
+        write("vendor/.git/HEAD", "ref: refs/heads/main\n");
+        write("debug.log", "noise\n");
+        write("coverage/lcov.info", "noise\n");
+        write("README.md", "# example\n");
+
+        let size: u64 = ["README.md", "codemod.yaml", "src/lint/index.ts"]
+            .iter()
+            .map(|path| fs::metadata(root.join(path)).unwrap().len())
+            .sum();
+        assert_eq!(calculate_package_size(root).unwrap(), size);
+
+        let manifest = manifest_with("workflow.ts", "example");
+        let bundle = create_package_bundle(root, &manifest, &[]).await.unwrap();
+        let archive = flate2::read::GzDecoder::new(fs::File::open(&bundle).unwrap());
+        let mut names: Vec<String> = tar::Archive::new(archive)
+            .entries()
+            .unwrap()
+            .map(|entry| {
+                entry
+                    .unwrap()
+                    .path()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        assert_eq!(names, ["README.md", "codemod.yaml", "src/lint/index.ts"]);
+    }
+
     #[tokio::test]
     async fn publish_bundle_bundles_installed_dependencies() {
         let temp_dir = tempdir().unwrap();
@@ -1168,14 +1596,31 @@ export default function transform() {
 import { format } from "node:util";
 import path from "path";
 import { readFile } from "fs/promises";
-import { parse } from "codemod:ast-grep";
+import { parse } from "codemod/ast-grep";
+import { warn } from "codemod/runtime";
 import { generate } from "codemod:llm";
 export default function transform() {
-  return [format("%s", "ok"), path.sep, readFile, parse, generate];
+  return [format("%s", "ok"), path.sep, readFile, parse, warn, generate];
 }
 "#,
         )
         .unwrap();
+        // With the codemod npm package installed, its Node.js shims must not be
+        // bundled: the CLI provides these modules.
+        let installed = temp_dir.path().join("node_modules/codemod");
+        fs::create_dir_all(installed.join("runtime")).unwrap();
+        fs::write(
+            installed.join("package.json"),
+            r#"{ "name": "codemod", "type": "module", "exports": { "./ast-grep": "./runtime/ast-grep.mjs", "./runtime": "./runtime/runtime.mjs" } }"#,
+        )
+        .unwrap();
+        for shim in ["ast-grep", "runtime"] {
+            fs::write(
+                installed.join(format!("runtime/{shim}.mjs")),
+                "export const NODE_SHIM = true;\n",
+            )
+            .unwrap();
+        }
 
         let bundled = bundle_js_file(temp_dir.path(), "transform.js")
             .await
@@ -1184,7 +1629,119 @@ export default function transform() {
         assert!(bundled.contains("node:util"));
         assert!(bundled.contains("path"));
         assert!(bundled.contains("fs/promises"));
-        assert!(bundled.contains("codemod:ast-grep"));
+        assert!(bundled.contains("codemod/ast-grep"));
+        assert!(bundled.contains("codemod/runtime"));
         assert!(bundled.contains("codemod:llm"));
+        assert!(!bundled.contains("NODE_SHIM"), "{bundled}");
+    }
+
+    /// A bundled workflow still finds its files through `import.meta`: the
+    /// bundle takes the workflow's place, so it is in the same directory.
+    #[tokio::test]
+    async fn a_bundled_workflow_keeps_import_meta() {
+        let package = tempdir().unwrap();
+        let root = package.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("src/workflow.ts"),
+            r#"
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  await step("Setup", shell`${import.meta.dirname}/scripts/setup.sh`);
+}
+"#,
+        )
+        .unwrap();
+        let bundled = bundle_js_file(root, "src/workflow.ts").await.unwrap();
+        assert!(bundled.contains("import.meta.dirname"), "{bundled}");
+    }
+
+    /// A workflow that imports an npm package must work after publishing,
+    /// though `node_modules` is not published: the workflow is bundled, and
+    /// the bundle is still a workflow the engine builds and runs.
+    #[tokio::test]
+    async fn a_workflow_with_package_imports_runs_from_its_bundle() {
+        let package = tempdir().unwrap();
+        let root = package.path();
+        fs::create_dir_all(root.join("node_modules/shout")).unwrap();
+        fs::write(
+            root.join("node_modules/shout/package.json"),
+            r#"{ "name": "shout", "type": "module", "exports": "./index.js" }"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("node_modules/shout/index.js"),
+            "export const shout = (text) => text.toUpperCase();\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("helpers.ts"),
+            "export const suffix: string = \"!\";\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("workflow.ts"),
+            r#"
+import { step, forEachFile } from "codemod/workflow";
+import { shout } from "shout";
+import { suffix } from "./helpers.ts";
+
+export default async function main() {
+  const greeting: string = shout("hello");
+  await step("Shout", forEachFile("*.txt", (file) => {
+    file.write(shout(file.text.trim()) + suffix + "\n");
+  }));
+  return greeting;
+}
+"#,
+        )
+        .unwrap();
+
+        let bundled = bundle_js_file(root, "workflow.ts").await.unwrap();
+        assert!(bundled.contains("codemod/workflow"), "{bundled}");
+        assert!(!bundled.contains("from \"shout\""), "{bundled}");
+
+        // What a consumer gets: the bundle, without node_modules.
+        let published = tempdir().unwrap();
+        let workflow = published.path().join("workflow.ts");
+        fs::write(&workflow, &bundled).unwrap();
+        let target = tempdir().unwrap();
+        fs::write(target.path().join("a.txt"), "quiet\n").unwrap();
+
+        let loaded = codemod_workflow::load_workflow(&workflow)
+            .unwrap_or_else(|e| panic!("the bundle does not build: {e}\n{bundled}"));
+        let engine = codemod_workflow::Engine::new(
+            std::sync::Arc::new(codemod_workflow::MemoryStore::default()),
+            std::sync::Arc::new(codemod_workflow::events::CollectEvents::default()),
+            std::sync::Arc::new(codemod_workflow::interaction::NonInteractive {
+                approve_all: false,
+            }),
+            codemod_workflow::Services::default(),
+        );
+        let target_path = target.path().to_path_buf();
+        let report = tokio::task::spawn_blocking(move || {
+            engine.start(codemod_workflow::StartRequest {
+                run_id: None,
+                workflow: loaded,
+                target: target_path,
+                params: serde_json::Value::Null,
+                name: None,
+                dry_run: false,
+                test: None,
+                check_uncommitted: false,
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            report.ending,
+            codemod_workflow::Ending::Succeeded(serde_json::json!("HELLO")),
+            "{bundled}"
+        );
+        assert_eq!(
+            fs::read_to_string(target.path().join("a.txt")).unwrap(),
+            "QUIET!\n"
+        );
     }
 }

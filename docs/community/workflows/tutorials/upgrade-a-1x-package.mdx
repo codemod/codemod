@@ -1,0 +1,202 @@
+---
+title: "Upgrade a 1.x package"
+sidebarTitle: "Upgrade a 1.x package"
+description: "Run a workflow.yaml codemod on the 2.0 CLI as it is, then convert it to workflow.ts with codemod workflow upgrade and check that it does the same thing."
+---
+
+You'll take a codemod package made with the 1.x CLI, run it on 2.0 unchanged, convert it to `workflow.ts`, and check that the result and its tests are the same. You need Node.js 22.18 or later and Git.
+
+## 1. The 1.x package
+
+This package is what `codemod init --project-type ast-grep-js` makes on 1.x, shortened: a `workflow.yaml` with one `js-ast-grep` step, a transform that turns `var` into `const`, and a fixture test.
+
+```yaml workflow.yaml
+version: "1"
+
+nodes:
+  - id: apply-transforms
+    name: Apply AST Transformations
+    type: automatic
+    steps:
+      - name: "Scan matching typescript files and apply fixes"
+        js-ast-grep:
+          js_file: scripts/codemod.ts
+          base_path: "."
+          language: "typescript"
+          include:
+            - "**/*.{ts,tsx,mts,cts}"
+          exclude:
+            - "**/node_modules/**"
+            - "**/dist/**"
+            - "**/build/**"
+```
+
+```ts scripts/codemod.ts
+import type { Codemod } from "codemod:ast-grep";
+import type TS from "codemod:ast-grep/langs/typescript";
+
+const codemod: Codemod<TS> = async (root) => {
+  const rootNode = root.root();
+  const nodes = rootNode.findAll({ rule: { pattern: "var $VAR = $VALUE" } });
+  const edits = nodes.map((node) => {
+    const varName = node.getMatch("VAR")?.text();
+    const value = node.getMatch("VALUE")?.text();
+    return node.replace(`const ${varName} = ${value};`);
+  });
+  if (edits.length === 0) return null;
+  return rootNode.commitEdits(edits);
+};
+
+export default codemod;
+```
+
+`codemod.yaml` points at the workflow with `path: workflow.yaml`, and `tests/fixtures/` holds an `input.js` and an `expected.js`. Put the package in a Git repository, and next to it a small project to run it on:
+
+```ts app/src/index.ts
+var count = 1;
+export var name = "app";
+```
+
+```bash
+(cd my-codemod && git init && git add . && git commit -m "1.x package")
+(cd app && git init && git add . && git commit -m "Before the migration")
+```
+
+## 2. Run it on 2.0 as it is
+
+```bash
+npx codemod@alpha workflow run -w ./my-codemod --target ./app --no-interactive
+```
+
+```
+▸ Scan matching typescript files and apply fixes
+✓ Scan matching typescript files and apply fixes (0.0s)
+Done
+
+Tip: to move this codemod to workflow.ts, run `codemod workflow upgrade my-codemod`.
+```
+
+```diff
+-var count = 1;
+-export var name = "app";
++const count = 1;
++export const name = "app";
+```
+
+The CLI translated `workflow.yaml` to TypeScript in memory and ran that. The package didn't change. Registry packages run the same way: `npx codemod@alpha @org/my-1x-package`. The compatibility path supports legacy metrics and workflow state without rewriting the source.
+
+Undo the change: `(cd app && git checkout -- .)`.
+
+## 3. Preview the conversion
+
+In the package directory:
+
+```bash
+cd my-codemod
+npx codemod@alpha workflow upgrade --dry-run
+```
+
+It prints the `workflow.ts` it would write, and changes nothing:
+
+```ts workflow.ts
+// Generated from workflow.yaml by `codemod workflow upgrade`.
+import { parse } from "codemod/ast-grep";
+import { forEachFile, step } from "codemod/workflow";
+import type { WorkflowContext } from "codemod/workflow";
+import transform from "./scripts/codemod.ts";
+
+type Params = Record<string, string>;
+
+export default async function main({ params, target }: WorkflowContext<Params>) {
+  // Apply AST Transformations
+  await step(
+    "Scan matching typescript files and apply fixes",
+    forEachFile(
+      {
+        include: ["**/*.{ts,tsx,mts,cts}"],
+        exclude: ["**/node_modules/**", "**/dist/**", "**/build/**"],
+        language: "typescript",
+      },
+      async (file) => {
+        const out = await transform(parse(file), {
+          params,
+          language: "typescript",
+          targetDir: target,
+        });
+        if (typeof out === "string") file.write(out);
+      },
+    ),
+  );
+}
+```
+
+The node became a `step`, the `js-ast-grep` step became `forEachFile` with the same files, and the transform is imported and called for each file. Your transform doesn't change.
+
+## 4. Convert
+
+```bash
+npx codemod@alpha workflow upgrade
+```
+
+```
+✓ workflow.yaml -> workflow.ts
+✓ updated codemod.yaml
+
+Check the result with: codemod workflow validate -w /…/my-codemod
+i Add codemod to package.json, so its scripts run that CLI and editors get the workflow types: npm install --save-dev codemod
+```
+
+`git status` shows what it did: `workflow.ts` added, `workflow.yaml` removed (keep it with `--keep-yaml`), and `codemod.yaml` now says `path: workflow.ts`.
+
+## 5. Check it
+
+```bash
+npx codemod@alpha workflow validate -w .
+```
+
+```
+─── Workflow `main` (./workflow.ts) ───
+✅ Workflow builds
+✅ forEachFile callbacks: Valid (1 extracted)
+✅ Package validation successful
+```
+
+Run it on the project again. The diff is the same as in step 2:
+
+```bash
+cd ..
+npx codemod@alpha workflow run -w ./my-codemod --target ./app --no-interactive
+(cd app && git diff --stat)
+```
+
+```
+ src/index.ts | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+```
+
+The transform's fixture test runs as before:
+
+```bash
+cd my-codemod
+npx codemod@alpha jssg test -l typescript ./scripts/codemod.ts
+```
+
+```
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+Commit the conversion. From here you can edit `workflow.ts` like any workflow: add steps, return a report, or [test the whole workflow](/community/workflows/testing).
+
+<Note>
+1.x's `codemod init` writes `npx codemod@latest jssg test` in `package.json`. `@latest` is the 1.x CLI until 2.0 is stable: change it to `npx codemod jssg test`, and add `codemod` as a dev dependency, so the tests run with the CLI the package uses.
+</Note>
+
+## What `upgrade` can't convert for you
+
+`upgrade` lists anything it can't translate exactly, and leaves a `// codemod upgrade:` comment where it was. The common ones:
+
+- Transforms that use `codemod:metrics`: return the counts instead. See [Upgrade from 1.x](/community/workflows/upgrade-from-1x#metrics-are-now-return-values).
+- Transforms that call `getState` or `setState`: pass values between steps instead.
+- `runtime: docker` or `runtime: podman`: 2.0 refuses the workflow before running any steps. Keep running it with 1.x, or explicitly invoke the container from a `shell` step when you port it.
+
+See [Migrate from workflow.yaml](/community/workflows/migrate) for how every YAML feature maps to TypeScript.

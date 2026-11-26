@@ -1,0 +1,287 @@
+---
+title: "Testing workflows"
+sidebarTitle: "Testing"
+description: "Test what a package does: run the whole workflow on fixtures from a test file, and compare the files it leaves."
+tag: "Experimental"
+---
+
+import Experimental from "/snippets/experimental.mdx";
+
+<Experimental />
+
+A package's tests are a test file you can read and change: `tests/workflow.test.ts`. It runs the whole workflow on fixtures with `codemod/testing`, so it covers what the package actually does: `forEachFile` callbacks, inline or imported from their files, function steps, how the steps fit together, shell steps and renames. An imported callback is tested the same way, through the workflow that runs it: give its step's files as fixtures. (`codemod jssg test` tests one jssg transform file on its own.)
+
+`codemod init` scaffolds the test file, a starter fixture, and a `test` script that runs them with Node.js's built-in test runner:
+
+```plaintext
+my-codemod/
+  src/workflow.ts
+  tests/
+    workflow.test.ts
+    tsconfig.json          # Node.js types for the tests
+    fixtures/
+      basic/
+        input.ts
+        expected.ts
+  package.json             # "test": "node --test \"tests/**/*.test.ts\""
+```
+
+## The test file
+
+```ts tests/workflow.test.ts
+import { describe, test } from "node:test";
+import { assertTree, fixtures, runWorkflow } from "codemod/testing";
+
+const workflow = new URL("../src/workflow.ts", import.meta.url);
+
+describe("my-codemod", () => {
+  for (const fixture of fixtures(new URL("./fixtures", import.meta.url))) {
+    test(fixture.name, async () => {
+      const run = await runWorkflow(workflow, {
+        target: fixture.input,
+        params: fixture.params,
+      });
+      assertTree(run, fixture.expected);
+    });
+  }
+});
+```
+
+- `fixtures(dir)` lists the cases in `tests/fixtures`, one test each.
+- `runWorkflow` copies a case's input into a temporary directory and runs the workflow there, so fixtures are never changed. Nothing is recorded in the run store.
+- `assertTree` compares the files the run left with the case's expected output, and fails with a diff.
+
+Run the tests:
+
+```bash
+npm test
+```
+
+```plaintext
+▶ my-codemod
+  ✔ basic (41ms)
+  ✖ renames-default-export (38ms)
+    AssertionError: src/b.ts differs from the expected output
+
+    --- expected/src/b.ts
+    +++ actual/src/b.ts
+    @@ -1,2 +1,2 @@
+    -var a = 1;
+    +let a = 1;
+```
+
+The test file is yours: add `test(...)` blocks next to the fixture loop for cases that need [inline files](#write-files-inline), [one step on its own](#test-one-step) or [mocks](#mock-a-workflows-imports).
+
+Node.js runs TypeScript test files directly from version 22.18, which the scaffolded `package.json` requires. With Bun, run `bun test`; with Vitest, `npx vitest`.
+
+## Fixtures
+
+A fixture is a directory under `tests/fixtures` with either an `input/` and an `expected/` directory, or an `input.<ext>` and an `expected.<ext>` file. These are the layouts `codemod jssg test` reads, so existing fixtures work as they are.
+
+```plaintext
+tests/fixtures/
+  renames-default-export/
+    input/
+      src/a.ts
+      src/b.ts
+    expected/
+      src/a.ts
+      src/b.mts          # the workflow renamed it
+    params.json          # optional: the run's parameters
+  basic/
+    input.ts
+    expected.ts
+```
+
+- **Directory fixtures** compare every file: changed files, files the workflow created, and files it removed.
+- **Single-file fixtures** expect the run to leave exactly one file, and compare it with `expected.<ext>`, whatever its name.
+- Fixtures may be grouped in subdirectories; a fixture's name is its path under `tests/fixtures`.
+
+<Warning>
+  The workflow selects files by its own rules. A single-file fixture is named `input.<ext>`, so a step that only selects `**/package.json` never sees it. Use a directory fixture with the real file names for such steps.
+</Warning>
+
+## Update expected files
+
+After a change you meant to make, write each run's files into its fixture's expected output:
+
+```bash
+CODEMOD_UPDATE_FIXTURES=1 npm test
+```
+
+Review the changes to `tests/fixtures` before you commit them.
+
+## More from `codemod/testing`
+
+`codemod/testing` ships with the `codemod` package, which `codemod init` adds as a dependency. Paths given to it are resolved against the current directory; pass a URL, as the test file does, to resolve them against the test file. The first argument to `runWorkflow` is a workflow file or a package directory.
+
+`assertTree` throws an `AssertionError` with the diff in its message and `actual` and `expected` set, so every runner reports it.
+
+If your workflow still imports the older `codemod:workflow` spelling, Vitest needs the `codemod/vite` plugin to resolve it:
+
+```ts vitest.config.ts
+import { defineConfig } from "vitest/config";
+import codemod from "codemod/vite";
+
+export default defineConfig({ plugins: [codemod()] });
+```
+
+### Write files inline
+
+For small cases, give the files directly instead of a fixture directory:
+
+```ts
+test("migrates moment imports", async () => {
+  const run = await runWorkflow("workflow.ts", {
+    target: { "src/a.ts": 'import moment from "moment";\n' },
+  });
+
+  assertTree(run, { "src/a.ts": 'import dayjs from "dayjs";\n' });
+});
+```
+
+`installSkill` steps are skipped in test runs, as in a dry run: a test does not install skills into the coding agents on your machine.
+
+### Test one step
+
+Steps are named by their label. `until` stops after the named step: steps the workflow starts after it do not run, and the run ends with status `"stopped"`. `given` replaces a step's result without running it, so a later step can be tested on its own:
+
+```ts workflow.ts
+import { forEachFile, shell, step } from "codemod/workflow";
+
+export default async function main() {
+  const usages = await step("Find moment imports", forEachFile(/* ... */));
+  await step("Rewrite imports", forEachFile(/* uses usages */));
+  await step("Update package.json", shell("npm uninstall moment"));
+}
+```
+
+```ts tests/rewrite.test.ts
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { runWorkflow } from "codemod/testing";
+
+test("rewrites the files the first step found", async () => {
+  const run = await runWorkflow("workflow.ts", {
+    target: { "src/a.ts": 'import moment from "moment";\n', "src/b.ts": "// untouched\n" },
+    given: { "Find moment imports": { outputs: [{ path: "src/a.ts" }] } },
+    until: "Rewrite imports",
+  });
+
+  assert.equal(run.status, "stopped");
+  assert.deepEqual(Object.keys(run.changes), ["src/a.ts"]);
+});
+```
+
+A `given` result has the step's shape: a `forEachFile` step with a [reducer](/community/workflows/reference#reducing-outputs) gives `{ reduced, changes, failures }`, so `given: { "Count rewrites": { reduced: 3 } }` is enough when the workflow only reads `reduced`.
+
+A label in `until` or `given` that matches no step is an error that lists the run's steps. Steps without a label get one from their task, such as `forEachFile src/**/*.ts`.
+
+### Test a callback file
+
+A `forEachFile` callback kept in its own file (its default export, `(file) => ...`) can be tested without the workflow around it. `runCallback` runs it on each file of the target in `language`, as a `forEachFile` step does, and applies what it writes, renames and deletes to the copy:
+
+```ts tests/migrate.test.ts
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { assertTree, fixtures, runCallback } from "codemod/testing";
+
+for (const fixture of fixtures(new URL("./fixtures", import.meta.url))) {
+  test(fixture.name, async () => {
+    const run = await runCallback(new URL("../scripts/migrate.ts", import.meta.url), {
+      target: fixture.input,
+      language: "typescript",
+    });
+    assertTree(run, fixture.expected);
+  });
+}
+
+test("counts what it rewrote", async () => {
+  const run = await runCallback("scripts/migrate.ts", {
+    target: { "a.ts": "var a = 1;\n" },
+    language: "typescript",
+  });
+  assert.deepEqual(run.outputs, [{ file: "a.ts", data: { count: 1 } }]);
+});
+```
+
+It runs with the codemod CLI, in the engine's runtime, so `definition()` and `references()` work as they do in a run. Its options are `target`, `language` (required), `semanticAnalysis` (`"file"`, the default, `"workspace"` or `"none"`), `capabilities`, `keep` and `signal`. The run it returns is a run without steps, plus `outputs` (what the callback returned, `{ file, data }` by path) and `failures` (`{ path, error }`); it fails when the callback failed on any file.
+
+The same fixtures run from the command line with [`codemod jssg test --callback`](/community/jssg/testing#test-a-foreachfile-callback).
+
+### Mock a workflow's imports
+
+To mock modules the workflow imports, let your test runner load the workflow and pass the module to `runWorkflow`, with `path` set to the workflow file so relative task paths resolve:
+
+```ts tests/workflow.test.ts
+import { test, vi } from "vitest";
+import { assertTree, runWorkflow } from "codemod/testing";
+
+vi.mock("../src/lookup.ts", () => ({ replacement: () => "dayjs" }));
+
+test("uses the mocked lookup", async () => {
+  const run = await runWorkflow(await import("../workflow.ts"), {
+    path: new URL("../workflow.ts", import.meta.url),
+    target: { "src/a.ts": 'import moment from "moment";\n' },
+  });
+
+  assertTree(run, { "src/a.ts": 'import dayjs from "dayjs";\n' });
+});
+```
+
+### Where the workflow runs
+
+`codemod/testing` runs TypeScript workflows in your test process, on [the Node.js host](/community/workflows/node). The CLI runs them in the engine's own sandboxed runtime. The two run the same orchestrator and the same tasks, and the Node.js host holds callbacks to the same [rules](/community/workflows/reference#callbacks-are-pure) and replays the body's clock as the CLI does, so a test that passes there does not fail under the CLI for using `fetch` or a timer. A few things still differ, such as reads outside the target; see [what differs on the Node.js host](/community/workflows/node#how-it-differs-from-the-cli).
+
+To test against the runtime `codemod run` uses, pass `host: "quickjs"`:
+
+```ts
+const run = await runWorkflow("workflow.ts", { target: fixture.input, host: "quickjs" });
+```
+
+YAML workflows always run with the CLI.
+
+### What a run returns
+
+`runWorkflow` resolves for every outcome. It rejects only when the workflow cannot run at all (for example, it does not build) or when an `until` or `given` label matches no step.
+
+| Field | What it holds |
+| --- | --- |
+| `status` | `"succeeded"`, `"failed"`, `"canceled"`, `"awaiting-approval"`, or `"stopped"` |
+| `ok` | Whether the run succeeded, or stopped at its `until` step |
+| `output`, `error` | What the workflow returned (or gave `fail()`), and why it failed |
+| `exitCode` | The exit code the workflow gave `fail()` (2 by default); `null` when it did not call it |
+| `files` | Every file after the run, by path |
+| `changes` | Files the run wrote or created, with their text; `null` for files it removed |
+| `steps`, `step(label)` | Each step's label, status (`"succeeded"`, `"partial"` when some of its files failed, or `"failed"`), result and error, and whether it was `given` |
+| `logs` | Console output, with the label of the step that wrote it (or `null` for the workflow body) |
+| `diff()` | A unified diff of the changes |
+
+`assertTree(run, expected)` fails with the run's error and logs when the run did not succeed. `expected` is a directory, a single file, or files by path. Line endings are compared as `\n`. Pass `{ ignoreWhitespace: true }` to ignore whitespace at the ends of lines and files.
+
+### Options
+
+| Option | Default | |
+| --- | --- | --- |
+| `target` | required | A directory or a file to copy, or files by path |
+| `params` | `{}` | The workflow's parameters |
+| `until` | | Stop after the step with this label |
+| `given` | `{}` | Results for steps that should not run, by label |
+| `approve` | `true` | Give every approval the workflow asks for. With `false`, a manual approval ends the run as `"awaiting-approval"` |
+| `capabilities` | `[]` | Deprecated, does nothing: callbacks (and `shard`'s functions) no longer get capabilities |
+| `workflowName` | | Which workflow to run when `codemod.yaml` declares several |
+| `keep` | `false` | Keep the temporary directory (`run.dir`) to inspect it |
+| `signal` | | An `AbortSignal` that stops the run |
+| `host` | `"node"` | Where a TypeScript workflow runs: `"node"` (this process) or `"quickjs"` (the CLI's sandboxed runtime) |
+| `path` | | The workflow file, when you pass the workflow module itself |
+
+## How test runs differ from real runs
+
+- Every approval is given unless you pass `approve: false` (or `--no-approve`).
+- Git steps (`branch`, `commit`, `pullRequest`) do nothing, as in a run without `--managed-git`. One started while other steps are still running still fails, as it would with `--managed-git`.
+- Shell steps run for real, in the temporary copy.
+- `agent` steps would call a coding agent: give their result with `given` instead.
+- `waitForEvent` steps have nobody to send their event: give the event's data with `given`, under the label `wait for <name>`. Without it the step waits until its `timeout`, or for as long as your test runner allows. `sleep` steps wait as usual.
+- `http()` steps send their requests: point them at a local server, or give their result with `given`. A dry run (`dryRun: true`) skips them unless they set `dryRun: "perform"`.
+
+`codemod/testing` uses the native addon and the `codemod` CLI that the package installed. To test against other builds, set `CODEMOD_NODE_ADDON` and `CODEMOD_BINARY` to their paths.

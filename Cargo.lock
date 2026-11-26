@@ -758,8 +758,6 @@ dependencies = [
  "base64 0.22.1",
  "butterflow-models",
  "butterflow-runners",
- "butterflow-scheduler",
- "butterflow-state",
  "bytes",
  "chrono",
  "codemod-ai",
@@ -825,36 +823,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "butterflow-scheduler"
-version = "1.18.7"
-dependencies = [
- "butterflow-models",
- "chrono",
- "js-sys",
- "log",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "tokio",
- "uuid",
- "wasm-bindgen",
- "wasm-bindgen-futures",
-]
-
-[[package]]
 name = "butterflow-state"
 version = "1.18.7"
 dependencies = [
- "async-trait",
- "butterflow-models",
  "chrono",
  "dirs",
- "log",
- "reqwest 0.12.23",
+ "libc",
  "serde",
  "serde_json",
- "tokio",
- "uuid",
+ "tempfile",
+ "thiserror 2.0.16",
 ]
 
 [[package]]
@@ -1114,13 +1092,17 @@ dependencies = [
  "butterflow-state",
  "chrono",
  "clap",
+ "codemod-agents",
+ "codemod-deps",
  "codemod-llrt-capabilities",
  "codemod-mcp",
  "codemod-sandbox",
  "codemod-telemetry",
+ "codemod-workflow",
  "console 0.15.11",
  "crossterm",
  "dirs",
+ "dunce",
  "ed25519-dalek",
  "env_logger",
  "flate2",
@@ -1128,6 +1110,7 @@ dependencies = [
  "humantime",
  "hyper 0.14.32",
  "hyper-rustls 0.24.2",
+ "ignore",
  "indicatif",
  "inquire",
  "jsonc-parser",
@@ -1169,7 +1152,20 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "vt100",
  "walkdir",
+]
+
+[[package]]
+name = "codemod-agents"
+version = "1.18.7"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.16",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -1202,6 +1198,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "codemod-deps"
+version = "1.18.7"
+dependencies = [
+ "futures",
+ "ignore",
+ "node-semver",
+ "pep440_rs",
+ "reqwest 0.12.23",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "codemod-llrt-capabilities"
 version = "1.18.7"
 dependencies = [
@@ -1220,6 +1234,7 @@ dependencies = [
  "butterflow-core",
  "codemod-llrt-capabilities",
  "codemod-sandbox",
+ "codemod-workflow",
  "libc",
  "reqwest 0.12.23",
  "rmcp 0.8.3",
@@ -1234,6 +1249,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "codemod-node"
+version = "1.18.7"
+dependencies = [
+ "ast-grep-core",
+ "butterflow-state",
+ "codemod-llrt-capabilities",
+ "codemod-sandbox",
+ "codemod-workflow",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+]
+
+[[package]]
 name = "codemod-sandbox"
 version = "1.18.7"
 dependencies = [
@@ -1244,6 +1277,8 @@ dependencies = [
  "bytes",
  "codemod-llrt-capabilities",
  "dashmap 6.1.0",
+ "dunce",
+ "globset",
  "ignore",
  "js-sys",
  "language-core",
@@ -1298,6 +1333,38 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.16",
  "tokio",
+]
+
+[[package]]
+name = "codemod-workflow"
+version = "1.18.7"
+dependencies = [
+ "base64 0.22.1",
+ "butterflow-core",
+ "butterflow-models",
+ "butterflow-runners",
+ "butterflow-state",
+ "chrono",
+ "codemod-agents",
+ "codemod-ai",
+ "codemod-deps",
+ "codemod-llrt-capabilities",
+ "codemod-sandbox",
+ "dirs",
+ "dunce",
+ "ignore",
+ "oxc 0.99.0",
+ "regex",
+ "reqwest 0.12.23",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.16",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1412,7 +1479,7 @@ dependencies = [
  "encode_unicode",
  "libc",
  "once_cell",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
  "windows-sys 0.59.0",
 ]
 
@@ -1425,7 +1492,7 @@ dependencies = [
  "encode_unicode",
  "libc",
  "once_cell",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
  "windows-sys 0.61.0",
 ]
 
@@ -1455,6 +1522,15 @@ name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "convert_case"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1af709f1f33454bf52eadfc8c78b3b9ef9cb26fb54d16dc9cd9a7299f899fd1b"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -1644,6 +1720,12 @@ checksum = "0b51940c54c6ca015d3add383571ec5610114466eb67aa0a27096e1dcf3c9e29"
 dependencies = [
  "smallvec",
 ]
+
+[[package]]
+name = "ctor"
+version = "1.0.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "914a755b7c2d4af2bdcff7ce1739e2db9a1b81a9b07123d8015786ae03c0980d"
 
 [[package]]
 name = "curve25519-dalek"
@@ -2545,7 +2627,7 @@ version = "0.2.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfe4fbac503b8d1f88e6676011885f34b7174f46e59956bba534ba83abded4df"
 dependencies = [
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -3197,7 +3279,7 @@ checksum = "70a646d946d06bedbbc4cac4c218acf4bbf2d87757a784857025f4d447e4e1cd"
 dependencies = [
  "console 0.16.1",
  "portable-atomic",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
  "unit-prefix",
  "web-time",
 ]
@@ -3251,7 +3333,7 @@ dependencies = [
  "dyn-clone",
  "fuzzy-matcher",
  "unicode-segmentation",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -4372,6 +4454,67 @@ dependencies = [
 ]
 
 [[package]]
+name = "napi"
+version = "3.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "567c62b9c2d0fae123713f766686ad66a2c75b45ba3ee01ed8b06a7e99bc435b"
+dependencies = [
+ "bitflags 2.10.0",
+ "ctor",
+ "futures",
+ "libc",
+ "napi-build",
+ "napi-sys",
+ "nohash-hasher",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "napi-build"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b899b545d3aa6dca985939059f258c5488d34e4ecf39c274e20009748f4b846d"
+
+[[package]]
+name = "napi-derive"
+version = "3.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94c8098ed9d61a1bbd019519c637817531b0e24023ef4b5678f2f0cbe24bed9c"
+dependencies = [
+ "convert_case 0.12.0",
+ "ctor",
+ "napi-derive-backend",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "napi-derive-backend"
+version = "7.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "314cd6ca42bd978fd8bae84b4137e1322bbf3e83552fca8dbd7d18034188ff3a"
+dependencies = [
+ "convert_case 0.12.0",
+ "proc-macro2",
+ "quote",
+ "semver",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "napi-sys"
+version = "3.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d153beb7d5c973f4b9395be8a83054a28968b61188f1dd1a2cc2321af22daea2"
+dependencies = [
+ "libloading 0.9.0",
+]
+
+[[package]]
 name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4409,6 +4552,25 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
 ]
+
+[[package]]
+name = "node-semver"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b1a233ea5dc37d2cfba31cfc87a5a56cc2a9c04e3672c15d179ca118dae40a7"
+dependencies = [
+ "bytecount",
+ "miette",
+ "nom 7.1.3",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "nohash-hasher"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 
 [[package]]
 name = "nom"
@@ -4894,7 +5056,7 @@ dependencies = [
  "textwrap",
  "thiserror 2.0.16",
  "unicode-segmentation",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -5642,7 +5804,7 @@ checksum = "6978128c8b51d8f4080631ceb2302ab51e32cc6e8615f735ee2f83fd269ae3f1"
 dependencies = [
  "bytecount",
  "fnv",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -5731,7 +5893,7 @@ checksum = "31095ca1f396e3de32745f42b20deef7bc09077f918b085307e8eab6ddd8fb9c"
 dependencies = [
  "once_cell",
  "serde",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
  "unscanny",
  "version-ranges",
 ]
@@ -6431,7 +6593,7 @@ dependencies = [
  "thiserror 2.0.16",
  "unicode-segmentation",
  "unicode-truncate",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -6462,7 +6624,7 @@ dependencies = [
  "strum",
  "time",
  "unicode-segmentation",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -6898,7 +7060,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77dff57c9de498bb1eb5b1ce682c2e3a0ae956b266fa0933c3e151b87b078967"
 dependencies = [
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
  "yansi",
 ]
 
@@ -7310,7 +7472,7 @@ source = "git+https://github.com/astral-sh/ruff.git?tag=0.14.0#beea8cdfec826802a
 dependencies = [
  "anstyle",
  "memchr",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -9662,7 +9824,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0f8daae29995a24f65619e19d8d31dea5b389f3d853d8bf297bbf607cd0014cc"
 dependencies = [
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -9673,7 +9835,7 @@ checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
 dependencies = [
  "smawk",
  "unicode-linebreak",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -10715,7 +10877,7 @@ checksum = "16b380a1238663e5f8a691f9039c73e1cdae598a30e9855f541d29b08b53e9a5"
 dependencies = [
  "itertools 0.14.0",
  "unicode-segmentation",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -10726,9 +10888,9 @@ checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
 name = "unicode-width"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fc81956842c57dac11422a97c3b8195a1ff727f06e85c84ed2e8aa277c9a0fd"
+checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "unicode-xid"
@@ -10936,6 +11098,27 @@ name = "vsimd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
+
+[[package]]
+name = "vt100"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "054ff75fb8fa83e609e685106df4faeffdf3a735d3c74ebce97ec557d5d36fd9"
+dependencies = [
+ "itoa",
+ "unicode-width 0.2.2",
+ "vte",
+]
+
+[[package]]
+name = "vte"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+dependencies = [
+ "arrayvec",
+ "memchr",
+]
 
 [[package]]
 name = "walkdir"
@@ -11884,7 +12067,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "ts-rs 12.0.1",
 ]
 
 [[package]]

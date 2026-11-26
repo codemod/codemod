@@ -14,7 +14,7 @@ argument-hint: "<sdk> <from-version> <to-version> <changelog-or-guide-url>"
 # SDK Migration Codemod Authoring
 
 codemod-compatibility: skill-package-v1
-codemod-skill-version: 0.1.7
+codemod-skill-version: 0.1.8
 
 Turn an SDK/library version bump into publishable Codemod packages.
 
@@ -96,13 +96,13 @@ Write a short plan that includes:
 
 ### Packaging rules
 
-**Default: one registry package per SDK version bump**, named like `<sdk>-<from>-to-<to>`, with a **multi-step** `workflow.yaml`:
+**Default: one registry package per SDK version bump**, named like `<sdk>-<from>-to-<to>`, with a **multi-step** `src/workflow.ts`:
 
 - **Registry `name` rules (publish will reject otherwise):** optional `@scope/`, then only letters, numbers, hyphens, underscores. **No dots, no spaces.** Write versions with hyphens (`1-24-to-1-25`), never semver dots (`1.24-to-1.25` is invalid).
-- One sequential `js-ast-grep` step per independent **`codemod`** breaking change
-- Separate transform scripts (keep `scripts/codemod.ts` as the first/primary step for package validation)
+- One sequential `forEachFile` step per independent **`codemod`** breaking change
+- Each step's callback in its own file under `scripts/`, imported by the workflow (`import firstApi from "./scripts/first-api.ts"`)
 - Separate fixture dirs per step (e.g. `tests/<step-slug>/…`) — including dirs for `deferred-automatable` backlog items
-- Package `test` script runs `jssg test` for every **wired** (`codemod`) step only
+- Package `test` script runs the workflow on each **wired** (`codemod`) step's fixtures with `codemod/testing` (`runWorkflow` with `until` set to that step)
 
 Split into multiple packages only when:
 
@@ -151,30 +151,25 @@ Proceed to build/publish only after the user explicitly confirms the `codemod` /
 
 ### Multi-step workflow shape
 
-```yaml
-version: "1"
-nodes:
-  - id: migrate
-    name: Migrate <sdk> <from> → <to>
-    type: automatic
-    steps:
-      - name: "<break A>"
-        js-ast-grep:
-          js_file: scripts/codemod.ts
-          language: "typescript"
-          semantic_analysis: file
-          include: ["**/*.{ts,tsx}"]
-          exclude: ["**/node_modules/**", "**/dist/**"]
-      - name: "<break B>"
-        js-ast-grep:
-          js_file: scripts/<break-b>.ts
-          language: "typescript"
-          semantic_analysis: file
-          include: ["**/*.{ts,tsx}"]
-          exclude: ["**/node_modules/**", "**/dist/**"]
+```ts
+import { forEachFile, step } from "codemod/workflow";
+import firstApi from "./scripts/first-api.ts";
+import secondApi from "./scripts/second-api.ts";
+
+const sources = {
+  language: "typescript",
+  semanticAnalysis: "file",
+  include: ["**/*.{ts,tsx}"],
+  exclude: ["**/node_modules/**", "**/dist/**"],
+} as const;
+
+export default async function workflow() {
+  await step("Migrate first API", forEachFile(sources, firstApi));
+  await step("Migrate second API", forEachFile(sources, secondApi));
+}
 ```
 
-Use `semantic_analysis: workspace` when a step must resolve cross-file imports or rename across modules. Omit semantic analysis only when the transform is a pure AST shape with no shared method names and no symbol renames—and say so in the README.
+Use `semanticAnalysis: "workspace"` when a step must resolve cross-file imports or rename across modules. Set it to `"none"` only when the callback is a pure AST shape with no shared method names or symbol renames, and explain why in the README. In existing YAML workflows, the equivalent option is `semantic_analysis`.
 
 ## 2. Codemods built locally
 
@@ -210,13 +205,13 @@ npx codemod init <path> --no-interactive \
 Replace `npm` / `typescript` / `MIT` with plan values when they differ. Ask once for any required field still missing.
 
 2. Set `codemod.yaml` / `package.json` `name` to a publish-safe id (no dots), plus author, description, keywords (`upgrade`, `breaking-change`, sdk name, versions), languages, and **public** registry access/visibility.
-3. Replace starter transform, README, and fixtures. Wire a multi-step `workflow.yaml` for every **`codemod`** break. Keep each step focused on one exact migration.
-4. Stay AST-first with `js-ast-grep` for parser-backed languages. Use `npx codemod ai dump-ast` and `npx codemod ai node-types <lang>` when node shape is unclear.
+3. Replace starter transform, README, and fixtures. Wire every **`codemod`** break into `src/workflow.ts`. Keep each step focused on one exact migration.
+4. Stay AST-first with JSSG for parser-backed languages. Use `npx codemod ai dump-ast` and `npx codemod ai node-types <lang>` when node shape is unclear.
 5. **Prefer `@jssg/utils`** for JS/TS/Java: import gates (`getImport` / `listImports`), style (`getFileStyle`), renames/bindings (`importBindingOf` / `renameReferences`). Do not ship hand-rolled import pattern lists or bare identifier renames when a helper covers the case. Add `@jssg/utils` to package dependencies when used.
-6. **Decide `semantic_analysis` per step** before matching generic methods (`.update`, `.get`, …), renaming types/APIs, or following aliases. Binding-aware checks beat filename-level “has import” gates alone.
-7. **Emit metrics per `js-ast-grep` step**: declare `useMetricAtom` in that step’s script (statically visible name). Prefer **one metric per step**; encode variants as **cardinality** dimensions (e.g. `shape`, `kind`, `callee`). Increment on real edits. Snapshot `metrics.json` beside fixtures that produce counts.
+6. **Decide `semanticAnalysis` per step** before matching generic methods (`.update`, `.get`, …), renaming types/APIs, or following aliases. Binding-aware checks beat filename-level “has import” gates alone.
+7. **Count edits per transform step**: return `{ edit, data }` with an entry for each real edit. Include a field such as `kind`, `shape`, or `callee` so the workflow can group edits by variant. Snapshot `data.json` beside standalone JSSG fixtures that produce counts.
 8. Follow Performant codemods in `jssg-gotchas`: discriminating selectors/token gates, no per-file full-repo walks, timed no-op vs real run before done.
-9. Align transforms, fixtures, README, `codemod.yaml`, `workflow.yaml`, and package scripts on the same migration and globs.
+9. Align transforms, fixtures, README, the `codemod.yaml` manifest, the workflow entry point, and package scripts on the same migration and globs.
 10. **Fixture backlog:** for every `deferred-automatable` inventory row, add `tests/<step-slug>/<case>/{input,expected}.*` before/after samples now. Do not wait for a later request. Do **not** wire those dirs into package `test` until a transform exists.
 
 ### Fixture depth (wired + backlog)
@@ -282,8 +277,8 @@ If publish fails because of scope verification or permissions, explain the error
 - Full changelog inventory with `codemod` / `deferred-automatable` / `manual` — no collapsed “out of scope” dump of automatable breaks.
 - Explicit user confirmation of that inventory before build/publish; auth-only replies are not scope approval.
 - Fixture backlog for every `deferred-automatable` break in the same publish cycle as the first package.
-- Prefer `@jssg/utils` and enable `semantic_analysis` when import origin, aliases, or generic method names matter.
-- Each transform step emits metrics (`useMetricAtom` + cardinality; keep the metric count low).
+- Prefer `@jssg/utils` and use `semanticAnalysis` when import origin, aliases, or generic method names matter.
+- Count changes with `{ edit, data }`: include an entry per real edit and a field such as `kind` so the workflow can group by variant.
 - Registry package names: no dots — hyphenate version segments (`1-24-to-1-25`).
 - After any material change to an existing package, bump `version` in `codemod.yaml` and `package.json` before republish.
 - Do not stop on the first test failure — fix and retest.

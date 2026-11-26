@@ -9,7 +9,7 @@ use codemod_sandbox::sandbox::runtime_module::{
     RuntimeEvent, RuntimeEventCallback, RuntimeEventKind,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -23,12 +23,13 @@ struct RuntimeEventBuffer {
 struct BufferedRuntimeEvents {
     order: Vec<String>,
     entries: HashMap<String, Vec<String>>,
+    experimental: Vec<&'static str>,
 }
 
 #[derive(Clone)]
 struct RuntimeEventOutput {
     stream: RuntimeEventOutputStream,
-    lock: Arc<Mutex<()>>,
+    seen: Arc<Mutex<HashSet<&'static str>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -41,7 +42,7 @@ impl RuntimeEventOutput {
     fn new(stream: RuntimeEventOutputStream) -> Self {
         Self {
             stream,
-            lock: Arc::new(Mutex::new(())),
+            seen: Default::default(),
         }
     }
 
@@ -54,15 +55,17 @@ impl RuntimeEventOutput {
     }
 
     fn flush(&self, buffer: &RuntimeEventBuffer) {
-        let groups = buffer.drain();
-        if groups.is_empty() {
-            return;
-        }
-
-        let Ok(_guard) = self.lock.lock() else {
+        let Ok(mut seen) = self.seen.lock() else {
             return;
         };
-        for (title, lines) in groups {
+        if let Ok(mut events) = buffer.entries.lock() {
+            for api in events.experimental.drain(..) {
+                if seen.insert(api) {
+                    eprintln!("{}", crate::experimental_notice(api));
+                }
+            }
+        }
+        for (title, lines) in buffer.drain() {
             self.write("");
             self.write(&title);
             for line in lines {
@@ -91,6 +94,14 @@ impl RuntimeEventBuffer {
         let entries = Arc::clone(&self.entries);
 
         Arc::new(move |event| {
+            if let RuntimeEventKind::Experimental(api) = event.kind {
+                if let Ok(mut buffer) = entries.lock() {
+                    if !buffer.experimental.contains(&api) {
+                        buffer.experimental.push(api);
+                    }
+                }
+                return;
+            }
             let Some(message) = format_runtime_event_log(&event) else {
                 return;
             };
@@ -147,7 +158,7 @@ fn format_runtime_event_log(event: &RuntimeEvent) -> Option<String> {
     let prefix = match event.kind {
         RuntimeEventKind::Progress => "[progress]",
         RuntimeEventKind::Warn => "[warn]",
-        RuntimeEventKind::SetCurrentUnit => return None,
+        RuntimeEventKind::SetCurrentUnit | RuntimeEventKind::Experimental(_) => return None,
     };
 
     let mut message = format!("{prefix} {}", event.message);

@@ -20,7 +20,7 @@ Each codemod lives under `codemods/<slug>/`.
 
 ```text
 codemods/<slug>/
-  workflow.yaml
+  workflow.ts
   codemod.yaml
   scripts/
   tests/
@@ -32,7 +32,7 @@ Keep each codemod self-contained so maintainers can validate and publish package
 
 - Scaffold new codemods with `npx codemod init`.
 - Use Codemod MCP when creating or refining codemods, especially when symbol definitions or cross-file references matter.
-- Validate package workflows with `npx codemod workflow validate codemods/<slug>/workflow.yaml`.
+- Validate package workflows with `npx codemod workflow validate codemods/<slug>/workflow.ts`.
 - Run package tests from the codemod directory before publishing.
 
 ## Running codemods
@@ -49,7 +49,7 @@ npx codemod <codemod-name>
 ### From source
 
 ```bash
-npx codemod workflow run -w codemods/<slug>/workflow.yaml
+npx codemod workflow run -w codemods/<slug>/workflow.ts
 ```
 
 By default, codemods run in the current folder. Add `--target /path/to/repo` to run elsewhere.

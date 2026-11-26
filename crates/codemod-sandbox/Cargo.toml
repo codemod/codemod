@@ -4,6 +4,7 @@ version.workspace = true
 edition = "2021"
 
 [dependencies]
+dunce = "1"
 rquickjs = { version = "0.11", default-features = false, optional = true }
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -46,6 +47,7 @@ ast-grep-core = { workspace = true, optional = true }
 ast-grep-config = { workspace = true, optional = true }
 ast-grep-language = { workspace = true, default-features = true, optional = true }
 ignore = { workspace = true, optional = true }
+globset = { workspace = true, optional = true }
 serde_yaml = { workspace = true, optional = true }
 codemod-llrt-capabilities = { workspace = true, optional = true, features = ["native"] }
 language-core = { workspace = true, optional = true }
@@ -91,5 +93,5 @@ native = [
   "vfs",
 ]
 jssg-in-memory = ["native"]
-real-fs = ["tokio", "ignore"]
+real-fs = ["tokio", "ignore", "globset"]
 mock-fs = []

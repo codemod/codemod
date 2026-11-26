@@ -21,6 +21,17 @@ generated/
 /tree-sitter.wasm
 /web-tree-sitter.js
 /crates/scheduler/npm/pkg
+# The codemod npm package's JavaScript, built from crates/cli/npm/src
+/crates/cli/npm/runtime/
+/crates/cli/npm/testing/
+/crates/cli/npm/register.mjs
+/crates/cli/npm/register.d.mts
+/crates/cli/npm/vite.mjs
+/crates/cli/npm/vite.d.mts
+/crates/cli/npm/src/runtime/orchestrator.mts
+/crates/cli/npm/src/runtime/orchestrator-version.mts
+/crates/cli/npm/src/runtime/jssg-compat.mts
+/crates/cli/npm/src/runtime/assess-core.mts
 
 # Environment files
 **.env
@@ -65,3 +76,6 @@ apps/cli/package/
 .cursor/rules/mintlify.mdc
 .vercel
 .env*.local
+
+# Compatibility sweep output (scripts/compat-sweep.mjs)
+.compat/

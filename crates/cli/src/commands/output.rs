@@ -3,6 +3,12 @@ use inquire::Confirm;
 use serde::Serialize;
 use std::path::Path;
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TextOrJson {
+    Text,
+    Json,
+}
+
 #[derive(Serialize)]
 struct InstallErrorEnvelope {
     ok: bool,

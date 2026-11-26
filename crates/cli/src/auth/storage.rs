@@ -9,12 +9,24 @@ use std::path::PathBuf;
 
 use crate::auth::types::{AuthTokens, UserInfo};
 
+/// `config.json` in the codemod config directory. Other parts of the CLI
+/// keep their own keys in the same file (`agent` and `decisionModel`, read by
+/// `user_settings` and by `codemod/assess`), so keys this struct does not name
+/// are kept as they are when it is saved.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
-    pub default_registry: String,
-    pub registries: HashMap<String, RegistryAuthConfig>,
+    // Defaulted to empty, not to `Config::default()`: the file may hold only
+    // run preferences when nobody has logged in yet, and `load_config_with_env`
+    // then fills in the registry settings, `CODEMOD_REGISTRY_URL` included.
     #[serde(default)]
+    pub default_registry: String,
+    #[serde(default)]
+    pub registries: HashMap<String, RegistryAuthConfig>,
     pub anonymous_feedback: AnonymousFeedbackConfig,
+    /// Every other key (run preferences, see `user_settings`).
+    #[serde(flatten)]
+    pub other: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for Config {
@@ -47,6 +59,7 @@ impl Config {
             default_registry: registry_url.to_string(),
             registries,
             anonymous_feedback: AnonymousFeedbackConfig::default(),
+            other: serde_json::Map::new(),
         }
     }
 }
@@ -87,8 +100,12 @@ impl TokenStorage {
     pub fn with_config_dir(config_dir: PathBuf) -> Result<Self> {
         // Create config directory if it doesn't exist
         if !config_dir.exists() {
-            fs::create_dir_all(&config_dir)
-                .with_context(|| format!("Failed to create config directory: {config_dir:?}"))?;
+            fs::create_dir_all(&config_dir).with_context(|| {
+                format!(
+                    "Failed to create config directory: {}",
+                    config_dir.display()
+                )
+            })?;
         }
 
         Ok(Self { config_dir })
@@ -101,21 +118,29 @@ impl TokenStorage {
     pub fn load_config_with_env(&self, env: Option<&HashMap<String, String>>) -> Result<Config> {
         let config_path = self.config_dir.join("config.json");
 
-        if !config_path.exists() {
-            let default_registry = env
-                .and_then(|vars| vars.get("CODEMOD_REGISTRY_URL"))
+        let default_registry = || {
+            env.and_then(|vars| vars.get("CODEMOD_REGISTRY_URL"))
                 .map(|value| value.trim())
                 .filter(|value| !value.is_empty())
                 .map(|value| value.to_string())
-                .unwrap_or_else(|| RegistryConfig::default().default_registry);
-            return Ok(Config::with_default_registry(default_registry));
+                .unwrap_or_else(|| RegistryConfig::default().default_registry)
+        };
+        if !config_path.exists() {
+            return Ok(Config::with_default_registry(default_registry()));
         }
 
         let content = fs::read_to_string(&config_path)
-            .with_context(|| format!("Failed to read config file: {config_path:?}"))?;
+            .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
 
-        let config: Config =
+        let mut config: Config =
             serde_json::from_str(&content).context("Failed to parse config file")?;
+        if config.default_registry.trim().is_empty() {
+            // Only preferences were saved: the registry settings are the
+            // defaults, as if there were no file.
+            let defaults = Config::with_default_registry(default_registry());
+            config.default_registry = defaults.default_registry;
+            config.registries.extend(defaults.registries);
+        }
 
         Ok(config)
     }
@@ -126,7 +151,7 @@ impl TokenStorage {
             serde_json::to_string_pretty(config).context("Failed to serialize config file")?;
 
         fs::write(&config_path, content)
-            .with_context(|| format!("Failed to write config file: {config_path:?}"))?;
+            .with_context(|| format!("Failed to write config file: {}", config_path.display()))?;
 
         Ok(())
     }
@@ -155,12 +180,14 @@ impl TokenStorage {
         }
 
         let content = fs::read_to_string(&auth_path)
-            .with_context(|| format!("Failed to read auth file: {auth_path:?}"))?;
+            .with_context(|| format!("Failed to read auth file: {}", auth_path.display()))?;
 
         let auth: StoredAuth =
             serde_json::from_str(&content).context("Failed to parse auth file")?;
 
-        Ok(Some(auth))
+        // The legacy filename encoding is not injective. Never return another
+        // registry's credentials, even if its file has the same name.
+        Ok((auth.registry == registry).then_some(auth))
     }
 
     pub fn save_auth(&self, auth: &StoredAuth) -> Result<()> {
@@ -168,15 +195,16 @@ impl TokenStorage {
 
         // Create auth directory if it doesn't exist
         if let Some(parent) = auth_path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create auth directory: {parent:?}"))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create auth directory: {}", parent.display())
+            })?;
         }
 
         let content =
             serde_json::to_string_pretty(auth).context("Failed to serialize auth data")?;
 
         write_auth_file(&auth_path, content.as_bytes())
-            .with_context(|| format!("Failed to write auth file: {auth_path:?}"))?;
+            .with_context(|| format!("Failed to write auth file: {}", auth_path.display()))?;
 
         Ok(())
     }
@@ -186,7 +214,7 @@ impl TokenStorage {
 
         if auth_path.exists() {
             fs::remove_file(&auth_path)
-                .with_context(|| format!("Failed to remove auth file: {auth_path:?}"))?;
+                .with_context(|| format!("Failed to remove auth file: {}", auth_path.display()))?;
         }
 
         Ok(())
@@ -196,8 +224,9 @@ impl TokenStorage {
         let cache_dir = self.config_dir.join("cache");
 
         if cache_dir.exists() {
-            fs::remove_dir_all(&cache_dir)
-                .with_context(|| format!("Failed to remove cache directory: {cache_dir:?}"))?;
+            fs::remove_dir_all(&cache_dir).with_context(|| {
+                format!("Failed to remove cache directory: {}", cache_dir.display())
+            })?;
         }
 
         Ok(())
@@ -205,6 +234,40 @@ impl TokenStorage {
 
     pub fn get_auth_for_registry(&self, registry: &str) -> Result<Option<StoredAuth>> {
         self.load_auth(registry)
+    }
+
+    pub fn telemetry_disabled(&self) -> Result<bool> {
+        Ok(self.config_dir.join("telemetry_disabled").try_exists()?)
+    }
+
+    pub fn set_telemetry_enabled(&self, enabled: bool) -> Result<()> {
+        if enabled {
+            match fs::remove_file(self.config_dir.join("telemetry_disabled")) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                result => Ok(result?),
+            }
+        } else {
+            self.create_marker("telemetry_disabled")?;
+            Ok(())
+        }
+    }
+
+    /// Claim the notice once, even if several interactive invocations start at once.
+    pub fn claim_telemetry_notice(&self) -> Result<bool> {
+        self.create_marker("telemetry_notice_shown")
+    }
+
+    fn create_marker(&self, name: &str) -> Result<bool> {
+        let path = self.config_dir.join(name);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(error).with_context(|| format!("Failed to create {path:?}")),
+        }
     }
 
     pub fn get_or_create_anonymous_telemetry_id(&self) -> Result<String> {
@@ -215,12 +278,18 @@ impl TokenStorage {
                 if !stored_id.is_empty() {
                     return Ok(stored_id.to_string());
                 }
-                anyhow::bail!("Stored telemetry id is empty: {telemetry_id_path:?}");
+                anyhow::bail!(
+                    "Stored telemetry id is empty: {}",
+                    telemetry_id_path.display()
+                );
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(error).with_context(|| {
-                    format!("Failed to read telemetry id: {telemetry_id_path:?}")
+                    format!(
+                        "Failed to read telemetry id: {}",
+                        telemetry_id_path.display()
+                    )
                 });
             }
         }
@@ -241,19 +310,25 @@ impl TokenStorage {
             Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
                 let stored_id = fs::read_to_string(&telemetry_id_path).with_context(|| {
                     format!(
-                        "Failed to read concurrently created telemetry id: {telemetry_id_path:?}"
+                        "Failed to read concurrently created telemetry id: {}",
+                        telemetry_id_path.display()
                     )
                 })?;
                 let stored_id = stored_id.trim();
                 if stored_id.is_empty() {
                     anyhow::bail!(
-                        "Concurrently created telemetry id is empty: {telemetry_id_path:?}"
+                        "Concurrently created telemetry id is empty: {}",
+                        telemetry_id_path.display()
                     );
                 }
                 Ok(stored_id.to_string())
             }
-            Err(error) => Err(error.error)
-                .with_context(|| format!("Failed to persist telemetry id: {telemetry_id_path:?}")),
+            Err(error) => Err(error.error).with_context(|| {
+                format!(
+                    "Failed to persist telemetry id: {}",
+                    telemetry_id_path.display()
+                )
+            }),
         }
     }
 
@@ -281,11 +356,15 @@ impl TokenStorage {
 
     pub fn save_last_sent_person_email(&self, distinct_id: &str, email: &str) -> Result<()> {
         let dir = self.person_traits_dir();
-        fs::create_dir_all(&dir)
-            .with_context(|| format!("Failed to create person traits directory: {dir:?}"))?;
+        fs::create_dir_all(&dir).with_context(|| {
+            format!(
+                "Failed to create person traits directory: {}",
+                dir.display()
+            )
+        })?;
         let path = self.person_traits_path(distinct_id);
         fs::write(&path, email)
-            .with_context(|| format!("Failed to write person traits file: {path:?}"))?;
+            .with_context(|| format!("Failed to write person traits file: {}", path.display()))?;
         Ok(())
     }
 
@@ -328,7 +407,10 @@ fn write_auth_file(path: &std::path::Path, content: &[u8]) -> Result<()> {
         .open(path)?;
 
     if !file.metadata()?.file_type().is_file() {
-        anyhow::bail!("Auth path exists but is not a regular file: {path:?}");
+        anyhow::bail!(
+            "Auth path exists but is not a regular file: {}",
+            path.display()
+        );
     }
 
     file.set_len(0)?;
@@ -354,6 +436,55 @@ mod tests {
     use std::sync::{Arc, Barrier};
 
     #[test]
+    fn empty_telemetry_id_displays_its_path_without_debug_quotes() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = TokenStorage {
+            config_dir: dir.path().to_path_buf(),
+        };
+        let path = dir.path().join("telemetry_id");
+        fs::write(&path, "").unwrap();
+
+        let error = storage.get_or_create_anonymous_telemetry_id().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("Stored telemetry id is empty: {}", path.display())
+        );
+    }
+
+    #[test]
+    fn the_decision_model_agent_and_unknown_keys_survive_a_save() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        // As another tool may write it: without the registry settings.
+        fs::write(
+            temp_dir.path().join("config.json"),
+            r#"{ "decisionModel": { "provider": "openai", "model": "gpt-6-luna" }, "agent": "claude-code", "launcher": { "lastRun": 1 } }"#,
+        )
+        .expect("expected config write");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        let config = storage.load_config().expect("config");
+        assert!(!config.default_registry.is_empty());
+        storage.enable_anonymous_feedback().expect("save");
+        let path = temp_dir.path().join("config.json");
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["decisionModel"]["model"], "gpt-6-luna");
+        assert_eq!(saved["agent"], "claude-code");
+        assert_eq!(saved["launcher"]["lastRun"], 1);
+        assert_eq!(saved["anonymous_feedback"]["enabled"], true);
+        // Both readers of the preferences still see them after the save.
+        let settings = crate::user_settings::SettingsFile::at(path.clone()).load();
+        assert_eq!(settings.agent.as_deref(), Some("claude-code"));
+        assert_eq!(
+            settings.decision_model.map(|model| model.id()).as_deref(),
+            Some("openai/gpt-6-luna")
+        );
+        let preference = codemod_workflow::assess::config::user_preference(&path).unwrap();
+        assert_eq!(preference.provider.as_deref(), Some("openai"));
+        assert_eq!(preference.model.as_deref(), Some("gpt-6-luna"));
+    }
+
+    #[test]
     fn missing_feedback_config_defaults_to_disabled() {
         let temp_dir = tempfile::tempdir().expect("expected temp dir");
         fs::write(
@@ -371,6 +502,29 @@ mod tests {
 
         assert!(!config.anonymous_feedback.enabled);
         assert_eq!(config.anonymous_feedback.consented_at, None);
+    }
+
+    #[test]
+    fn a_file_with_only_run_preferences_reads_as_defaults_and_keeps_them() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        fs::write(
+            temp_dir.path().join("config.json"),
+            r#"{ "agent": "codex", "decisionModel": { "provider": "systemone", "model": "jev-latest" } }"#,
+        )
+        .expect("expected config write");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+
+        let config = storage.load_config().expect("config");
+        assert_eq!(config.default_registry, Config::default().default_registry);
+        assert!(config.registries.contains_key(&config.default_registry));
+
+        storage.save_config(&config).expect("save");
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(temp_dir.path().join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved["agent"], "codex");
+        assert_eq!(saved["decisionModel"]["model"], "jev-latest");
     }
 
     #[test]
@@ -532,6 +686,20 @@ mod tests {
             },
             registry: registry.to_string(),
         }
+    }
+
+    #[test]
+    fn load_auth_checks_the_stored_identity_not_only_the_filename() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = TokenStorage::with_config_dir(temp.path().to_path_buf()).unwrap();
+        let registry = "https://example.test/a/b";
+        let other = "https://example.test/a_b";
+        assert_eq!(
+            storage.get_auth_path(registry),
+            storage.get_auth_path(other)
+        );
+        storage.save_auth(&stored_auth(registry)).unwrap();
+        assert!(storage.load_auth(other).unwrap().is_none());
     }
 
     #[test]

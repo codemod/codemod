@@ -8,27 +8,33 @@ use crate::CLI_VERSION;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
 use anyhow::Result;
 use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
-use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
+use butterflow_core::report::{convert_diffs, ExecutionReport};
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
 use clap::Args;
-use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecutionOptions};
+use codemod_sandbox::sandbox::engine::{
+    CodemodOutput, ExecutionResult, JssgExecutionOptions, PendingFiles,
+};
 use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
-use codemod_sandbox::{MetricsContext, SharedStateContext};
 use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
 use log::{debug, error, warn};
 use semantic_factory::LazySemanticProvider;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     time::Instant,
 };
+
+/// How many times one file's transform may give way to others (see
+/// [`codemod_sandbox::sandbox::engine::Transaction::aborted`]) before it fails.
+const RETRIES: usize = 50;
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -88,9 +94,26 @@ pub struct Command {
     #[arg(long)]
     pub report: bool,
 
-    /// Show verbose output (e.g. shared state after execution)
+    /// Has no effect: workflows no longer keep state to print. Kept so
+    /// existing commands still parse.
     #[arg(long, short)]
     pub verbose: bool,
+}
+
+/// The `--allow-*` flag that grants what a transform's error says is
+/// missing: a module it could not import, or `fetch`.
+fn missing_capability_flag(error: &str) -> Option<&'static str> {
+    if error.contains("fetch is not defined") {
+        return Some("--allow-fetch");
+    }
+    let start = error.find("Error resolving module '")? + "Error resolving module '".len();
+    let module = &error[start..];
+    let module = module[..module.find('\'')?].trim_start_matches("node:");
+    match module.split('/').next()? {
+        "fs" => Some("--allow-fs"),
+        "child_process" => Some("--allow-child-process"),
+        _ => None,
+    }
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
@@ -106,11 +129,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let dirty_check = dirty_git_check::dirty_check(args.no_interactive);
     dirty_check(&target_directory, args.allow_dirty, None)?;
-
-    std::env::set_var("CODEMOD_STEP_ID", "jssg");
-
-    // Create a new metrics context for this execution run
-    let metrics_context = MetricsContext::new();
 
     // Verify the JavaScript file exists
     if !js_file_path.exists() {
@@ -203,9 +221,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .clone()
         .parse()
         .unwrap_or_else(|_| panic!("Invalid language: {}", args.language));
-    let shared_state_context = SharedStateContext::new();
-    let metrics_context_clone = metrics_context.clone();
-    let shared_state_context_clone = shared_state_context.clone();
     let runtime_event_output = super::RuntimeEventOutput::stdout();
 
     // Create diff config for dry-run mode
@@ -213,33 +228,73 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     // Always collect diffs so we can offer report interactively
     let diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>> = Some(Arc::new(Mutex::new(Vec::new())));
-    let diff_collector_clone = diff_collector.clone();
-    let execution_errors = Arc::new(Mutex::new(Vec::<String>::new()));
-    let execution_errors_for_closure = Arc::clone(&execution_errors);
-
-    // Clone target_directory for use after the closure moves it
+    let execution_errors = Mutex::new(Vec::<String>::new());
+    let recovered = AtomicUsize::new(0);
     let target_directory_for_report = target_directory.clone();
 
-    let _ = config.execute(move |file_path, _config| {
+    // Every file's text goes through `pending`, so a file changed by several
+    // transforms (its own, and other files' `jssgTransform` calls) keeps all
+    // of the changes. Each file's transform runs in a transaction: what it
+    // returns and what its `jssgTransform` calls change are kept only when
+    // it succeeds (`root.write()` writes at once and is not rolled back).
+    // Once no transform holds a changed file it is written, so a later
+    // `root.write()` starts from it; a dry run keeps everything in memory
+    // and shows it at the end. Renames are applied at the end.
+    let pending = PendingFiles::default();
+    // Keyed by the file's canonical path: the path it was given as (to
+    // remove, so renaming a symlink removes the link, not its target) and
+    // the new path.
+    let renames = Mutex::new(BTreeMap::<PathBuf, (PathBuf, PathBuf)>::new());
+    let write_released = || {
+        if config.dry_run {
+            return;
+        }
+        for (path, error) in pending.write_released(|path, text| {
+            std::fs::write(path, text)?;
+            if let Some(ref provider) = semantic_provider {
+                let _ = provider.notify_file_processed(path, text);
+            }
+            Ok(())
+        }) {
+            execution_errors.lock().unwrap().push(format!(
+                "Failed to write modified file {}: {}",
+                path.display(),
+                error
+            ));
+        }
+    };
+
+    // The walker blocks while its workers drive transforms on the CLI runtime.
+    let runtime = tokio::runtime::Handle::current();
+    let execute_file = |file_path: &Path, _config: &CodemodExecutionConfig| {
         // Only process files
         if !file_path.is_file() {
             return;
         }
 
-        let runtime_event_buffer = super::RuntimeEventBuffer::new();
-        let runtime_event_callback = runtime_event_buffer.callback_for_title(
-            super::display_path_title(file_path, Some(&target_directory)),
-        );
-        let runtime_event_output = runtime_event_output.clone();
+        let mut attempts = 0;
+        loop {
+            let runtime_event_buffer = super::RuntimeEventBuffer::new();
+            let runtime_event_callback = runtime_event_buffer.callback_for_title(
+                super::display_path_title(file_path, Some(&target_directory)),
+            );
 
-        // Use a tokio runtime to handle the async execution within the sync callback
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            // Read file content
-            let content = match tokio::fs::read_to_string(&file_path).await {
-                Ok(content) => content,
-                Err(e) => {
+            let transaction = pending.begin();
+            let (content, taken) = match pending.take(file_path) {
+                Ok(taken) => taken,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     warn!("Failed to read file {}: {}", file_path.display(), e);
+                    transaction.finish(false);
+                    return;
+                }
+                // Another transform kept it too long: the file was not transformed.
+                Err(e) => {
+                    transaction.finish(false);
+                    execution_errors.lock().unwrap().push(format!(
+                        "Failed to execute codemod on {}:\n{}",
+                        file_path.display(),
+                        e
+                    ));
                     return;
                 }
             };
@@ -255,167 +310,256 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 matrix_values: None,
                 capabilities: capabilities_for_closure.clone(),
                 semantic_provider: semantic_provider.clone(),
-                metrics_context: Some(metrics_context_clone.clone()),
                 llm_request_handler: None,
-                shared_state_context: Some(shared_state_context_clone.clone()),
                 runtime_event_callback: Some(runtime_event_callback),
                 cancellation_flag: None,
                 test_mode: false,
-                dry_run: false,
+                // In a dry run the script's own file system access is off too.
+                dry_run: config.dry_run,
                 target_directory: &target_directory,
+                pending_files: Some(pending.clone()),
             };
+            let result = runtime.block_on(execute_codemod_with_quickjs(options));
 
-            // Execute the codemod on this file
-            match execute_codemod_with_quickjs(options).await {
-                Ok(CodemodOutput { primary, secondary }) => {
-                    // Collect all file changes: primary + secondary from jssgTransform
-                    let mut all_changes: Vec<(
-                        std::path::PathBuf,
-                        &codemod_sandbox::sandbox::engine::ExecutionResult,
-                    )> = Vec::new();
-                    if let ExecutionResult::Modified(_) = &primary {
-                        all_changes.push((file_path.to_path_buf(), &primary));
+            // It gave way to another file's transform that was waiting for a
+            // file it held, so what it did is incomplete: drop it and run it
+            // again once that one is done.
+            if transaction.aborted() {
+                drop(taken);
+                transaction.give_way();
+                attempts += 1;
+                if attempts < RETRIES {
+                    continue;
+                }
+                runtime_event_output.flush(&runtime_event_buffer);
+                execution_errors.lock().unwrap().push(format!(
+                    "Failed to execute codemod on {}:\nother files' transforms kept waiting for the files this one changes with jssgTransform; run it again",
+                    file_path.display()
+                ));
+                return;
+            }
+
+            let outcome = match result {
+                Ok(CodemodOutput {
+                    primary,
+                    secondary,
+                    recovered_syntax,
+                    ..
+                }) => {
+                    if recovered_syntax {
+                        recovered.fetch_add(1, Ordering::Relaxed);
                     }
-                    for change in &secondary {
-                        if let ExecutionResult::Modified(_) = &change.result {
-                            all_changes.push((change.path.clone(), &change.result));
+                    let mut file_renames = Vec::new();
+                    if let ExecutionResult::Modified(modified) = primary {
+                        taken.set(modified.content);
+                        if let Some(to) = modified.rename_to {
+                            file_renames
+                                .push((taken.path().to_path_buf(), (file_path.to_path_buf(), to)));
                         }
                     }
-
-                    for (change_path, change_result) in &all_changes {
-                        if let ExecutionResult::Modified(ref modified) = change_result {
-                            let write_path = modified.rename_to.as_deref().unwrap_or(change_path);
-                            if !config.dry_run {
-                                if let Err(e) =
-                                    tokio::fs::write(write_path, &modified.content).await
-                                {
-                                    if let Ok(mut errors) = execution_errors_for_closure.lock() {
-                                        errors.push(format!(
-                                            "Failed to write modified file {}: {}",
-                                            write_path.display(),
-                                            e
-                                        ));
-                                    }
-                                } else {
-                                    // If renamed, delete the original file
-                                    if modified.rename_to.is_some()
-                                        && write_path != change_path.as_path()
-                                    {
-                                        if let Err(e) = tokio::fs::remove_file(change_path).await {
-                                            if let Ok(mut errors) =
-                                                execution_errors_for_closure.lock()
-                                            {
-                                                errors.push(format!(
-                                                    "Failed to remove original file {}: {}",
-                                                    change_path.display(),
-                                                    e
-                                                ));
-                                            }
-                                        } else {
-                                            debug!(
-                                                "Renamed file: {} -> {}",
-                                                change_path.display(),
-                                                write_path.display()
-                                            );
-                                        }
-                                    } else {
-                                        debug!("Modified file: {}", change_path.display());
-                                    }
-                                    // Notify semantic provider of the change
-                                    if let Some(ref provider) = semantic_provider {
-                                        let _ = provider
-                                            .notify_file_processed(write_path, &modified.content);
-                                    }
-                                }
-                            } else {
-                                // Dry-run mode: print diff
-                                if modified.rename_to.is_some() {
-                                    println!(
-                                        "Rename: {} -> {}",
-                                        change_path.display(),
-                                        write_path.display()
-                                    );
-                                }
-                                // For secondary changes, read original content from disk
-                                let original = if change_path == file_path {
-                                    content.clone()
-                                } else {
-                                    tokio::fs::read_to_string(change_path)
-                                        .await
-                                        .unwrap_or_default()
-                                };
-                                let diff = generate_unified_diff(
-                                    change_path,
-                                    &original,
-                                    &modified.content,
-                                    &diff_config,
-                                    DiffMetadata::default(),
-                                );
-                                diff.print();
-
-                                // Collect plain-text diff for report
-                                if let Some(ref collector) = diff_collector_clone {
-                                    let plain_config = DiffConfig {
-                                        color: false,
-                                        ..DiffConfig::default()
-                                    };
-                                    let plain_diff = generate_unified_diff(
-                                        change_path,
-                                        &original,
-                                        &modified.content,
-                                        &plain_config,
-                                        DiffMetadata {
-                                            step_id: Some("jssg".to_string()),
-                                            step_name: Some("JSSG".to_string()),
-                                            ..DiffMetadata::default()
-                                        },
-                                    );
-                                    if let Ok(mut diffs) = collector.lock() {
-                                        diffs.push(plain_diff);
-                                    }
-                                }
-
-                                debug!("Would modify file (dry run): {}", change_path.display());
+                    // What `jssgTransform` made of other files is in
+                    // `pending`; only their renames are left to note.
+                    for change in secondary {
+                        if let ExecutionResult::Modified(modified) = change.result {
+                            if let Some(to) = modified.rename_to {
+                                let key = change
+                                    .path
+                                    .canonicalize()
+                                    .unwrap_or_else(|_| change.path.clone());
+                                file_renames.push((key, (change.path, to)));
                             }
                         }
                     }
+                    Ok(file_renames)
+                }
+                Err(e) => Err(e.to_string()),
+            };
+            drop(taken);
+
+            // A transform still running would change files after they are
+            // given back: refuse what this one did.
+            let outcome = match outcome {
+                Ok(_) if transaction.unsettled() => Err(
+                    "a jssgTransform() call was still running when the transform finished; await it"
+                        .to_string(),
+                ),
+                outcome => outcome,
+            };
+            match outcome {
+                Ok(file_renames) => {
+                    // Before the files are given back, so a later transform
+                    // of one of them renames it last.
+                    renames.lock().unwrap().extend(file_renames);
+                    transaction.finish(true);
                 }
                 Err(e) => {
-                    if let Ok(mut errors) = execution_errors_for_closure.lock() {
-                        errors.push(format!(
-                            "Failed to execute codemod on {}:\n{}",
-                            file_path.display(),
-                            e
-                        ));
-                    }
+                    transaction.finish(false);
+                    let hint = missing_capability_flag(&e)
+                        .map(|flag| format!("\nThe transform needs a capability: pass {flag}."))
+                        .unwrap_or_default();
+                    execution_errors.lock().unwrap().push(format!(
+                        "Failed to execute codemod on {}:\n{}{hint}",
+                        file_path.display(),
+                        e
+                    ));
                 }
             }
-        });
+            write_released();
+            runtime_event_output.flush(&runtime_event_buffer);
+            return;
+        }
+    };
+    let executed = tokio::task::block_in_place(|| config.execute(execute_file));
+    // Nothing ran (a capability was refused, the target can't be read):
+    // the run failed.
+    if let Err(error) = executed {
+        anyhow::bail!("{error}");
+    }
+    let recovered = recovered.load(Ordering::Relaxed);
+    if recovered > 0 {
+        eprintln!("{recovered} files had syntax errors; transformed with error recovery");
+    }
 
-        runtime_event_output.flush(&runtime_event_buffer);
-    });
+    // Every file is done: apply what is left (everything, in a dry run).
+    let mut renames = renames.into_inner().unwrap();
+    type Change = (PathBuf, Option<String>, String, Option<PathBuf>);
+    let mut changes: Vec<Change> = pending
+        .changed()
+        .into_iter()
+        .map(|(path, original, content)| match renames.remove(&path) {
+            Some((given, to)) => (given, Some(original), content, Some(to)),
+            None => (path, Some(original), content, None),
+        })
+        .collect();
+    // Files whose new text is written already, or that were only renamed.
+    for (given, to) in renames.into_values() {
+        if let Ok(text) = std::fs::read_to_string(&given) {
+            changes.push((given, Some(text.clone()), text, Some(to)));
+        }
+    }
+    changes.extend(
+        pending
+            .created()
+            .into_iter()
+            .map(|(path, content)| (path, None, content, None)),
+    );
+    changes.sort();
 
-    let metrics_data = metrics_context.get_all();
+    for (change_path, original, content, rename_to) in &changes {
+        let write_path = rename_to.as_deref().unwrap_or(change_path);
+        if !config.dry_run {
+            let written = if original.is_none() {
+                target_file_create(write_path, content)
+            } else {
+                std::fs::write(write_path, content)
+            };
+            if let Err(e) = written {
+                execution_errors.lock().unwrap().push(format!(
+                    "Failed to write modified file {}: {}",
+                    write_path.display(),
+                    e
+                ));
+                continue;
+            }
+            // If renamed, delete the original file
+            if rename_to.is_some() && write_path != change_path.as_path() {
+                if let Err(e) = std::fs::remove_file(change_path) {
+                    execution_errors.lock().unwrap().push(format!(
+                        "Failed to remove original file {}: {}",
+                        change_path.display(),
+                        e
+                    ));
+                } else {
+                    debug!(
+                        "Renamed file: {} -> {}",
+                        change_path.display(),
+                        write_path.display()
+                    );
+                }
+            } else {
+                debug!("Modified file: {}", change_path.display());
+            }
+            // Notify semantic provider of the change
+            if let Some(ref provider) = semantic_provider {
+                let _ = provider.notify_file_processed(write_path, content);
+            }
+        } else {
+            // Dry-run mode: print diff
+            if rename_to.is_some() {
+                println!(
+                    "Rename: {} -> {}",
+                    change_path.display(),
+                    write_path.display()
+                );
+            }
+            let diff = generate_unified_diff(
+                change_path,
+                original.as_deref().unwrap_or_default(),
+                content,
+                &diff_config,
+                DiffMetadata::default(),
+            );
+            diff.print();
+
+            // Collect plain-text diff for report
+            if let Some(ref collector) = diff_collector {
+                let plain_config = DiffConfig {
+                    color: false,
+                    ..DiffConfig::default()
+                };
+                let plain_diff = generate_unified_diff(
+                    change_path,
+                    original.as_deref().unwrap_or_default(),
+                    content,
+                    &plain_config,
+                    DiffMetadata {
+                        step_id: Some("jssg".to_string()),
+                        step_name: Some("JSSG".to_string()),
+                        ..DiffMetadata::default()
+                    },
+                );
+                if let Ok(mut diffs) = collector.lock() {
+                    diffs.push(plain_diff);
+                }
+            }
+
+            debug!("Would modify file (dry run): {}", change_path.display());
+        }
+    }
 
     let duration_ms = started.elapsed().as_millis() as f64;
     let seconds = duration_ms / 1000.0;
     println!("✨ Done in {seconds:.3}s");
 
-    let collected_errors = execution_errors
+    // A file that could not be written is tried again after each later file
+    // and at the end: report its error once.
+    let mut seen = std::collections::HashSet::new();
+    let collected_errors: Vec<String> = execution_errors
         .lock()
         .map(|errors| errors.clone())
-        .unwrap_or_default();
-    if !collected_errors.is_empty() {
-        return Err(anyhow::anyhow!("{}", collected_errors.join("\n\n")));
-    }
-
-    if args.verbose {
-        let state = shared_state_context.get_persistable();
-        if !state.is_empty() {
-            println!("\nState:");
-            for (key, value) in &state {
-                println!("  {key}: {value}");
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|error| seen.insert(error.clone()))
+        .collect();
+    match collected_errors.as_slice() {
+        [] => {}
+        [error] => return Err(anyhow::anyhow!("{error}")),
+        // Each on its own: rendered together, a JavaScript error's
+        // diagnostic would hide the others.
+        errors => {
+            for error in errors {
+                eprintln!("{}", crate::diagnostics::render_error_message(error));
             }
+            eprintln!(
+                "{}",
+                console::style(format!(
+                    "jssg run failed with {} errors (above).",
+                    errors.len()
+                ))
+                .red()
+                .bold()
+            );
+            return Err(crate::workflow_exec::WorkflowFailureAlreadyReported.into());
         }
     }
 
@@ -424,10 +568,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .unwrap_or_default();
     let files_modified = collected_diffs.len();
 
-    if crate::utils::metrics::should_show_report(
+    if crate::utils::report_prompt::should_show_report(
         args.report,
         args.no_interactive,
-        &metrics_data,
         files_modified,
     ) {
         let registry_client = create_registry_client(None)?;
@@ -441,7 +584,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             files_modified,
             0,
             0,
-            convert_metrics(&metrics_data),
             convert_diffs(
                 &collected_diffs,
                 &target_directory_for_report.display().to_string(),
@@ -454,8 +596,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         ));
 
         crate::report_server::serve_report(report).await?;
-    } else {
-        crate::utils::metrics::print_metrics(&metrics_data);
     }
 
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
@@ -481,4 +621,42 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .await;
 
     Ok(())
+}
+
+fn target_file_create(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?
+        .write_all(content.as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::missing_capability_flag;
+
+    #[test]
+    fn names_the_flag_for_a_missing_capability() {
+        let error = |module: &str| {
+            format!("Runtime error: Failed to declare module: Error: Error resolving module '{module}' from '/x/t.ts'")
+        };
+        assert_eq!(
+            missing_capability_flag(&error("child_process")),
+            Some("--allow-child-process")
+        );
+        assert_eq!(
+            missing_capability_flag(&error("node:fs/promises")),
+            Some("--allow-fs")
+        );
+        assert_eq!(
+            missing_capability_flag("ReferenceError: fetch is not defined"),
+            Some("--allow-fetch")
+        );
+        assert_eq!(missing_capability_flag(&error("lodash")), None);
+        assert_eq!(missing_capability_flag("Error: boom"), None);
+    }
 }

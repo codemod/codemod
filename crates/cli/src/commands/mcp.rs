@@ -18,6 +18,7 @@ pub struct Command {
 
 impl Command {
     pub async fn run(&self) -> Result<()> {
+        eprintln!("{}", crate::experimental_notice("codemod mcp"));
         feedback::persist_feedback_consent_if_requested(self.allow_feedback)?;
 
         let _ = tracing_subscriber::fmt()

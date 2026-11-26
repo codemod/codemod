@@ -12,7 +12,7 @@ use oxc::ast::ast::{
 };
 use oxc::parser::Parser;
 use oxc::semantic::{SemanticBuilder, SymbolFlags};
-use oxc::span::{SourceType, Span};
+use oxc::span::{GetSpan, SourceType, Span};
 use std::path::Path;
 
 /// Parse a JavaScript/TypeScript file and extract semantic information.
@@ -119,16 +119,29 @@ pub fn parse_and_analyze(file_path: &Path, content: &str) -> Result<FileSymbols,
                         range,
                         is_default: true,
                         re_export_from: None,
+                        local_name: None,
+                        specifier_range: None,
+                        local_range: None,
                     });
                 }
                 ModuleDeclaration::ExportAllDeclaration(export_all) => {
                     let range = span_to_byte_range(export_all.span);
+                    // `export * as ns from './x'` exports a single namespace
+                    // binding named `ns`; plain `export *` forwards every name.
+                    let name = export_all
+                        .exported
+                        .as_ref()
+                        .map(|n| n.name().to_string())
+                        .unwrap_or_else(|| "*".to_string());
                     file_symbols.exports.push(ExportedSymbol {
-                        name: "*".to_string(),
+                        name,
                         local_symbol_id: None,
                         range,
                         is_default: false,
                         re_export_from: Some(export_all.source.value.to_string()),
+                        local_name: None,
+                        specifier_range: None,
+                        local_range: None,
                     });
                 }
                 _ => {}
@@ -225,11 +238,17 @@ fn extract_named_exports(export_decl: &ExportNamedDeclaration, file_symbols: &mu
         let name = spec.exported.name().to_string();
         let local_name = spec.local.name().to_string();
 
-        let local_symbol_id = file_symbols
-            .symbols
-            .iter()
-            .find(|s| s.name == local_name)
-            .map(|s| s.symbol_id);
+        // A re-export (`export { a } from './x'`) has no local binding, even
+        // when the barrel happens to declare something with the same name.
+        let local_symbol_id = if re_export_from.is_some() {
+            None
+        } else {
+            file_symbols
+                .symbols
+                .iter()
+                .find(|s| s.name == local_name)
+                .map(|s| s.symbol_id)
+        };
 
         file_symbols.exports.push(ExportedSymbol {
             name,
@@ -237,6 +256,9 @@ fn extract_named_exports(export_decl: &ExportNamedDeclaration, file_symbols: &mu
             range,
             is_default: false,
             re_export_from: re_export_from.clone(),
+            local_name: Some(local_name),
+            specifier_range: Some(span_to_byte_range(spec.span)),
+            local_range: Some(span_to_byte_range(spec.local.span())),
         });
     }
 
@@ -259,6 +281,9 @@ fn extract_named_exports(export_decl: &ExportNamedDeclaration, file_symbols: &mu
                             range,
                             is_default: false,
                             re_export_from: None,
+                            local_name: None,
+                            specifier_range: None,
+                            local_range: None,
                         });
                     }
                 }
@@ -278,6 +303,9 @@ fn extract_named_exports(export_decl: &ExportNamedDeclaration, file_symbols: &mu
                         range,
                         is_default: false,
                         re_export_from: None,
+                        local_name: None,
+                        specifier_range: None,
+                        local_range: None,
                     });
                 }
             }
@@ -296,6 +324,9 @@ fn extract_named_exports(export_decl: &ExportNamedDeclaration, file_symbols: &mu
                         range,
                         is_default: false,
                         re_export_from: None,
+                        local_name: None,
+                        specifier_range: None,
+                        local_range: None,
                     });
                 }
             }
@@ -313,6 +344,9 @@ fn extract_named_exports(export_decl: &ExportNamedDeclaration, file_symbols: &mu
                     range,
                     is_default: false,
                     re_export_from: None,
+                    local_name: None,
+                    specifier_range: None,
+                    local_range: None,
                 });
             }
             Declaration::TSInterfaceDeclaration(interface_decl) => {
@@ -329,6 +363,9 @@ fn extract_named_exports(export_decl: &ExportNamedDeclaration, file_symbols: &mu
                     range,
                     is_default: false,
                     re_export_from: None,
+                    local_name: None,
+                    specifier_range: None,
+                    local_range: None,
                 });
             }
             Declaration::TSEnumDeclaration(enum_decl) => {
@@ -345,6 +382,9 @@ fn extract_named_exports(export_decl: &ExportNamedDeclaration, file_symbols: &mu
                     range,
                     is_default: false,
                     re_export_from: None,
+                    local_name: None,
+                    specifier_range: None,
+                    local_range: None,
                 });
             }
             _ => {}

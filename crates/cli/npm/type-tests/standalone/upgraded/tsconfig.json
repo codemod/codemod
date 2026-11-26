@@ -1,0 +1,14 @@
+{
+  "extends": "@codemod.com/tsconfig/base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "allowImportingTsExtensions": true,
+    "lib": ["ESNext"],
+    "types": [],
+    "skipLibCheck": false
+  },
+  // What `codemod workflow upgrade` writes, with only `codemod/workflow` and
+  // `codemod/ast-grep` imported, plus fixture types for the private compat helpers.
+  "include": ["./*.ts", "./src/*.ts"]
+}

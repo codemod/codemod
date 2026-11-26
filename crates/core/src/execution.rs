@@ -14,6 +14,91 @@ use std::{
     },
 };
 
+/// The walker every task selects files with: `.gitignore` and friends are
+/// honoured (also outside a git repository), hidden files are included, and
+/// links are not followed.
+pub fn file_walker(base: &Path, overrides: Option<Override>) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(base);
+    if let Some(overrides) = overrides {
+        builder.overrides(overrides);
+    }
+    builder
+        .follow_links(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .require_git(false)
+        .parents(true)
+        .ignore(true)
+        .hidden(false)
+        // Hidden files are walked, but git's own files never are: a `.git`
+        // directory, or the `.git` file of a worktree or submodule.
+        .filter_entry(|entry| entry.file_name() != ".git");
+    builder
+}
+
+/// Globs that match a language's files (`**/*.ts`, ...), for a language name
+/// or alias as transforms use them.
+pub fn language_globs(language: &str) -> Result<Vec<String>, String> {
+    let parsed = language
+        .parse()
+        .map_err(|_| format!("unknown language '{language}'"))?;
+    Ok(get_extensions_for_language(parsed)
+        .into_iter()
+        .map(|extension| format!("**/*{extension}"))
+        .collect())
+}
+
+/// Include and exclude globs as walker overrides; `None` without any.
+pub fn glob_overrides(
+    base: &Path,
+    include: &[String],
+    exclude: &[String],
+) -> Result<Option<Override>, String> {
+    if include.is_empty() && exclude.is_empty() {
+        return Ok(None);
+    }
+    let mut builder = OverrideBuilder::new(base);
+    for glob in include {
+        builder
+            .add(glob)
+            .map_err(|e| format!("Invalid include glob '{glob}': {e}"))?;
+    }
+    for glob in exclude {
+        let pattern = if glob.starts_with('!') {
+            glob.to_string()
+        } else {
+            format!("!{glob}")
+        };
+        builder
+            .add(&pattern)
+            .map_err(|e| format!("Invalid exclude glob '{pattern}': {e}"))?;
+    }
+    builder
+        .build()
+        .map(Some)
+        .map_err(|e| format!("Failed to build glob overrides: {e}"))
+}
+
+/// The files under `base` the globs select, sorted. Entries that cannot be
+/// read are left out.
+pub fn select_files(
+    base: &Path,
+    include: &[String],
+    exclude: &[String],
+) -> Result<Vec<PathBuf>, String> {
+    let overrides = glob_overrides(base, include, exclude)?;
+    let mut files: Vec<PathBuf> = file_walker(base, overrides)
+        .threads(1)
+        .build()
+        .flatten()
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+        .map(|entry| entry.into_path())
+        .collect();
+    files.sort();
+    Ok(files)
+}
+
 type PreRunCallbackError = Box<dyn Error + Send + Sync>;
 type PreRunCallbackFn = Box<
     dyn Fn(&Path, bool, &CodemodExecutionConfig) -> Result<(), PreRunCallbackError> + Send + Sync,
@@ -178,8 +263,7 @@ impl CodemodExecutionConfig {
                     .min(12)
             });
 
-            let walker = self
-                .create_walk_builder(&search_base, globs)
+            let walker = file_walker(&search_base, globs)
                 .threads(num_threads)
                 .build_parallel();
 
@@ -218,10 +302,8 @@ impl CodemodExecutionConfig {
                         }
                         WalkState::Continue
                     }
-                    Err(err) => {
-                        eprintln!("Walk error: {err}");
-                        WalkState::Continue
-                    }
+                    // An entry that cannot be read is left out, as when counting.
+                    Err(_) => WalkState::Continue,
                 })
             });
         }
@@ -238,10 +320,7 @@ impl CodemodExecutionConfig {
 
     /// Count total files that will be processed
     fn count_files(&self, search_base: &Path, globs: &Option<Override>) -> Result<u64, String> {
-        let walker = self
-            .create_walk_builder(search_base, globs.clone())
-            .threads(1)
-            .build();
+        let walker = file_walker(search_base, globs.clone()).threads(1).build();
 
         let mut count = 0u64;
         for entry in walker {
@@ -263,24 +342,21 @@ impl CodemodExecutionConfig {
     /// Collect all files that will be processed into a Vec
     /// This is useful for pre-processing files (e.g., semantic analysis indexing)
     pub fn collect_files(&self) -> Vec<PathBuf> {
-        let search_base = match self.get_search_base() {
-            Ok(base) => base,
-            Err(_) => return Vec::new(),
-        };
+        self.try_collect_files().unwrap_or_default()
+    }
+
+    /// The files [`Self::execute`] would visit, in walk order, from one walk;
+    /// fails as it does on a bad base path or glob.
+    pub fn try_collect_files(&self) -> Result<Vec<PathBuf>, String> {
+        let search_base = self.get_search_base()?;
 
         if let Some(files) = self.explicit_files.clone() {
-            return files;
+            return Ok(files);
         }
 
-        let globs = match self.build_globs(&search_base) {
-            Ok(globs) => globs,
-            Err(_) => return Vec::new(),
-        };
+        let globs = self.build_globs(&search_base)?;
 
-        let walker = self
-            .create_walk_builder(&search_base, globs)
-            .threads(1)
-            .build();
+        let walker = file_walker(&search_base, globs).threads(1).build();
 
         let mut files = Vec::new();
         for dir_entry in walker.flatten() {
@@ -289,28 +365,7 @@ impl CodemodExecutionConfig {
             }
         }
 
-        files
-    }
-
-    /// Create a configured WalkBuilder with all the standard settings
-    fn create_walk_builder(&self, base_path: &Path, overrides: Option<Override>) -> WalkBuilder {
-        let mut builder = WalkBuilder::new(base_path);
-
-        if let Some(overrides) = overrides {
-            builder.overrides(overrides);
-        }
-
-        builder
-            .follow_links(false)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .require_git(false)
-            .parents(true)
-            .ignore(true)
-            .hidden(false);
-
-        builder
+        Ok(files)
     }
 
     /// Get the search base path by combining target_path and base_path
@@ -331,57 +386,24 @@ impl CodemodExecutionConfig {
         }
     }
 
-    /// Build glob overrides for include/exclude patterns
+    /// Glob overrides for this configuration: its include globs, or its
+    /// languages' files when it has none, minus its exclude globs.
     fn build_globs(&self, base_path: &Path) -> Result<Option<Override>, String> {
-        let mut builder = OverrideBuilder::new(base_path);
-        let mut has_patterns = false;
-
-        if self.include_globs.is_none()
-            && self
-                .languages
-                .as_ref()
-                .is_some_and(|langs| !langs.is_empty())
-        {
-            for language in self.languages.as_ref().unwrap() {
-                for extension in get_extensions_for_language(language.parse().unwrap()) {
-                    builder
-                        .add(format!("**/*{extension}").as_str())
-                        .map_err(|e| format!("Failed to add language pattern: {e}"))?;
-                    has_patterns = true;
+        let include = match &self.include_globs {
+            Some(globs) => globs.clone(),
+            None => {
+                let mut globs = Vec::new();
+                for language in self.languages.iter().flatten() {
+                    globs.extend(language_globs(language)?);
                 }
+                globs
             }
-        }
-
-        if let Some(ref include_globs) = self.include_globs {
-            for glob in include_globs {
-                builder
-                    .add(glob)
-                    .map_err(|e| format!("Invalid include glob '{glob}': {e}"))?;
-                has_patterns = true;
-            }
-        }
-
-        if let Some(ref exclude_globs) = self.exclude_globs {
-            for glob in exclude_globs {
-                let exclude_pattern = if glob.starts_with('!') {
-                    glob.to_string()
-                } else {
-                    format!("!{glob}")
-                };
-                builder
-                    .add(&exclude_pattern)
-                    .map_err(|e| format!("Invalid exclude glob '{exclude_pattern}': {e}"))?;
-                has_patterns = true;
-            }
-        }
-
-        if has_patterns {
-            Ok(Some(builder.build().map_err(|e| {
-                format!("Failed to build glob overrides: {e}")
-            })?))
-        } else {
-            Ok(None)
-        }
+        };
+        glob_overrides(
+            base_path,
+            &include,
+            self.exclude_globs.as_deref().unwrap_or_default(),
+        )
     }
 }
 
@@ -398,6 +420,34 @@ mod tests {
             std::env::temp_dir().join(format!("butterflow-exec-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn select_files_skips_git_files_but_not_other_hidden_files() {
+        let root = temp_dir();
+        for path in [
+            ".git/HEAD",
+            ".git/config",
+            "sub/.git",
+            ".github/CODEOWNERS",
+            "a.ts",
+        ] {
+            let file = root.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(&file, "x").unwrap();
+        }
+        let files: Vec<String> = super::select_files(&root, &["**/*".to_string()], &[])
+            .unwrap()
+            .into_iter()
+            .map(|file| {
+                file.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert_eq!(files, vec![".github/CODEOWNERS", "a.ts"]);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

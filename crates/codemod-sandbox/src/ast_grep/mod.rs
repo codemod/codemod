@@ -1,6 +1,6 @@
 pub(crate) mod sg_node;
 mod types;
-mod utils;
+pub(crate) mod utils;
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod wasm_lang;
@@ -37,7 +37,10 @@ use crate::{
     utils::quickjs_utils::maybe_promise,
 };
 use rquickjs::module::{Declarations, Exports, ModuleDef};
-use rquickjs::{prelude::Func, Class, Ctx, Exception, Function, Object, Result, Value};
+use rquickjs::{
+    prelude::{Func, Opt},
+    Class, Ctx, Exception, Function, Object, Result, Value,
+};
 #[cfg(feature = "native")]
 use std::{str::FromStr, sync::Arc};
 
@@ -47,10 +50,15 @@ pub(crate) mod scanner;
 pub(crate) mod serde;
 
 #[cfg(feature = "native")]
-pub use native::{scan_file_with_combined_scan, with_combined_scan};
+pub use native::{
+    scan_file_with_combined_scan, scan_pass, scan_pass_as, scan_text_with_combined_scan,
+    with_combined_scan, with_combined_scan_of, LanguageScan, ScanPass,
+};
 
+/// The `codemod/ast-grep` runtime module. Public so other hosts can register
+/// it in their own QuickJS runtimes.
 #[allow(dead_code)]
-pub(crate) struct AstGrepModule;
+pub struct AstGrepModule;
 
 impl ModuleDef for AstGrepModule {
     fn declare(declare: &Declarations) -> Result<()> {
@@ -89,12 +97,219 @@ impl ModuleDef for AstGrepModule {
     }
 }
 
-pub(crate) fn parse_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<'_>> {
-    SgRootRjs::try_new(lang, src, None, None)
-        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
+/// The language `parse(text)` and `parse(file)` use when the call does not
+/// name one. Hosts that know it store this as userdata: a workflow's
+/// `forEachFile` step sets it to the selector's `language`.
+#[derive(Debug, Clone)]
+pub struct DefaultParseLanguage(pub String);
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for DefaultParseLanguage {
+    type Changed<'to> = DefaultParseLanguage;
 }
 
-fn parse_async_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<'_>> {
+/// The semantic analysis roots made by `parse(...)` get, when the host
+/// stores one: a workflow's `forEachFile` step does, as its selector's
+/// `semanticAnalysis` says.
+#[cfg(feature = "native")]
+#[derive(Clone)]
+pub struct ParseSemanticProvider(pub Arc<dyn language_core::SemanticProvider>);
+
+#[cfg(feature = "native")]
+unsafe impl<'js> rquickjs::JsLifetime<'js> for ParseSemanticProvider {
+    type Changed<'to> = ParseSemanticProvider;
+}
+
+/// What a `parse(...)` call asks for, after sorting out its forms.
+struct ParseRequest {
+    language: String,
+    text: String,
+    filename: Option<String>,
+}
+
+/// `parse` accepts:
+///
+/// - `parse(lang, text)`: the original form;
+/// - `parse(text)` and `parse(text, { language })`;
+/// - `parse(file)` and `parse(file, { language })`, where `file` is an
+///   object with `text` and optionally `path` and `language` (a workflow
+///   `forEachFile` file). The root's `filename()` is then the file's path.
+///
+/// Without a language in the call, it comes from the file object, then the
+/// host's [`DefaultParseLanguage`], then the file's extension.
+fn parse_request<'js>(
+    ctx: &Ctx<'js>,
+    source: Value<'js>,
+    second: Option<Value<'js>>,
+) -> Result<ParseRequest> {
+    let language_option = |value: &Value<'js>| -> Result<Option<String>> {
+        match value.as_object() {
+            Some(object) => object.get::<_, Option<String>>("language"),
+            None => Ok(None),
+        }
+    };
+    let default_language = || ctx.userdata::<DefaultParseLanguage>().map(|l| l.0.clone());
+
+    if let Some(text) = source.as_string() {
+        let text = text.to_string()?;
+        if let Some(second) = second.as_ref().and_then(|v| v.as_string()) {
+            // parse(lang, text)
+            return Ok(ParseRequest {
+                language: text,
+                text: second.to_string()?,
+                filename: None,
+            });
+        }
+        let language = match &second {
+            Some(value) => language_option(value)?,
+            None => None,
+        }
+        .or_else(default_language)
+        .ok_or_else(|| {
+            Exception::throw_message(
+                ctx,
+                "parse(text) needs a language: parse(text, { language: \"tsx\" })",
+            )
+        })?;
+        return Ok(ParseRequest {
+            language,
+            text,
+            filename: None,
+        });
+    }
+
+    let Some(object) = source.as_object() else {
+        return Err(Exception::throw_type(
+            ctx,
+            "parse() expects source text or a file object, for example parse(file) or parse(text, { language })",
+        ));
+    };
+    let Some(text) = object.get::<_, Option<String>>("text")? else {
+        return Err(Exception::throw_type(
+            ctx,
+            "parse(file) expects an object with a string `text`, such as the file a forEachFile callback receives",
+        ));
+    };
+    let path: Option<String> = object.get("path")?;
+    let mut language = match &second {
+        Some(value) => language_option(value)?,
+        None => None,
+    };
+    if language.is_none() {
+        language = object.get::<_, Option<String>>("language")?;
+    }
+    let language = language
+        .or_else(default_language)
+        .or_else(|| path.as_deref().and_then(language_from_path))
+        .ok_or_else(|| {
+            Exception::throw_message(
+                ctx,
+                &format!(
+                    "parse(file): no language for '{}'; pass one with parse(file, {{ language }})",
+                    path.as_deref().unwrap_or("<file>")
+                ),
+            )
+        })?;
+    Ok(ParseRequest {
+        language,
+        text,
+        filename: path.map(|path| absolute_filename(ctx, path)),
+    })
+}
+
+#[cfg(feature = "native")]
+fn language_from_path(path: &str) -> Option<String> {
+    use ast_grep_core::Language;
+    CodemodLang::from_path(path).map(|lang| lang.to_string())
+}
+
+#[cfg(not(feature = "native"))]
+fn language_from_path(_path: &str) -> Option<String> {
+    None
+}
+
+/// A relative file path, made absolute against the run's target directory
+/// so `filename()` and semantic lookups see a real path.
+#[cfg(feature = "native")]
+fn absolute_filename(ctx: &Ctx<'_>, path: String) -> String {
+    let relative = std::path::Path::new(&path);
+    if relative.is_absolute() {
+        return path;
+    }
+    match ctx.userdata::<crate::sandbox::engine::execution_engine::TargetDirectory>() {
+        // Part by part, so the separators are the platform's.
+        Some(target) => relative
+            .components()
+            .fold(target.0.clone(), |path, part| path.join(part))
+            .to_string_lossy()
+            .into_owned(),
+        None => path,
+    }
+}
+
+#[cfg(not(feature = "native"))]
+fn absolute_filename(_ctx: &Ctx<'_>, path: String) -> String {
+    path
+}
+
+fn parse_with<'js>(
+    ctx: Ctx<'js>,
+    source: Value<'js>,
+    second: Opt<Value<'js>>,
+) -> Result<SgRootRjs<'js>> {
+    let request = parse_request(&ctx, source, second.0)?;
+    #[cfg(feature = "native")]
+    let target_directory = request.filename.as_ref().and_then(|_| {
+        ctx.userdata::<crate::sandbox::engine::execution_engine::TargetDirectory>()
+            .map(|guard| guard.0.clone())
+    });
+    #[cfg(not(feature = "native"))]
+    let target_directory: Option<std::path::PathBuf> = None;
+    #[cfg(feature = "native")]
+    if let Some(ParseSemanticProvider(provider)) = ctx
+        .userdata::<ParseSemanticProvider>()
+        .map(|p| (*p).clone())
+    {
+        let language = CodemodLang::from_str(&request.language).map_err(|e| {
+            Exception::throw_message(
+                &ctx,
+                &format!(
+                    "Failed to parse: unsupported language {}: {e}",
+                    request.language
+                ),
+            )
+        })?;
+        let grep = ast_grep_core::AstGrep::new(request.text, language);
+        return SgRootRjs::try_new_with_semantic(
+            grep,
+            request.filename,
+            Some(provider),
+            None,
+            target_directory.as_deref(),
+        )
+        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")));
+    }
+    SgRootRjs::try_new(
+        request.language,
+        request.text,
+        request.filename,
+        target_directory.as_deref(),
+    )
+    .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
+}
+
+pub(crate) fn parse_rjs<'js>(
+    ctx: Ctx<'js>,
+    source: Value<'js>,
+    second: Opt<Value<'js>>,
+) -> Result<SgRootRjs<'js>> {
+    parse_with(ctx, source, second)
+}
+
+fn parse_async_rjs<'js>(
+    ctx: Ctx<'js>,
+    source: Value<'js>,
+    second: Opt<Value<'js>>,
+) -> Result<SgRootRjs<'js>> {
     #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
     {
         if !wasm_lang::WasmLang::is_parser_initialized() {
@@ -102,15 +317,33 @@ fn parse_async_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<
         }
     }
 
-    // Call the same implementation as parse_rjs since the async setup should be done by now
-    SgRootRjs::try_new(lang, src, None, None)
-        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
+    // Same as parse: the async setup is done by now.
+    parse_with(ctx, source, second)
 }
 
 #[cfg(feature = "native")]
 fn parse_file_rjs(ctx: Ctx<'_>, lang: String, file_path: String) -> Result<SgRootRjs<'_>> {
-    let file_content = std::fs::read_to_string(file_path.clone())
-        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to read file: {e}")))?;
+    use crate::sandbox::engine::{
+        target_files::{TargetFiles, WorkflowBody},
+        CallbackIsolate,
+    };
+
+    if ctx.userdata::<WorkflowBody>().is_some() {
+        return Err(Exception::throw_message(
+            &ctx,
+            "parseFile() is not available in the workflow body; use files.read() inside a callback",
+        ));
+    }
+
+    let file_content = if ctx.userdata::<CallbackIsolate>().is_some() {
+        ctx.userdata::<TargetFiles>()
+            .ok_or_else(|| Exception::throw_message(&ctx, "target files are unavailable"))?
+            .read(&file_path)
+            .map_err(|e| Exception::throw_message(&ctx, &e))?
+    } else {
+        std::fs::read_to_string(&file_path)
+            .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to read file: {e}")))?
+    };
     SgRootRjs::try_new(lang, file_content, Some(file_path), None)
         .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
 }
@@ -201,18 +434,29 @@ fn jssg_transform_rjs<'js>(
         .map(|flag| flag.0)
         .unwrap_or(false);
 
-    let file_path = std::path::Path::new(&path_to_file);
+    let file_path = crate::sandbox::engine::execution_engine::native_path(&path_to_file);
 
     // Validate: file path must resolve within the target directory
-    validate_path_within_target(&ctx, file_path, "jssgTransform()")?;
+    validate_path_within_target(&ctx, &file_path, "jssgTransform()")?;
 
-    // Read the file
-    let content = std::fs::read_to_string(file_path).map_err(|e| {
+    // Read the file: as the step has it so far when the caller keeps its
+    // unwritten files, else from disk.
+    let read_error = |e: std::io::Error| {
         Exception::throw_message(
             &ctx,
             &format!("Failed to read file '{}': {}", path_to_file, e),
         )
-    })?;
+    };
+    let (content, taken) = match &file_changes.pending {
+        Some(pending) => {
+            let (content, taken) = pending.take(&file_path).map_err(read_error)?;
+            (content, Some(taken))
+        }
+        None => (
+            std::fs::read_to_string(&file_path).map_err(read_error)?,
+            None,
+        ),
+    };
 
     // Parse with language and filename
     let target_directory = ctx
@@ -225,7 +469,8 @@ fn jssg_transform_rjs<'js>(
         Some(path_to_file.clone()),
         target_directory.as_deref(),
     )
-    .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?;
+    .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?
+    .into_transformed_file();
 
     let sg_root_inner = Arc::clone(&sg_root.inner);
 
@@ -259,7 +504,8 @@ fn jssg_transform_rjs<'js>(
             .await
             .map_err(|e| Exception::throw_message(&ctx2, &format!("Transform failed: {e}")))?;
 
-        let exec_result = process_transform_result(
+        // A nested transform's `data` has no step result to go to.
+        let (exec_result, _data) = process_transform_result(
             &result,
             &sg_root_inner,
             ModificationCheck::StringEquality {
@@ -276,12 +522,31 @@ fn jssg_transform_rjs<'js>(
             _ => None,
         };
 
+        // The next transform of this file starts from this one's result. A
+        // take that has ended (the transform calling this one finished
+        // without waiting for it) keeps nothing, and records nothing.
+        if let Some(taken) = &taken {
+            let kept = match &return_content {
+                Some(content) => taken.set(content.clone()),
+                None => taken.is_current(),
+            };
+            if !kept {
+                return Err(Exception::throw_message(
+                    &ctx2,
+                    &format!(
+                        "jssgTransform() on '{path_to_file}' finished after the transform that called it; await it"
+                    ),
+                ));
+            }
+        }
+        drop(taken);
+
         // Push the file change to the shared accumulator instead of writing to disk
         let mut changes = file_changes.changes.lock().map_err(|e| {
             Exception::throw_message(&ctx2, &format!("Failed to lock file_changes mutex: {e}"))
         })?;
         changes.push(FileChange {
-            path: std::path::PathBuf::from(&path_to_file),
+            path: file_path,
             result: exec_result,
         });
 

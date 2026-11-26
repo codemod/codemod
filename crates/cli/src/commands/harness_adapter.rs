@@ -19,12 +19,12 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
-const MCS_SKILL_VERSION: &str = "1.2.7";
+const MCS_SKILL_VERSION: &str = "1.2.8";
 const MCS_COMMAND_NAME: &str = "codemod";
 const SKILL_PACKAGE_COMPATIBILITY_MARKER: &str = "codemod-compatibility: skill-package-v1";
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
 const MCS_COMPATIBILITY_MARKER: &str = "codemod-compatibility: mcs-v1";
-const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.2.7";
+const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.2.8";
 const CODEMOD_VERSION_MARKER_PREFIX: &str = "codemod-skill-version:";
 const MCP_SERVER_NAME: &str = "codemod";
 const CODEMOD_CLI_COMMAND: &str = "codemod";
@@ -43,8 +43,9 @@ const MCS_COMMAND_MD: &str =
 
 const SDK_MIGRATION_SKILL_COMPONENT_ID: &str = "sdk-migration";
 const SDK_MIGRATION_SKILL_DIR_NAME: &str = "sdk-migration";
-const SDK_MIGRATION_SKILL_VERSION: &str = "0.1.7";
-const SDK_MIGRATION_VERSION_MARKER: &str = "codemod-skill-version: 0.1.7";
+const SDK_MIGRATION_SKILL_VERSION: &str = "0.1.8";
+#[cfg(test)]
+const SDK_MIGRATION_VERSION_MARKER: &str = "codemod-skill-version: 0.1.8";
 const SDK_MIGRATION_SKILL_MD: &str = include_str!("../../../../skills/sdk-migration/SKILL.md");
 const SDK_MIGRATION_COMMAND_MD: &str =
     include_str!("../../../../skills/sdk-migration/commands/sdk-migration.md");
@@ -631,26 +632,28 @@ pub fn resolve_adapter(harness: Harness) -> AdapterResult<ResolvedAdapter> {
     resolve_adapter_with_runtime(harness, &runtime_paths)
 }
 
-/// Agents export these to the commands they run; the editor-terminal
-/// variable comes last so an agent running inside Cursor's terminal wins.
-const AGENT_ENV_MARKERS: &[(&str, Harness)] = &[
-    ("CLAUDECODE", Harness::Claude),
-    ("CODEX_THREAD_ID", Harness::Codex),
-    ("CODEX_SANDBOX", Harness::Codex),
-    ("CODEX_CI", Harness::Codex),
-    ("CURSOR_AGENT", Harness::Cursor),
-    ("OPENCODE_CLIENT", Harness::Opencode),
-    ("GOOSE_TERMINAL", Harness::Goose),
-    ("ANTIGRAVITY_AGENT", Harness::Antigravity),
-    ("CURSOR_TRACE_ID", Harness::Cursor),
-];
-
+/// The harness of the agent whose variables are in the environment.
+/// `codemod_agents` knows which variables each agent exports to the commands
+/// it runs; an editor's terminal variable counts last, so an agent running
+/// inside Cursor's terminal wins.
 pub(crate) fn detect_harness_from_env(lookup: impl Fn(&str) -> Option<String>) -> Option<Harness> {
-    AGENT_ENV_MARKERS.iter().find_map(|(name, harness)| {
-        lookup(name)
-            .filter(|value| !value.trim().is_empty())
-            .map(|_| *harness)
-    })
+    let is_set = |name: &str| lookup(name).is_some_and(|value| !value.trim().is_empty());
+    codemod_agents::agents_in_env(is_set)
+        .into_iter()
+        .find_map(|agent| harness_for_agent(agent.id()))
+}
+
+/// The harness for a `codemod_agents` agent id, for the agents that have one.
+fn harness_for_agent(id: &str) -> Option<Harness> {
+    match id {
+        "claude-code" => Some(Harness::Claude),
+        "codex" => Some(Harness::Codex),
+        "cursor" => Some(Harness::Cursor),
+        "opencode" => Some(Harness::Opencode),
+        "goose" => Some(Harness::Goose),
+        "antigravity" => Some(Harness::Antigravity),
+        _ => None,
+    }
 }
 
 pub(crate) fn resolve_adapter_with_runtime(
@@ -660,11 +663,7 @@ pub(crate) fn resolve_adapter_with_runtime(
     let (resolved_harness, warnings, detected_by) = match harness {
         Harness::Auto => match detect_auto_harness_marker(&runtime_paths.cwd) {
             Some((detected, marker)) => (detected, Vec::new(), Some(format!("found {marker}"))),
-            None => (
-                Harness::Claude,
-                vec![NO_AGENT_DETECTED_WARNING.to_string()],
-                None,
-            ),
+            None => (Harness::Claude, vec![no_agent_detected_warning()], None),
         },
         explicit => (explicit, Vec::new(), None),
     };
@@ -687,7 +686,14 @@ pub(crate) fn resolve_adapter_with_runtime(
     })
 }
 
-pub(crate) const NO_AGENT_DETECTED_WARNING: &str = "No coding agent detected here, so Codemod was set up for Claude Code. Using a different agent? Run `npx codemod ai --harness <cursor|codex|opencode|goose>`.";
+/// Names this version's `codemod ai`: a bare `npx codemod` is 1.x while 2.x
+/// is a prerelease.
+pub(crate) fn no_agent_detected_warning() -> String {
+    format!(
+        "No coding agent detected here, so Codemod was set up for Claude Code. Using a different agent? Run `{}`.",
+        crate::utils::cli_command::npx_codemod("ai --harness <cursor|codex|opencode|goose>")
+    )
+}
 
 fn detect_auto_harness_marker(cwd: &Path) -> Option<(Harness, &'static str)> {
     // OpenCode projects are frequently configured with only a root-level
@@ -6304,7 +6310,10 @@ codemod-skill-version: 0.1.0
 
         assert_eq!(
             resolved.warnings,
-            vec![NO_AGENT_DETECTED_WARNING.to_string()]
+            vec![format!(
+                "No coding agent detected here, so Codemod was set up for Claude Code. Using a different agent? Run `npx codemod@{} ai --harness <cursor|codex|opencode|goose>`.",
+                crate::CLI_VERSION
+            )]
         );
     }
 
@@ -6322,15 +6331,52 @@ codemod-skill-version: 0.1.0
     fn the_agent_running_the_install_is_detected_from_its_environment() {
         for (variable, expected) in [
             ("CLAUDECODE", Harness::Claude),
+            ("CLAUDE_CODE_ENTRYPOINT", Harness::Claude),
+            ("CLAUDE_CODE_SESSION_ID", Harness::Claude),
             ("CODEX_THREAD_ID", Harness::Codex),
+            ("CODEX_SESSION_ID", Harness::Codex),
+            ("CODEX_SANDBOX", Harness::Codex),
+            ("CODEX_CI", Harness::Codex),
             ("CURSOR_AGENT", Harness::Cursor),
             ("CURSOR_TRACE_ID", Harness::Cursor),
+            ("OPENCODE", Harness::Opencode),
+            ("OPENCODE_SESSION_ID", Harness::Opencode),
             ("OPENCODE_CLIENT", Harness::Opencode),
             ("GOOSE_TERMINAL", Harness::Goose),
+            ("ANTIGRAVITY_AGENT", Harness::Antigravity),
         ] {
             let detected = detect_harness_from_env(|name| (name == variable).then(|| "1".into()));
             assert_eq!(detected, Some(expected), "{variable}");
         }
+    }
+
+    #[test]
+    fn every_harness_is_the_harness_of_a_supported_agent() {
+        let mut harnesses: Vec<&str> = codemod_agents::agents()
+            .filter_map(|agent| harness_for_agent(agent.id()))
+            .map(|harness| harness.as_str())
+            .collect();
+        harnesses.sort_unstable();
+        assert_eq!(
+            harnesses,
+            [
+                "antigravity",
+                "claude",
+                "codex",
+                "cursor",
+                "goose",
+                "opencode"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_agent_without_a_harness_does_not_hide_the_editor_it_runs_in() {
+        let detected = detect_harness_from_env(|name| {
+            matches!(name, "GEMINI_CLI" | "CURSOR_TRACE_ID").then(|| "1".into())
+        });
+
+        assert_eq!(detected, Some(Harness::Cursor));
     }
 
     #[test]

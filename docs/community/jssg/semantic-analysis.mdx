@@ -1,13 +1,18 @@
 ---
 title: "Semantic Analysis"
 description: "Find symbol definitions and references across your codebase using semantic analysis in JSSG codemods"
+tag: "Experimental"
 ---
+
+import Experimental from "/snippets/experimental.mdx";
+
+<Experimental />
 
 Semantic analysis enables your codemods to understand symbol relationships in code—finding where variables are defined, tracking all references to a function, or discovering cross-file dependencies. This goes beyond pattern matching to provide IDE-like intelligence for your transformations.
 
 ## When to enable it
 
-Pattern matching alone is not enough when **symbol origin** matters. Enable `semantic_analysis` on the `js-ast-grep` step (usually `file` first; `workspace` when you need cross-file resolution) before you ship if any of these are true:
+Pattern matching alone is not enough when **symbol origin** matters. Use the `jssg` task's `semanticAnalysis` option in `workflow.ts` (`"file"` by default; `"workspace"` when you need cross-file resolution). In legacy YAML, set `semantic_analysis` on the `js-ast-grep` step. Check symbol origin before you ship if any of these are true:
 
 | Risk | Example | What to do |
 | --- | --- | --- |
@@ -102,6 +107,15 @@ interface DefinitionResult<M> {
 - No semantic provider is configured
 - No symbol is found at this position
 
+In workspace scope, JS/TS definitions follow re-exports to the original declaration. An imported
+name, and the name inside a named re-export (`export { a } from "./a"`,
+`export { a as b } from "./a"`, `import { a } from "./a"; export { a }`), resolve to the
+declaration, passing through any `export *` on the way. A name used in the file (for example a
+call site) resolves to its local binding in the import statement first (`kind: 'local'`); call
+`definition()` on that node to reach the declaration. Module specifiers resolve as the root
+tsconfig says (its `paths`), and through workspace packages linked in `node_modules`; a bare
+specifier that doesn't resolve that way is tried again with the tsconfig nearest the importing file.
+
 <Note>
   When a symbol comes from an unresolved import
   (e.g., `import x from "some-external-module"`), `definition()` now returns the import statement 
@@ -135,6 +149,11 @@ interface FileReferences<M> {
   In file scope mode, `references()` only searches the current file. In
   workspace scope mode, it searches all indexed files in the workspace.
 </Note>
+
+In workspace scope, `references()` on an exported declaration also finds files that import it
+through barrels, plus the source-side name of each named re-export (`a` in
+`export { a as b } from "./a"`). An `export *` is followed but has no node of its own in the
+result. On a name inside a re-export it answers for the declaration being re-exported.
 
 ### `root.write(content)`
 
@@ -209,6 +228,8 @@ Configure semantic analysis mode. Can be:
 - `"file"` — Single-file analysis (default)
 - `"workspace"` — Workspace-wide analysis using the target path
 - `{ mode: "workspace", root: "./path" }` — Workspace-wide with custom root
+
+In `workflow.ts`, the `jssg` task's `semanticAnalysis` option takes the same values, and `"none"` turns analysis off.
 </ParamField>
 
 **Run the workflow:**
@@ -856,7 +877,7 @@ for (const fileRef of refs) {
 <AccordionGroup>
 <Accordion title="Semantic methods return null/empty">
 **Possible causes:**
-- No semantic analysis configured in workflow (add `semantic_analysis: workspace`)
+- Semantic analysis is turned off for the step (`semanticAnalysis: "none"`), or the symbol is in another file and the step uses the default file scope (use `semanticAnalysis: "workspace"`, or `semantic_analysis: workspace` in `workflow.yaml`)
 - The language isn't supported (only JavaScript/TypeScript and Python)
 - The symbol couldn't be resolved (external library, syntax error)
 

@@ -1,222 +1,248 @@
-use anyhow::{Context, Result};
-use butterflow_core::utils;
-use butterflow_models::{Task, TaskStatus};
+use anyhow::{anyhow, Result};
+use butterflow_state::run_store::{RunRecord, StepRecord};
 use clap::Args;
-use std::collections::HashMap;
-use tabled::settings::{object::Columns, Alignment, Modify, Style};
+use serde_json::{json, Value};
 use tabled::{Table, Tabled};
-use uuid::Uuid;
 
-use crate::engine::create_engine;
+use crate::workflow_exec::{status_label, store};
 
-use super::list::WorkflowRunRow;
+/// How `workflow status` and `workflow list` print.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ListFormat {
+    #[default]
+    Text,
+    /// One JSON document on stdout
+    Json,
+}
 
 #[derive(Args, Debug)]
 pub struct Command {
     /// Workflow run ID
     #[arg(short, long)]
-    id: Uuid,
-}
-
-#[derive(Tabled)]
-pub struct TaskRow {
-    #[tabled(rename = "ID")]
-    pub id: String,
-    #[tabled(rename = "Node ID")]
-    pub node_id: String,
-    #[tabled(rename = "Status")]
-    pub status: String,
-    #[tabled(rename = "Matrix Info")]
-    pub matrix_info: String,
-}
-
-#[derive(Tabled)]
-struct ManualTriggerRow {
-    #[tabled(rename = "ID")]
     id: String,
-    #[tabled(rename = "Node ID")]
-    node_id: String,
-    #[tabled(rename = "Matrix Info")]
-    matrix_info: String,
+
+    /// Output format: "text" (default), or "json" with the steps' results and the run's output
+    #[arg(long, value_enum, default_value_t = ListFormat::Text)]
+    format: ListFormat,
 }
 
-/// Show workflow status
-pub async fn handler(args: &Command) -> Result<()> {
-    let (engine, _) = create_engine(
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        None,
-        None,
-        false,
-        None,
-        false,
-        Default::default(),
-        None,
-        None,
-        None,
-    )?;
-
-    // Get workflow run
-    let workflow_run = engine
-        .get_workflow_run(args.id)
-        .await
-        .context("Failed to get workflow run")?;
-
-    // Get tasks
-    let tasks = engine
-        .get_tasks(args.id)
-        .await
-        .context("Failed to get tasks")?;
-
-    let rows = vec![WorkflowRunRow {
-        id: workflow_run.id.to_string(),
-        name: workflow_run
-            .workflow
-            .nodes
-            .first()
-            .map(|n| n.name.clone())
-            .unwrap_or("unknown".to_string()),
-        status: format!("{:?}", workflow_run.status),
-        started_at: workflow_run.started_at.to_string(),
-        ended_at: workflow_run
-            .ended_at
-            .map(|d| d.to_string())
-            .unwrap_or("unknown".to_string()),
-        duration: utils::format_duration(
-            workflow_run
-                .ended_at
-                .map(|d| {
-                    d.signed_duration_since(workflow_run.started_at)
-                        .num_seconds() as u64
-                })
-                .unwrap_or(0),
-        ),
-    }];
-    let mut table = Table::new(rows);
-
-    table
-        .with(Style::rounded())
-        .with(Modify::new(Columns::new(..)).with(Alignment::left())); // align all columns left
-
-    println!("{table}");
-
-    // Group tasks by node
-    let mut tasks_by_node: HashMap<String, Vec<&Task>> = HashMap::new();
-    for task in &tasks {
-        tasks_by_node
-            .entry(task.node_id.clone())
-            .or_default()
-            .push(task);
-    }
-    let mut tasks_rows = Vec::new();
-
-    // Print tasks
-    for node in &workflow_run.workflow.nodes {
-        let empty_tasks: Vec<&Task> = Vec::new();
-        let node_tasks = tasks_by_node.get(&node.id).unwrap_or(&empty_tasks);
-
-        // Find master task for matrix nodes
-        let master_task = node_tasks
+/// A run as `--format json` prints it, counting the files that failed in
+/// `steps`; the steps themselves only `with_steps` (`workflow list` leaves
+/// them out).
+pub(crate) fn run_json(
+    store: &dyn butterflow_state::run_store::RunStore,
+    run: &RunRecord,
+    steps: &[StepRecord],
+    with_steps: bool,
+) -> Value {
+    let mut value = json!({
+        "id": run.id,
+        "name": run.name,
+        "workflow": run.workflow_path,
+        "target": run.target,
+        "params": run.params,
+        "status": status_label(store, run),
+        "startedAt": run.started_at.to_rfc3339(),
+        "endedAt": run.ended_at.map(|ended| ended.to_rfc3339()),
+        "durationMs": run.ended_at.map(|ended| (ended - run.started_at).num_milliseconds().max(0)),
+        "awaiting": run.awaiting,
+        "question": run.question,
+        "error": run.error,
+        "output": run.output,
+        "exitCode": run.exit_code,
+        "codemodVersion": run.codemod_version,
+    });
+    value["failedFiles"] = steps
+        .iter()
+        .map(StepRecord::failed_files)
+        .sum::<usize>()
+        .into();
+    if with_steps {
+        value["steps"] = steps
             .iter()
-            .find(|t| t.master_task_id.is_none() && t.matrix_values.is_none());
+            .map(|step| {
+                json!({
+                    "position": step.position,
+                    "label": step.label,
+                    "kind": codemod_workflow::events::step_kind(&step.key),
+                    "status": step.status,
+                    "error": step.error,
+                    "result": step.result,
+                    "finishedAt": step.finished_at.and_then(chrono::DateTime::from_timestamp_millis).map(|at| at.to_rfc3339()),
+                    "durationMs": step.duration_ms,
+                    // Recorded only past 1, when the step was retried.
+                    "attempts": step.attempts.unwrap_or(1),
+                    // Steps that work on files; for steps recorded before
+                    // alpha.9, only partial ones.
+                    "files": step.files,
+                })
+            })
+            .collect();
+    }
+    value
+}
 
-        if let Some(master_task) = master_task {
-            tasks_rows.push(TaskRow {
-                id: master_task.id.to_string(),
-                node_id: node.id.clone(),
-                status: format!("{:?}", master_task.status),
-                matrix_info: "-".to_string(),
-            });
+#[derive(Tabled)]
+struct StepRow {
+    #[tabled(rename = "#")]
+    position: u64,
+    #[tabled(rename = "Step")]
+    label: String,
+    #[tabled(rename = "Status")]
+    status: String,
+    #[tabled(rename = "Error")]
+    error: String,
+}
 
-            // Print matrix tasks
-            for task in node_tasks.iter().filter(|t| t.master_task_id.is_some()) {
-                let matrix_info = task
-                    .matrix_values
-                    .as_ref()
-                    .map(|m| {
-                        m.iter()
-                            .map(|(k, v)| format!("{k}: {v}"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .unwrap_or_else(|| "unknown".to_string());
-                tasks_rows.push(TaskRow {
-                    id: master_task.id.to_string(),
-                    node_id: node.id.clone(),
-                    status: format!("{:?}", master_task.status),
-                    matrix_info,
-                });
-            }
-        } else if !node_tasks.is_empty() {
-            // Print regular task
-            let task = node_tasks[0];
-            tasks_rows.push(TaskRow {
-                id: task.id.to_string(),
-                node_id: node.id.clone(),
-                status: format!("{:?}", task.status),
-                matrix_info: "-".to_string(),
-            });
+/// Show a workflow run and its steps
+pub async fn handler(args: &Command) -> Result<()> {
+    let store = store();
+    let run = crate::workflow_exec::get_run(store.as_ref(), &args.id)?
+        .ok_or_else(|| anyhow!("run '{}' not found", args.id))?;
+    let steps = store.load_steps(&args.id)?;
+    if args.format == ListFormat::Json {
+        println!("{}", run_json(store.as_ref(), &run, &steps, true));
+        return Ok(());
+    }
+
+    println!("Run:       {}", run.id);
+    if let Some(name) = &run.name {
+        println!("Name:      {name}");
+    }
+    println!("Workflow:  {}", run.workflow_path.display());
+    println!("Target:    {}", run.target.display());
+    println!("Status:    {}", status_label(store.as_ref(), &run));
+    println!("Started:   {}", run.started_at.format("%Y-%m-%d %H:%M:%S"));
+    if let Some(ended) = run.ended_at {
+        println!(
+            "Ended:     {} ({})",
+            ended.format("%Y-%m-%d %H:%M:%S"),
+            humantime(ended - run.started_at)
+        );
+    }
+    if let Some(awaiting) = &run.awaiting {
+        println!("Waiting:   {awaiting}");
+    }
+    if let Some(question) = &run.question {
+        println!(
+            "Question:  {question} (codemod workflow resume --id {} --approve {question})",
+            run.id
+        );
+    }
+    if let Some(error) = &run.error {
+        println!("Error:     {error}");
+    }
+    if let Some(code) = run.exit_code {
+        println!("Exit code: {code}");
+    }
+    if let Some(output) = run.output.as_ref().filter(|output| !output.is_null()) {
+        let json = output.to_string();
+        if json.chars().count() > 200 {
+            let cut: String = json.chars().take(200).collect();
+            println!("Output:    {cut}… (all of it: --format json)");
         } else {
-            println!("Not found task for node: {}", node.id);
+            println!("Output:    {json}");
         }
     }
 
-    let mut tasks_table = Table::new(tasks_rows);
-
-    tasks_table
-        .with(Style::rounded())
-        .with(Modify::new(Columns::new(..)).with(Alignment::left()));
-
-    println!("Tasks:");
-    println!("{tasks_table}");
-
-    // Print manual triggers
-    let awaiting_tasks: Vec<&Task> = tasks
-        .iter()
-        .filter(|t| t.status == TaskStatus::AwaitingTrigger)
-        .collect();
-
-    if awaiting_tasks.is_empty() {
-        println!("Manual triggers: None");
-    } else {
-        let manual_trigger_rows: Vec<ManualTriggerRow> = awaiting_tasks
-            .iter()
-            .map(|t| {
-                let node = workflow_run
-                    .workflow
-                    .nodes
-                    .iter()
-                    .find(|n| n.id == t.node_id)
-                    .unwrap();
-                let matrix_info = t
-                    .matrix_values
-                    .as_ref()
-                    .map(|m| {
-                        m.iter()
-                            .map(|(k, v)| format!("{k}: {v}"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .unwrap_or_else(|| "-".to_string());
-
-                ManualTriggerRow {
-                    id: t.id.to_string(),
-                    node_id: node.id.clone(),
-                    matrix_info,
-                }
-            })
-            .collect();
-
-        let mut manual_triggers_table = Table::new(manual_trigger_rows);
-        manual_triggers_table
-            .with(Style::rounded())
-            .with(Modify::new(Columns::new(..)).with(Alignment::left())); // align all columns left
-
-        println!("Manual triggers:");
-        println!("{manual_triggers_table}");
+    if steps.is_empty() {
+        println!("\nNo steps recorded yet.");
+        return Ok(());
     }
+    let rows: Vec<StepRow> = steps
+        .iter()
+        .map(|step| StepRow {
+            position: step.position,
+            label: step.label.clone(),
+            status: step.status.as_str().to_string(),
+            error: step
+                .error
+                .as_deref()
+                .map(|e| e.lines().next().unwrap_or_default().to_string())
+                .unwrap_or_default(),
+        })
+        .collect();
+    println!("\n{}", Table::new(rows));
     Ok(())
+}
+
+fn humantime(duration: chrono::TimeDelta) -> String {
+    let seconds = duration.num_milliseconds() as f64 / 1000.0;
+    if seconds < 60.0 {
+        format!("{seconds:.1}s")
+    } else {
+        format!("{}m {}s", (seconds / 60.0) as u64, (seconds % 60.0) as u64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use butterflow_state::run_store::{
+        FileCount, MemoryStore, RunSettings, RunStatus, RunStore, StepStatus,
+    };
+
+    fn step(position: u64, attempts: Option<u32>, files: Option<FileCount>) -> StepRecord {
+        StepRecord {
+            position,
+            label: format!("step {position}"),
+            key: r#"[null,{"kind":"forEachFile"}]"#.into(),
+            status: StepStatus::Succeeded,
+            result: None,
+            error: None,
+            finished_at: None,
+            seq: None,
+            given: false,
+            since: None,
+            attempts,
+            files,
+            duration_ms: None,
+        }
+    }
+
+    #[test]
+    fn steps_show_their_attempts_and_files() {
+        let store = MemoryStore::default();
+        let run = RunRecord {
+            id: "a".into(),
+            name: None,
+            workflow_path: "workflow.ts".into(),
+            target: ".".into(),
+            params: Value::Null,
+            status: RunStatus::Succeeded,
+            started_at: chrono::Utc::now(),
+            ended_at: None,
+            awaiting: None,
+            question: None,
+            error: None,
+            output: None,
+            exit_code: None,
+            settings: RunSettings::default(),
+            codemod_version: None,
+        };
+        store.put_run(&run).unwrap();
+        let steps = [
+            step(
+                0,
+                None,
+                Some(FileCount {
+                    failed: 0,
+                    total: 3,
+                }),
+            ),
+            step(1, Some(3), None),
+        ];
+        let shown = run_json(&store, &run, &steps, true);
+        assert_eq!(shown["steps"][0]["attempts"], 1);
+        assert_eq!(
+            shown["steps"][0]["files"],
+            json!({ "failed": 0, "total": 3 })
+        );
+        assert_eq!(shown["steps"][0]["kind"], "forEachFile");
+        assert_eq!(shown["steps"][1]["attempts"], 3);
+        assert_eq!(shown["steps"][1]["files"], Value::Null);
+        let listed = run_json(&store, &run, &steps, false);
+        assert_eq!(listed["failedFiles"], 0);
+        assert!(listed.get("steps").is_none());
+    }
 }

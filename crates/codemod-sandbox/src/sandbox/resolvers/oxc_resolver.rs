@@ -18,6 +18,19 @@ use std::sync::Arc;
 pub struct OxcResolver {
     resolver: Arc<Resolver>,
     base_dir: PathBuf,
+    /// See [`OxcResolver::data_within`].
+    data_root: Option<PathBuf>,
+}
+
+/// Files that load as code. Anything else an import names is data (a YAML
+/// file loads as its content).
+fn is_script(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        matches!(
+            e.to_ascii_lowercase().as_str(),
+            "js" | "mjs" | "cjs" | "jsx" | "ts" | "mts" | "cts" | "tsx"
+        )
+    })
 }
 
 impl OxcResolver {
@@ -52,7 +65,26 @@ impl OxcResolver {
         Ok(Self {
             resolver: Arc::new(resolver),
             base_dir,
+            data_root: None,
         })
+    }
+
+    /// Resolve data files (anything that is not JavaScript or TypeScript)
+    /// only inside `root`, symbolic links followed: `import x from
+    /// "/home/me/.config/tool/hosts.yml"` would otherwise hand a workflow the
+    /// content of any YAML file on the machine. Code may still come from
+    /// outside (a hoisted `node_modules`, a helper shared by sibling
+    /// packages): loading it reveals nothing.
+    pub fn data_within(mut self, root: &Path) -> Result<Self, ResolverError> {
+        self.data_root =
+            Some(
+                root.canonicalize()
+                    .map_err(|_| ResolverError::ResolutionFailed {
+                        base: root.display().to_string(),
+                        name: "the workflow's package directory".into(),
+                    })?,
+            );
+        Ok(self)
     }
 }
 
@@ -85,7 +117,23 @@ impl ModuleResolver for OxcResolver {
 
         // Use oxc_resolver to resolve the module
         match self.resolver.resolve(&absolute_context, name) {
-            Ok(resolution) => Ok(resolution.full_path().to_string_lossy().to_string()),
+            Ok(resolution) => {
+                let path = resolution.full_path();
+                if let Some(root) = self.data_root.as_ref().filter(|_| !is_script(&path)) {
+                    let inside = path
+                        .canonicalize()
+                        .is_ok_and(|canonical| canonical.starts_with(root));
+                    if !inside {
+                        return Err(ResolverError::ResolutionFailed {
+                            base: base.to_string(),
+                            name: format!(
+                                "{name}: a data file outside the workflow's package cannot be imported"
+                            ),
+                        });
+                    }
+                }
+                Ok(path.to_string_lossy().to_string())
+            }
             Err(err) => Err(ResolverError::ResolutionFailed {
                 base: base.to_string(),
                 name: format!("{name}: {err}"),
@@ -100,6 +148,32 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn data_files_resolve_only_inside_the_package_and_code_anywhere() {
+        let root = TempDir::new().unwrap();
+        let package = root.path().join("package");
+        fs::create_dir(&package).unwrap();
+        fs::write(package.join("rules.yaml"), "id: a\n").unwrap();
+        fs::write(root.path().join("secrets.yml"), "token: t\n").unwrap();
+        fs::write(root.path().join("shared.js"), "").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.path().join("secrets.yml"), package.join("link.yml"))
+            .unwrap();
+        let resolver = OxcResolver::new(package.clone(), None)
+            .unwrap()
+            .data_within(&package)
+            .unwrap();
+        assert!(resolver.resolve("", "./rules.yaml").is_ok());
+        assert!(resolver.resolve("", "../shared.js").is_ok());
+        let outside = root.path().join("secrets.yml");
+        for name in ["../secrets.yml", outside.to_str().unwrap()] {
+            let error = resolver.resolve("", name).unwrap_err().to_string();
+            assert!(error.contains("outside the workflow's package"), "{error}");
+        }
+        #[cfg(unix)]
+        assert!(resolver.resolve("", "./link.yml").is_err());
+    }
 
     #[test]
     fn test_oxc_resolver_creation() {

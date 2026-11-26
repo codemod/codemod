@@ -39,7 +39,7 @@ use update::types::{UpdatePolicyMode, MANAGED_UPDATE_POLICY_LOCAL_SOURCE};
 #[derive(Args, Debug)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
 #[command(
-    about = "Install Codemod AI integrations, or run update/list subcommands",
+    about = "Install Codemod AI integrations, or run update/list subcommands (experimental)",
     after_help = "Run `codemod ai` without a subcommand to install Codemod integrations."
 )]
 pub struct Command {
@@ -188,6 +188,7 @@ struct FeedbackCommand {
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+    eprintln!("{}", crate::experimental_notice("codemod ai"));
     feedback::persist_feedback_consent_if_requested(args.allow_feedback)?;
 
     let result = match &args.action {
@@ -977,8 +978,7 @@ impl fmt::Display for ScopePromptOption {
 fn resolve_install_inputs(
     command: &InstallCommand,
 ) -> std::result::Result<InstallInputs, HarnessAdapterError> {
-    let interactive = !command.no_interactive
-        && std::io::stdin().is_terminal()
+    let interactive = crate::utils::interactive::is_interactive(command.no_interactive)
         && std::io::stdout().is_terminal();
     let scope_explicit = command.project || command.user;
 

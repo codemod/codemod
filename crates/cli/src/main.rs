@@ -6,24 +6,28 @@ use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 mod agent_log_renderer;
-mod agent_select;
 mod ascii_art;
+mod assess_preflight;
 mod auth;
 mod auth_provider;
 mod capabilities_security_callback;
 mod commands;
+mod control;
 mod diagnostics;
 mod dirty_git_check;
 mod engine;
 mod feedback;
+mod journal;
+mod launcher;
 mod person_telemetry;
 mod pro_dry_run;
 mod progress_bar;
 mod report_server;
 mod suitability;
-mod tui;
+mod user_settings;
 mod utils;
-mod workflow_runner;
+mod workflow_exec;
+mod workflow_test;
 use crate::auth::TokenStorage;
 use ascii_art::print_ascii_art;
 use codemod_telemetry::{
@@ -35,8 +39,12 @@ use codemod_telemetry::{
 
 pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub(crate) fn experimental_notice(api: &str) -> String {
+    format!("Experimental: {api} may change in a minor release.")
+}
+
 #[derive(Parser)]
-#[command(name = "codemod")]
+#[command(name = "codemod", after_help = crate::launcher::HELP)]
 #[command(
     about = "A self-hostable workflow engine for code transformations",
     long_about = "\x1b[32m      __                  __                                    __         \x1b[0m\n\x1b[32m     / /                 /\\ \\                                  /\\ \\        \x1b[0m\n\x1b[32m    / /   ___     ___    \\_\\ \\      __     ___ ___      ___    \\_\\ \\       \x1b[0m\n\x1b[32m   / /   /'___\\  / __`\\  /'_` \\   /'__`\\ /' __` __`\\   / __`\\  /'_` \\      \x1b[0m\n\x1b[32m  / /   /\\ \\__/ /\\ \\L\\ \\/\\ \\L\\ \\ /\\  __/ /\\ \\/\\ \\/\\ \\ /\\ \\L\\ \\/\\ \\L\\ \\  __ \x1b[0m\n\x1b[32m /_/    \\ \\____\\\\ \\____/\\ \\___,_\\\\ \\____\\\\ \\_\\ \\_\\ \\_\\\\ \\____/\\ \\___,_\\/\\_\\\x1b[0m\n\x1b[32m/_/      \\/____/ \\/___/  \\/__,_ / \\/____/ \\/_/\\/_/\\/_/ \\/___/  \\/__,_ /\\/_/\x1b[0m\n\x1b[32m                                                                           \x1b[0m\n\x1b[32m                                                                           \x1b[0m\n\nA self-hostable workflow engine for code transformations",
@@ -78,6 +86,9 @@ enum Commands {
     /// Show current authentication status
     Whoami(commands::whoami::Command),
 
+    /// Manage CLI telemetry preferences
+    Telemetry(commands::telemetry::Command),
+
     /// Publish a workflow
     Publish(commands::publish::Command),
 
@@ -96,10 +107,10 @@ enum Commands {
     /// Manage package cache
     Cache(commands::cache::Command),
 
-    /// Install and manage Codemod AI integrations
+    /// Install and manage Codemod AI integrations (experimental)
     Ai(commands::ai::Command),
 
-    /// Start MCP (Model Context Protocol) server
+    /// Start MCP (Model Context Protocol) server (experimental)
     Mcp(commands::mcp::Command),
 }
 
@@ -135,8 +146,21 @@ enum WorkflowCommands {
     /// Cancel a workflow run
     Cancel(commands::workflow::cancel::Command),
 
-    /// Browse and interact with workflow runs in the terminal
-    Tui(commands::workflow::tui::Command),
+    /// Send an event to a workflow run that waits for it (experimental)
+    Send(commands::workflow::send::Command),
+
+    /// Print a run's events, then follow it while it runs elsewhere (experimental)
+    Attach(commands::workflow::attach::Command),
+
+    /// Describe a workflow without running it: params, imports, capabilities, steps (experimental)
+    Inspect(commands::workflow::inspect::Command),
+
+    /// Convert workflow.yaml files to workflow.ts
+    Upgrade(commands::workflow::upgrade::Command),
+
+    /// Run one workflow test from a JSON spec on stdin (used by `codemod/testing`)
+    #[command(hide = true)]
+    Harness(commands::workflow::harness::Command),
 }
 
 #[derive(Subcommand, Debug)]
@@ -177,6 +201,7 @@ fn is_package_name(arg: &str) -> bool {
         "login",
         "logout",
         "whoami",
+        "telemetry",
         "publish",
         "manifest",
         "search",
@@ -208,51 +233,55 @@ enum NoCommandAction {
     RunPackage,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct NoCommandPromptOption {
     action: NoCommandAction,
-    label: &'static str,
+    label: String,
 }
 
 impl fmt::Display for NoCommandPromptOption {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.label)
+        formatter.write_str(&self.label)
     }
 }
 
+/// The commands are pinned to this version: a bare `npx codemod` is
+/// the `latest` tag, which is 1.x while 2.x is a prerelease.
 fn no_command_prompt_options() -> Vec<NoCommandPromptOption> {
+    use utils::cli_command::npx_codemod;
     vec![
         NoCommandPromptOption {
             action: NoCommandAction::Ai,
-            label: "Install Master Codemod Skills (npx codemod ai)",
+            label: format!("Install Master Codemod Skills ({})", npx_codemod("ai")),
         },
         NoCommandPromptOption {
             action: NoCommandAction::Init,
-            label: "Create a new codemod package (npx codemod init)",
+            label: format!("Create a new codemod package ({})", npx_codemod("init")),
         },
         NoCommandPromptOption {
             action: NoCommandAction::RunPackage,
-            label: "Run a published package (npx codemod <package>)",
+            label: format!("Run a published package ({})", npx_codemod("<package>")),
         },
     ]
 }
 
 fn no_command_message() -> String {
+    use utils::cli_command::npx_codemod;
     [
-        "No command provided.",
-        "",
-        "Next steps:",
-        "  1. Install Master Codemod Skills: npx codemod ai",
-        "  2. Create a new codemod package: npx codemod init",
-        "  3. Run a published package: npx codemod <package>",
-        "",
-        "Use --help for more usage information.",
+        "No command provided.".to_string(),
+        String::new(),
+        "Next steps:".to_string(),
+        format!("  1. Install Master Codemod Skills: {}", npx_codemod("ai")),
+        format!("  2. Create a new codemod package: {}", npx_codemod("init")),
+        format!("  3. Run a published package: {}", npx_codemod("<package>")),
+        String::new(),
+        "Use --help for more usage information.".to_string(),
     ]
     .join("\n")
 }
 
 fn should_prompt_for_no_command_action() -> bool {
-    io::stdin().is_terminal() && io::stdout().is_terminal()
+    crate::utils::interactive::is_interactive(false) && io::stdout().is_terminal()
 }
 
 fn exit_with_code(code: i32) -> ! {
@@ -271,6 +300,15 @@ fn effective_disable_analytics(cli: &Cli) -> bool {
             .trailing_args
             .iter()
             .any(|arg| arg == "--disable-analytics")
+        || do_not_track(std::env::var("DO_NOT_TRACK").ok().as_deref())
+}
+
+/// The `DO_NOT_TRACK` convention (consoledonottrack.com): set to anything
+/// but empty, `0` or `false`, it opts out like `DISABLE_ANALYTICS`.
+fn do_not_track(value: Option<&str>) -> bool {
+    value.map(str::trim).is_some_and(|value| {
+        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+    })
 }
 
 const PERSON_TRAITS_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
@@ -411,8 +449,30 @@ async fn handle_implicit_run_command(
 #[tokio::main]
 async fn main() {
     if let Err(error) = run_cli().await {
+        if let Some(failed) = error.downcast_ref::<workflow_exec::FinishedWithFailedFiles>() {
+            if !failed.quiet {
+                eprintln!("\n{}", console::style(failed).yellow().bold());
+            }
+            exit_with_code(workflow_exec::EXIT_FAILED_FILES);
+        }
+        if let Some(waiting) = error.downcast_ref::<workflow_exec::WaitingForInput>() {
+            // The text output already showed the question and the command.
+            if waiting.quiet {
+                eprintln!("{waiting}");
+            }
+            exit_with_code(workflow_exec::EXIT_WAITING);
+        }
+        if let Some(step @ codemod_workflow::EngineError::InterruptedStep { .. }) =
+            error.downcast_ref::<codemod_workflow::EngineError>()
+        {
+            eprintln!("{step}");
+            exit_with_code(workflow_exec::EXIT_WAITING);
+        }
+        if let Some(failed) = error.downcast_ref::<workflow_exec::FailedByWorkflow>() {
+            exit_with_code(failed.exit_code);
+        }
         if error
-            .downcast_ref::<workflow_runner::WorkflowFailureAlreadyReported>()
+            .downcast_ref::<workflow_exec::WorkflowFailureAlreadyReported>()
             .is_none()
             && error.downcast_ref::<NoCommandAlreadyReported>().is_none()
         {
@@ -431,74 +491,96 @@ async fn run_cli() -> Result<()> {
     let default_log_filter = if cli.verbose { "debug" } else { "error" };
     env_logger::init_from_env(env_logger::Env::default().default_filter_or(default_log_filter));
 
-    if effective_disable_analytics(&cli) {
+    let invocation_opt_out = effective_disable_analytics(&cli)
+        || matches!(
+            std::env::var("DISABLE_ANALYTICS").as_deref(),
+            Ok("true" | "1")
+        );
+    if let Some(Commands::Telemetry(args)) = &cli.command {
+        return commands::telemetry::handler(args, invocation_opt_out);
+    }
+    if !matches!(&cli.command, Some(Commands::Mcp(_)))
+        && !matches!(
+            &cli.command,
+            Some(Commands::Workflow(WorkflowArgs {
+                command: WorkflowCommands::Harness(_)
+            }))
+        )
+    {
+        commands::telemetry::maybe_print_notice();
+    }
+
+    let storage = (!invocation_opt_out).then(TokenStorage::new).transpose()?;
+    let saved_opt_out = storage
+        .as_ref()
+        .map(TokenStorage::telemetry_disabled)
+        .transpose()?
+        .unwrap_or(false);
+    if invocation_opt_out || saved_opt_out {
         std::env::set_var("DISABLE_ANALYTICS", "true");
     }
 
     let mut person_traits_task = None;
-    let telemetry_sender: TelemetrySenderMutex = if std::env::var("DISABLE_ANALYTICS")
-        == Ok("true".to_string())
-        || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
-    {
-        Arc::new(Box::new(NullSender {}))
-    } else {
-        let storage = TokenStorage::new()?;
-        let config = storage.load_config()?;
+    let telemetry_sender: TelemetrySenderMutex =
+        if let Some(storage) = storage.filter(|_| !saved_opt_out) {
+            let config = storage.load_config()?;
 
-        let auth = storage.get_auth_for_registry(&config.default_registry)?;
+            let auth = storage.get_auth_for_registry(&config.default_registry)?;
 
-        let distinct_id = auth
-            .as_ref()
-            .map(|auth| auth.user.id.clone())
-            .unwrap_or_else(|| {
-                storage
-                    .get_or_create_anonymous_telemetry_id()
-                    .unwrap_or_else(|error| {
-                        log::debug!("Failed to persist anonymous telemetry id: {error}");
-                        uuid::Uuid::new_v4().to_string()
-                    })
-            });
+            let distinct_id = auth
+                .as_ref()
+                .map(|auth| auth.user.id.clone())
+                .unwrap_or_else(|| {
+                    storage
+                        .get_or_create_anonymous_telemetry_id()
+                        .unwrap_or_else(|error| {
+                            log::debug!("Failed to persist anonymous telemetry id: {error}");
+                            uuid::Uuid::new_v4().to_string()
+                        })
+                });
 
-        let options = TelemetrySenderOptions {
-            distinct_id,
-            cloud_role: "CLI".to_string(),
-        };
+            let options = TelemetrySenderOptions {
+                distinct_id,
+                cloud_role: "CLI".to_string(),
+            };
 
-        let posthog = PostHogSender::new(options.clone())
-            .await
-            .inspect_err(|error| log::debug!("Failed to initialize PostHog telemetry: {error}"))
-            .ok();
-        let scarf = ScarfSender::new(options)
-            .inspect_err(|error| log::debug!("Failed to initialize Scarf telemetry: {error}"))
-            .ok();
+            let posthog = PostHogSender::new(options.clone())
+                .await
+                .inspect_err(|error| log::debug!("Failed to initialize PostHog telemetry: {error}"))
+                .ok();
+            let scarf = ScarfSender::new(options)
+                .inspect_err(|error| log::debug!("Failed to initialize Scarf telemetry: {error}"))
+                .ok();
 
-        // Person traits go to PostHog directly, never through the composite:
-        // Scarf would put the email in a URL query string. Anonymous
-        // installs have no traits and are never aliased to a user.
-        // Opt-out is resolved before this spawn (including implicit-run flag order).
-        if let (Some(posthog), Some(auth)) = (&posthog, auth) {
-            let posthog = posthog.clone();
-            person_traits_task = Some(tokio::spawn(async move {
-                person_telemetry::sync_person_traits(&storage, &posthog, &auth.user).await;
-            }));
-        }
-
-        // PostHog is the primary backend; Scarf is best-effort alongside it.
-        // If PostHog fails to initialize, Scarf can still carry telemetry
-        // on its own rather than disabling telemetry entirely.
-        match (posthog, scarf) {
-            (Some(posthog), scarf) => {
-                let mut sender = CompositeSender::new(Arc::new(posthog));
-                if let Some(scarf) = scarf {
-                    sender = sender.with_secondary(Arc::new(scarf));
-                }
-                let sender: Box<dyn TelemetrySender + Send + Sync> = Box::new(sender);
-                Arc::new(sender)
+            // Person traits go to PostHog directly, never through the composite:
+            // Scarf would put the email in a URL query string. Anonymous
+            // installs have no traits and are never aliased to a user.
+            // Opt-out is resolved before this spawn (including implicit-run flag order).
+            if let (Some(posthog), Some(auth)) = (&posthog, auth) {
+                let posthog = posthog.clone();
+                person_traits_task = Some(tokio::spawn(async move {
+                    person_telemetry::sync_person_traits(&storage, &posthog, &auth.user).await;
+                }));
             }
-            (None, Some(scarf)) => Arc::new(Box::new(scarf)),
-            (None, None) => Arc::new(Box::new(NullSender {})),
-        }
-    };
+
+            // PostHog is the primary backend; Scarf is best-effort alongside it.
+            // If PostHog fails to initialize, Scarf can still carry telemetry
+            // on its own rather than disabling telemetry entirely.
+            match (posthog, scarf) {
+                (Some(posthog), scarf) => {
+                    let mut sender = CompositeSender::new(Arc::new(posthog));
+                    if let Some(scarf) = scarf {
+                        sender = sender.with_secondary(Arc::new(scarf));
+                    }
+                    let sender: Box<dyn TelemetrySender + Send + Sync> = Box::new(sender);
+                    Arc::new(sender)
+                }
+                (None, Some(scarf)) => Arc::new(Box::new(scarf)),
+                (None, None) => Arc::new(Box::new(NullSender {})),
+            }
+        } else {
+            Arc::new(Box::new(NullSender {}))
+        };
 
     telemetry_sender.initialize_panic_telemetry().await;
 
@@ -529,8 +611,20 @@ async fn dispatch_command(cli: &Cli, telemetry_sender: TelemetrySenderMutex) -> 
             WorkflowCommands::Cancel(args) => {
                 commands::workflow::cancel::handler(args).await?;
             }
-            WorkflowCommands::Tui(args) => {
-                commands::workflow::tui::handler(args, telemetry_sender.clone()).await?;
+            WorkflowCommands::Send(args) => {
+                commands::workflow::send::handler(args).await?;
+            }
+            WorkflowCommands::Attach(args) => {
+                commands::workflow::attach::handler(args).await?;
+            }
+            WorkflowCommands::Inspect(args) => {
+                commands::workflow::inspect::handler(args).await?;
+            }
+            WorkflowCommands::Upgrade(args) => {
+                commands::workflow::upgrade::handler(args)?;
+            }
+            WorkflowCommands::Harness(args) => {
+                commands::workflow::harness::handler(args).await?;
             }
         },
         Some(Commands::Jssg(args)) => match &args.command {
@@ -562,6 +656,7 @@ async fn dispatch_command(cli: &Cli, telemetry_sender: TelemetrySenderMutex) -> 
         Some(Commands::Whoami(args)) => {
             commands::whoami::handler(args).await?;
         }
+        Some(Commands::Telemetry(_)) => unreachable!("handled before initializing telemetry"),
         Some(Commands::Publish(args)) => {
             commands::publish::handler(args, telemetry_sender.clone()).await?;
         }
@@ -622,13 +717,19 @@ mod tests {
         let message = no_command_message();
 
         let ai_index = message
-            .find("1. Install Master Codemod Skills: npx codemod ai")
+            .find(&format!(
+                "1. Install Master Codemod Skills: npx codemod@{CLI_VERSION} ai"
+            ))
             .expect("expected ai step");
         let init_index = message
-            .find("2. Create a new codemod package: npx codemod init")
+            .find(&format!(
+                "2. Create a new codemod package: npx codemod@{CLI_VERSION} init"
+            ))
             .expect("expected init step");
         let package_index = message
-            .find("3. Run a published package: npx codemod <package>")
+            .find(&format!(
+                "3. Run a published package: npx codemod@{CLI_VERSION} <package>"
+            ))
             .expect("expected package step");
 
         assert!(ai_index < init_index);
@@ -642,12 +743,12 @@ mod tests {
         assert_eq!(options[0].action, NoCommandAction::Ai);
         assert_eq!(
             options[0].label,
-            "Install Master Codemod Skills (npx codemod ai)"
+            format!("Install Master Codemod Skills (npx codemod@{CLI_VERSION} ai)")
         );
         assert_eq!(options[1].action, NoCommandAction::Init);
         assert_eq!(
             options[1].label,
-            "Create a new codemod package (npx codemod init)"
+            format!("Create a new codemod package (npx codemod@{CLI_VERSION} init)")
         );
         assert_eq!(options[2].action, NoCommandAction::RunPackage);
     }
@@ -674,6 +775,65 @@ mod tests {
             normalize_no_command_package_input("  @codemod/sample  ".to_string()),
             "@codemod/sample"
         );
+    }
+
+    /// `npx codemod run pkg@ver --approve` failed with "unexpected argument":
+    /// a registry run takes `workflow run`'s non-interactive flags.
+    #[test]
+    fn run_takes_the_non_interactive_flags_workflow_run_takes() {
+        let flags = [
+            "--approve",
+            "--managed-git",
+            "--dry-run",
+            "--no-interactive",
+            "--param",
+            "a=b",
+            "--allow-fs",
+            "--allow-fetch",
+            "--allow-child-process",
+            "--allow-dirty",
+        ];
+        let workflow_run = Cli::try_parse_from(
+            ["codemod", "workflow", "run", "-w", "workflow.ts"]
+                .into_iter()
+                .chain(flags),
+        );
+        assert!(workflow_run.is_ok(), "{:?}", workflow_run.err());
+
+        let run_args = |cli: Cli| match cli.command {
+            Some(Commands::Run(args)) => args,
+            _ => panic!("not a run command"),
+        };
+        for prefix in [
+            vec!["codemod", "run", "@org/pkg@1.0.0"],
+            vec!["codemod", "@org/pkg@1.0.0"],
+        ] {
+            let args: Vec<String> = prefix.into_iter().chain(flags).map(String::from).collect();
+            let full = match classify_implicit_route(&args[1..]) {
+                Some(ImplicitRoute::Run(full)) if args[1] != "run" => full,
+                _ => args,
+            };
+            let run = run_args(Cli::try_parse_from(&full).unwrap_or_else(|e| panic!("{e}")));
+            assert_eq!(
+                format!("{run:?}").matches(": true").count(),
+                7,
+                "managed_git, dry_run, no_interactive, allow_fs, allow_fetch, allow_child_process, allow_dirty: {run:?}"
+            );
+            assert!(run.start.approve_all(), "{run:?}");
+            assert!(run.start.approve_kinds().unwrap().is_empty());
+        }
+        // `--approve=<kinds>` gives some kinds of approval only; written with
+        // `=`, so a package after `--approve` is still the package.
+        let scoped = run_args(
+            Cli::try_parse_from(["codemod", "run", "--approve=shell,http", "@org/pkg"]).unwrap(),
+        );
+        assert!(!scoped.start.approve_all());
+        assert_eq!(scoped.start.approve_kinds().unwrap(), ["shell", "http"]);
+        let before_package =
+            run_args(Cli::try_parse_from(["codemod", "run", "--approve", "@org/pkg"]).unwrap());
+        assert_eq!(before_package.package, "@org/pkg");
+        assert!(before_package.start.approve_all());
+        {}
     }
 
     #[test]
@@ -796,6 +956,16 @@ mod tests {
     }
 
     #[test]
+    fn do_not_track_opts_out_unless_empty_0_or_false() {
+        for value in ["1", "true", "yes"] {
+            assert!(do_not_track(Some(value)), "{value}");
+        }
+        for value in [None, Some(""), Some("0"), Some("false"), Some("FALSE")] {
+            assert!(!do_not_track(value), "{value:?}");
+        }
+    }
+
+    #[test]
     fn parser_accepts_ai_install_with_opencode_harness() {
         let parse_result = Cli::try_parse_from(["codemod", "ai", "--harness", "opencode"]);
         assert!(parse_result.is_ok());
@@ -884,27 +1054,9 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_init_with_skill_flag() {
-        let parse_result = Cli::try_parse_from([
-            "codemod",
-            "init",
-            "my-with-skill",
-            "--no-interactive",
-            "--project-type",
-            "ast-grep-js",
-            "--with-skill",
-            "--language",
-            "typescript",
-            "--description",
-            "With skill package",
-            "--author",
-            "Author <author@example.com>",
-            "--license",
-            "MIT",
-            "--package-manager",
-            "npm",
-        ]);
-        assert!(parse_result.is_ok());
+    fn parser_rejects_init_with_skill_flag() {
+        let parse_result = Cli::try_parse_from(["codemod", "init", "my-codemod", "--with-skill"]);
+        assert!(parse_result.is_err());
     }
 
     #[test]

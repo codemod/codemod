@@ -1,184 +1,153 @@
 ---
 title: "Sharding"
 sidebarTitle: "Sharding"
+description: "Split a large migration into groups of files, each applied and reviewed on its own."
+tag: "Experimental"
 ---
 
-The `shard` step action splits large migrations into multiple PRs by evaluating which files a codemod would modify and grouping them into shards. In Campaign/cloud runs, each shard becomes a matrix task that gets its own branch and can produce its own pull request.
+import Experimental from "/snippets/experimental.mdx";
+
+<Experimental />
+
+The `shard` task splits a large migration into groups of files ("shards"), for example one per directory or per code owner. You then run the migration once per shard, typically opening one pull request each.
 
 ## How it works
 
-Sharding workflows follow a two-node pattern:
+1. A `shard` step finds the files the codemod would change and groups them.
+2. The workflow runs the codemod for every shard, limited to that shard's files, one shard at a time when each gets its own branch and pull request.
 
-1. **evaluate-shards** — Runs the `shard` step to discover applicable files, group them, and write shard assignments to workflow state.
-2. **apply-transforms** (matrix) — Iterates over the shards with a matrix strategy, applying the codemod and creating one PR per shard.
+```ts workflow.ts
+import { step, shard, forEachFile, approval } from "codemod/workflow";
+import { branch, commit, pullRequest } from "codemod/git";
+import migrate from "./scripts/migrate.ts";
+import wouldChange from "./scripts/would-change.ts";
 
-```yaml workflow.yaml
-version: "1"
+export default async function main() {
+  const shards = await step("Build shards", shard({
+    method: { type: "directory", maxFilesPerShard: 20 },
+    target: "./src",
+    files: { include: "**/*.{ts,tsx}", language: "tsx" },
+    filter: wouldChange,
+  }));
 
-state:
-  schema:
-    shards:
-      type: array
-      items:
-        type: object
-
-nodes:
-  - id: evaluate-shards
-    name: Evaluate shards
-    steps:
-      - name: Build shards
-        shard:
-          method:
-            type: directory
-            max_files_per_shard: 20
-          target: "./src"
-          output_state: shards
-          js-ast-grep:
-            js_file: scripts/codemod.ts
-            language: tsx
-            include: ["**/*.{ts,tsx}"]
-
-  - id: apply-transforms
-    name: Apply transforms
-    trigger:
-      # It means that these tasks will need to be manually triggered in the Codemod UI
-      type: manual
-    depends_on: [evaluate-shards]
-    strategy:
-      type: matrix
-      from_state: shards
-    pull_request:
-      title: "refactor: migrate ${{ matrix.name }}"
-    steps:
-      - name: Run transform
-        js-ast-grep:
-          js_file: scripts/codemod.ts
-          language: tsx
+  // One shard at a time: git steps share one checkout.
+  for (const [index, current] of shards.entries()) {
+    await step(approval(`Migrate ${current.name}?`));
+    await step(branch(`codemod-migrate-${index}`));
+    await step(`Migrate ${current.name}`, forEachFile(
+      { include: current._meta_files, language: "tsx" },
+      migrate,
+    ));
+    await step(commit(`refactor: migrate ${current.name}`));
+    await step(pullRequest({ title: `refactor: migrate ${current.name}` }));
+  }
+}
 ```
 
-<Info>
-The `pull_request` and `branch_name` fields in shard workflows are applied during Campaign/cloud runs. `pull_request.title` customizes each shard PR's metadata when the task ends with commits, and shard names are also useful inputs for `branch_name`. See [Workflow Reference](/community/workflows/reference#nodes) for the full git automation behavior.
-</Info>
+- **`previous`** (not used here) takes an earlier result, to keep assignments stable when shards are evaluated again (see [Re-evaluation](#re-evaluation)).
+- **`filter`** keeps the files it returns `true` for: here, those the migration would change (`wouldChange` can call the same helpers `migrate` does, without writing). It is a `forEachFile` callback, written inline or imported; what it does to a file is not kept.
+- **`include: current._meta_files`** limits each run of the migration to its shard's files.
+- `branch`, `commit` and `pullRequest` come from `codemod/git` and only touch git when the run uses `--managed-git`. See [Git steps](/community/workflows/reference#git-steps).
 
+<Warning>
+Don't run shards that use git steps at the same time, for example with `Promise.all`. Git steps share the run's one checkout, so one shard could commit on another shard's branch. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`. Shards without git steps can still run in parallel. Separate checkouts per shard are planned as an explicit API.
+</Warning>
+
+<Note>
+In `workflow.yaml`, the same pattern is a `shard` step with `output_state`, followed by a matrix node with `from_state`. A matrix node with `branch_name`, `pull_request` or a step `commit` runs its values one at a time. See the [workflow.yaml reference](/community/workflows/yaml).
+</Note>
 
 ## File discovery
 
-The engine pre-filters files before passing them to any shard method. This is shared across both built-in and custom methods.
+Files are chosen before they reach any shard method:
 
-When `js-ast-grep` is set on the shard step, the engine:
-1. Globs files matching `include` under `target`
-2. Dry-runs the codemod against each file
-3. Keeps only files where the transform produces changes
+- `files` selects the eligible files under `target`: a glob, a list of globs, or `{ include, exclude, language }`. Without it, the files of the package's `targets.languages`.
+- `filter`, when given, runs on each of them, in isolates, and keeps those it returns `true` for. If it throws on every file, the shard step fails.
+- A built-in method given neither `files` nor `filter` takes every text file under `target`.
+- Files are walked as `forEachFile` walks them: `.gitignore`d files are left out, other hidden files (such as `.github/`) are not, and git's own `.git` is never walked.
 
-<ParamField path="shard.target" type="string" default=".">
-  Root directory to scan for files. Defaults to the workflow run target (project root).
+<ParamField path="target" type="string" default=".">
+  Directory to scan, relative to the run's target.
 </ParamField>
 
-<ParamField path="shard.output_state" type="string" required>
-  State key to write shard results to. Must match the state schema key referenced by `from_state` in the matrix node.
+<ParamField path="files" type="string | string[] | object">
+  The eligible files under `target`, as a glob, globs, or `{ include, exclude, language }`.
 </ParamField>
 
-<ParamField path="shard.file_pattern" type="string">
-  Glob pattern for eligible files. Used when `js-ast-grep` is not set.
+<ParamField path="filter" type="function">
+  A `forEachFile` callback, inline or imported, that returns `true` for the files to keep.
 </ParamField>
 
-<ParamField path="shard.js-ast-grep" type="object">
-  JSSG codemod configuration for pre-filtering. When set, the engine dry-runs the codemod and only shards files where the transform produces changes. See [JSSG step parameters](/community/workflows/reference#jssg-step) for the full field reference.
+<ParamField path="previous" type="array">
+  The result of an earlier run of this shard step, for incremental re-evaluation.
 </ParamField>
-
----
 
 ## Built-in methods
 
-Built-in methods handle grouping and bin-packing automatically. Set the `method.type` to choose an algorithm.
+### Directory
+
+Groups files by their immediate subdirectory under `target`, then splits each group into shards of at most `maxFilesPerShard` files. For one shard per package of a monorepo, set `target` to the directory the packages are in:
+
+```ts
+shard({ method: { type: "directory", maxFilesPerShard: 20, minShardSize: 5 }, target: "packages", files: "**/*.tsx" })
+```
+
+Each shard has `name` (`"{directory}-{index}"`, for example `"ui-0"`, `"ui-1"`), `directory` and `_meta_files`. Files directly under `target` form the `"."` group (`".-0"`), or `"shard-0"`, `"shard-1"`, ... when every file is directly under `target`.
 
 ### Codeowner
 
-Groups files by their owning team from `.github/CODEOWNERS` (or root `CODEOWNERS`), then bin-packs into shards.
+Groups files by their code owner, then splits each owner's files into shards of at most `maxFilesPerShard` files: one or more shards per owner.
 
-```yaml
-shard:
-  method:
-    type: codeowner
-    max_files_per_shard: 30
-  target: "./src"
-  output_state: shards
-  file_pattern: "**/*.tsx"
+```ts
+shard({ method: { type: "codeowner", maxFilesPerShard: 30 }, target: "./src", files: "**/*.tsx" })
 ```
 
-Each shard includes:
-- `name` — `"{team}-{index}"` (e.g. `"platform-team-0"`)
-- `team` — the owning team
-- `_meta_files` — files in the shard
+- The `CODEOWNERS` file is the first of `.github/CODEOWNERS`, `CODEOWNERS` and `docs/CODEOWNERS` in the run's target (the repository root), whatever `target` is.
+- As on GitHub, the last rule that matches a file wins. Its first owner owns the file.
+- Files no rule matches, or every file when there is no `CODEOWNERS` file, go to the `unowned` team.
 
-### Method parameters
+Each shard has `name` (`"{team}-{index}"`, the team lowercased without `@` and with `/` as `-`: `@acme/platform` gives `"acme-platform-0"`), `team` (`"@acme/platform"`) and `_meta_files`.
+
+### Method options
 
 <ParamField path="method.type" type="string" required>
   `directory` or `codeowner`.
 </ParamField>
 
-<ParamField path="method.max_files_per_shard" type="number" required>
+<ParamField path="method.maxFilesPerShard" type="number" required>
   Target number of files per shard.
 </ParamField>
 
-<ParamField path="method.min_shard_size" type="number">
-  Minimum shard size. Trailing shards smaller than this are merged into the previous shard.
+<ParamField path="method.minShardSize" type="number">
+  Trailing shards smaller than this are merged into the previous shard.
 </ParamField>
-
----
 
 ## Custom shard functions
 
-For grouping logic that built-in methods can't express (e.g. dependency-aware clustering), point `method.function` to a JS/TS file that runs inside the jssg engine.
+For grouping that the built-in methods can't express, such as dependency-aware clustering, give a shard function as `method.function`: written inline, or imported from a file whose default export it is. It receives the chosen files and returns the shards; the engine handles file selection. Like a callback, it runs in its own isolate, the workflow body never loads its file, and publishing includes it.
 
-```yaml
-shard:
-  method:
-    function: scripts/shard-by-deps.ts
-  target: "./src"
-  output_state: shards
-  js-ast-grep:
-    js_file: scripts/codemod.ts
-    language: tsx
-    include: ["**/*.{ts,tsx}"]
+```ts
+import shardByDeps from "./scripts/shard-by-deps.ts";
+import wouldChange from "./scripts/would-change.ts";
+
+shard({
+  method: { function: shardByDeps },
+  target: "./src",
+  files: { include: "**/*.{ts,tsx}", language: "tsx" },
+  filter: wouldChange,
+})
 ```
 
-The function receives the pre-filtered file list and returns shard groupings. The engine handles all file I/O — the function only handles grouping.
+Write `shard`'s options and its `method` inline, as objects, so the build can find the functions in them. A file path where a function goes is a build error, and so are the removed `jssg` and `filePattern` options (use `filter` and `files`).
 
-### Directory
-
-Groups files by their immediate subdirectory under `target`, then bin-packs into shards.
-
-```yaml
-shard:
-  method:
-    type: directory
-    max_files_per_shard: 20
-    min_shard_size: 5
-  target: "./src"
-  output_state: shards
-  js-ast-grep:
-    js_file: scripts/codemod.ts
-    language: tsx
-    include: ["**/*.{ts,tsx}"]
-```
-
-Each shard includes:
-- `name` — `"{directory}-{index}"` (e.g. `"components-0"`)
-- `directory` — the subdirectory path
-- `_meta_files` — files in the shard
-
-### Function signature
-
-```typescript
-import type { ShardInput, ShardResult } from "codemod:workflow";
+```ts scripts/shard-by-deps.ts
+import { parse } from "codemod/ast-grep";
+import type { ShardInput, ShardResult } from "codemod/workflow";
 
 export default function shard(input: ShardInput): ShardResult[] {
   const { files, targetDir, previousShards } = input;
-  // Custom grouping logic
-  return [
-    { name: "shard-0", _meta_shard: 0, _meta_files: [...] },
-  ];
+  // Group files, for example by connected components of their imports.
+  return [{ name: "shard-0", _meta_shard: 0, _meta_files: files }];
 }
 ```
 
@@ -186,72 +155,47 @@ export default function shard(input: ShardInput): ShardResult[] {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `files` | `string[]` | Relative paths of eligible files (pre-filtered by the engine) |
-| `targetDir` | `string` | Absolute path to the target directory |
-| `previousShards` | `ShardResult[]` | Previous shard assignments for incremental re-evaluation |
+| `files` | `string[]` | Relative paths of eligible files |
+| `targetDir` | `string` | Absolute path of the target directory |
+| `previousShards` | `ShardResult[]` | The `previous` value passed to the shard step |
 
 ### ShardResult
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | `string` | Shard identifier (used in PR titles, branch names) |
+| `name` | `string` | Shard identifier, for labels, branch names and PR titles |
 | `_meta_shard` | `number` | Shard index |
 | `_meta_files` | `string[]` | Files in this shard |
-| Any other key | `unknown` | Exposed as `${{ matrix.<key> }}` variables |
-
-<Info>
-Fields prefixed with `_meta_` are excluded from the matrix hash. This means re-indexing shards won't invalidate existing task identity.
-</Info>
-
-<Info>
-**`_meta_files` is the per-shard scope contract.** When a shard's matrix task runs the downstream `js-ast-grep` step, the engine restricts the run to exactly the files listed in that shard's `_meta_files`, regardless of whether the workflow's `js-ast-grep` step declares `include`/`exclude` globs. The `include` glob in the original step shapes which files the **shard** step considers (during pre-filtering); after sharding, the per-shard `_meta_files` list is authoritative.
-</Info>
-
-### Shipping plain + sharded variants in one package
-
-A single package can ship multiple workflow files via `codemod.yaml`'s `workflows:` array — for example a plain `workflow.yaml` and a sharded `workflows/sharded.yaml`. End users pick a variant in the CLI or via the Codemod Campaign creation picker. See [Multiple workflows per package](/community/package-structure#multiple-workflows-per-package) for the manifest reference.
-
-### Available APIs
-
-Custom shard functions run in the jssg engine with full access to:
-
-- **`codemod:ast-grep`** — Parse files, match patterns, navigate ASTs. Useful for building dependency graphs from import statements.
-- **`codemod:workflow`** — Types (`ShardInput`, `ShardResult`) and state management APIs.
-
-```typescript
-import { parse } from "codemod:ast-grep";
-import type { ShardInput, ShardResult } from "codemod:workflow";
-
-export default function shard(input: ShardInput): ShardResult[] {
-  const { files, targetDir } = input;
-
-  // Use ast-grep to parse imports and build a dependency graph
-  for (const file of files) {
-    const root = parse("tsx", targetDir + "/" + file);
-    const imports = root.root().findAll({
-      rule: { kind: "string_fragment", inside: { kind: "import_statement" } },
-    });
-    // ... build graph from imports
-  }
-
-  // Group files by connected components, bin-pack into shards
-  return groupAndPack(files, graph);
-}
-```
-
-
----
+| Any other key | `unknown` | Available on the shard object in your workflow |
 
 ## Re-evaluation
 
-When the target repo changes (files added, moved, or deleted), retry the evaluate-shards task. The engine re-evaluates shards with **incremental stability**:
+When the repository changes, run the shard step again with `previous` set to the earlier result. Evaluation is incremental:
 
-- **Existing assignments are preserved** — a file already assigned to shard 1 stays in shard 1.
-- **New files go to new shards** — they never get added to shards whose tasks are already completed or in progress.
-- **Empty shards are dropped** — if all files in a shard were deleted, its task is marked `WontDo`.
+- **Existing assignments are kept**: a file already in shard 1 stays in shard 1.
+- **New files go to new shards**, never into existing ones.
+- **Shards whose files were all deleted are dropped.**
 
-This means re-running the shard step never disrupts work that's already in flight.
+Custom shard functions receive the same value as `previousShards` and can implement their own incremental logic.
 
-For custom shard functions, the engine passes `previousShards` in the input so the function can implement its own incremental logic.
+A workflow keeps no state between runs, so pass the earlier result in yourself, for example as a parameter: `previous: params.previousShards`.
 
+## From workflow.yaml
 
+YAML `shard` behavior is stable; the TypeScript `shard(...)` signature is experimental.
+
+`codemod workflow upgrade` turns a YAML `shard` step into a `shard(...)` call that gives the same shards:
+
+| workflow.yaml | workflow.ts |
+|---|---|
+| `method: { type: directory, max_files_per_shard: 20, min_shard_size: 5 }` | `method: { type: "directory", maxFilesPerShard: 20, minShardSize: 5 }` |
+| `method: { type: codeowner, max_files_per_shard: 30 }` | `method: { type: "codeowner", maxFilesPerShard: 30 }` |
+| `method: { function: ./shard.ts }` | `method: { function: shardFn }`, with `import shardFn from "./shard.ts"` |
+| `target: ./src` | `target: "./src"` |
+| `file_pattern: "**/*.ts"` | `files: "**/*.ts"` |
+| `js-ast-grep: { js_file, language, include }` | `files: { include, language }` and a `filter` that keeps the files the transform would change |
+| `output_state: shards`, then a matrix node with `from_state: shards` | `const shards = await step(shard(...))`, then a `for` loop over `shards` |
+
+## Shipping plain and sharded variants in one package
+
+A package can ship several workflow files through `codemod.yaml`'s `workflows:` list, for example `workflow.ts` and `workflows/sharded.ts`. Users pick one in the CLI or when creating a Campaign. See [Multiple workflows per package](/community/package-structure#multiple-workflows-per-package).

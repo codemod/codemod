@@ -10,13 +10,12 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-butterflow-models = { workspace = true }
-tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-uuid = { workspace = true }
-log = { workspace = true }
-async-trait = { workspace = true }
-reqwest = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
+thiserror = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

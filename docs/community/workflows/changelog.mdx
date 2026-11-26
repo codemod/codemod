@@ -1,0 +1,633 @@
+---
+title: "Workflow v2 changelog"
+sidebarTitle: "Changelog"
+description: "What changed in each Codemod CLI 2.0 alpha: breaking changes with before and after code, new features, fixes, and known gaps."
+---
+
+Workflow v2 is the 2.0 Codemod CLI: workflows are TypeScript (`workflow.ts`), and `workflow.yaml` still runs by being translated into the same TypeScript. It is in alpha, so the API can change between alphas. Each entry below lists what you need to change in a `workflow.ts`.
+
+<Note>
+`npx codemod` and `codemod@latest` are still the 1.x CLI. To try v2, use the `alpha` tag or pin an alpha:
+
+```bash
+npx codemod@alpha workflow run -w workflow.ts --target .
+npx codemod@2.0.0-alpha.9 workflow run -w workflow.ts --target .
+```
+
+To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha workflow upgrade ./my-package --dry-run`. See [Migrate from workflow.yaml](/community/workflows/migrate).
+</Note>
+
+Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
+
+See [Codemod API stability](/community/api-stability) for the compatibility guarantees that apply from 2.0 stable onward.
+
+<Update label="2.0.0-alpha.11" description="November 26, 2026">
+- **`codemod/files` replaces `fs` in 2.0 workflows.** Callbacks and JSSG transforms can read, list, and create target files; new files are recorded and previewed with other edits. YAML packages retain compatibility for supported target-local `fs` calls.
+- **Resume no longer silently repeats interrupted side effects.** Check what a step did, then choose **Rerun** or **Skip**. Unattended resumes exit `3` until you pass `--rerun-step` or `--skip-step`. Step records are appended and synced to disk, and alpha.10 runs can still be read.
+- **Experimental APIs are labeled.** Look for `@experimental` in declarations, an Experimental marker in the docs or CLI help, and a notice on first use.
+- **JSSG transform load and parse errors count as failures.** Target files with syntax errors still get transformed with error recovery; Codemod logs their count without failing the step.
+- **Telemetry has a one-time interactive notice.** Use `codemod telemetry on|off|status` to manage your saved setting.
+- **Registry commands support JSON output.** Use `--format json` with `login`, `whoami`, or `publish`. In CI, use `login --api-key` instead of browser login.
+- **Unattended registry packages need approval for side effects.** Use `--approve` or name the kinds to allow, for example `--approve=shell,http`. Local workflows stay trusted across resume, but `--approve` does not choose whether to repeat an interrupted step.
+- **Callbacks get an empty `process.env`.** They can still use `process.cwd()` and `process.argv`, and read or stage target files with `codemod/files`. Registry downloads get additional checks, checksum mismatches are logged rather than rejected, credentials are bound to their registry, and new run-store files are private.
+</Update>
+
+<Update label="2.0.0-alpha.10" description="November 26, 2026">
+**Breaking changes**
+
+- **A run waiting for an approval exits `3`**. Before, `workflow run --no-interactive` (and `workflow resume`, `codemod <package>`) exited `0` when the run stopped at an approval, so a CI job passed with the migration half done. Now it exits `3`, apart from `1` (failed) and `2` (failed files, `fail()`), and ends with the command that continues it. See [exit codes](/community/cli#exit-codes).
+
+  ```
+  Waiting for approval: Go on?
+    Approve it and go on with: codemod workflow resume --id <ID> --approve approval:1
+  $ echo $?
+  3
+  ```
+
+- **Callbacks are pure.** Function steps, `forEachFile` callbacks and reducers, `dependencyGraph` callbacks and `shard`'s functions no longer get `fetch`, `child_process`, `fs` writes, `process.env` changes or timers, whatever the run grants. Each fails with the step to use instead. They read the target through a read-only `fs` without any flag. `fetch` and timers written in a workflow file are build errors. See [Callbacks are pure](/community/workflows/reference#callbacks-are-pure).
+
+  ```ts
+  // before (with --allow-fetch)
+  const latest = await step("Latest", async () => (await fetch(url)).json());
+
+  // after
+  const latest = (await step("Latest", http(url))).json;
+  ```
+- **`--allow-fs`, `--allow-fetch` and `--allow-child-process` do nothing** for workflow runs. They are accepted with a warning; `capabilities` in `codemod.yaml` and in a `forEachFile` selector are ignored (the step's log says so). The launcher no longer shows capability toggles.
+- **`codemod jssg run` and `codemod jssg test`: `fs` writes need `--allow-fs`.** Without it a transform's `fs` reads the target but `writeFileSync`, `mkdirSync` and `unlinkSync` fail with `EROFS` and a message naming the flag, as `child_process` needs `--allow-child-process`. Before, writes inside the target worked with no flag. See [Security & Capabilities](/community/jssg/security).
+- **The Node.js host enforces the same rules** (`codemod/host`, `codemod/testing`), and replays the body's clock and random numbers as the CLI does, so a test that passes does not fail under the CLI. See [the Node.js host](/community/workflows/node#how-it-differs-from-the-cli).
+- **Declared `string` params stay strings.** `--param version=19` gives `"19"` for a parameter declared `string`; earlier alphas parsed it as `19`.
+- **YAML with `runtime: docker` or `runtime: podman` is refused before any steps run.** Earlier alphas silently ran those steps on the host.
+- **The experimental launcher is opt-in** (`CODEMOD_LAUNCHER=1`). Plain terminal output is the default. `CI=1` never prompts, even with a terminal.
+
+**New**
+
+- **Runs record the codemod version.** `workflow status --format json` shows `codemodVersion`. Resuming a run another version made, whose finished function steps that version built differently, is refused with the version and the steps, instead of running those steps again silently; `--force` runs them again. `workflow list` shows runs this version cannot read as `unreadable (made by codemod <version>)` instead of leaving them out.
+
+- **One run per repository at a time.** Before, two runs on one repository both ran and could write the same files. Now a run (or resume) on a repository another run is executing fails at once, naming that run: `another run (<ID>) is already running on <repo>: wait for it, follow it with codemod workflow attach --id <ID>, or stop it with codemod workflow cancel --id <ID>`. The lock lives in the run store and goes with its process, so a killed run does not leave the repository locked. Dry runs do not lock.
+
+- **`http(url, options)`** in `codemod/workflow`: an HTTP request as a step. Its response is recorded and replayed on resume, not sent again. Header values can come from the environment (`{ env: "GITHUB_TOKEN" }`) so tokens stay out of the run's records. A dry run skips it unless it sets `dryRun: "perform"`. See [HTTP requests](/community/workflows/reference#http-requests).
+- `workflow inspect` lists `http` in `uses`, and shows which declared steps reach outside the target.
+- **1.x YAML packages run without conversion.** Legacy transform metrics and workflow state still work when running `workflow.yaml`, and transforms can read the target with `fs` without a flag. The compatibility path never rewrites the package. See [Upgrade from 1.x](/community/workflows/upgrade-from-1x).
+- **An explicit 1.x fallback.** `codemod run --v1 <package>` (or `CODEMOD_V1=on`) uses pinned codemod 1.18.7. It is deprecated and never selected automatically. See [Running a package with codemod 1.x](/community/workflows/migrate#running-a-package-with-codemod-1x).
+- **`workflow upgrade` converts legacy transform metrics** and warns about `fs` and `child_process` imports without granting capabilities. It refuses transforms that use legacy workflow state rather than generating a workflow that cannot run.
+- **`DO_NOT_TRACK=1` turns off telemetry.** Use `unpublish --yes` for unattended unpublishing.
+
+**Fixes**
+
+- **A run paused at an approval keeps its question.** Before, closing a control channel's stdin or sending `stop` while an approval was open left a `paused` run with `question: null`, and the approval step `canceled`. Now `run_finished` and `workflow status` keep `question` (`approval:1`) and `awaiting`, the step stays `awaiting-approval`, and `workflow resume --approve approval:1` gives it.
+- Local runs identify the package they use, dry runs omit unsaved run IDs, standalone `jssg run` reports errors for each failed file, and errors on non-terminal stderr omit color. Non-interactive `init` uses defaults.
+
+**Docs**
+
+- Added [Upgrade from 1.x](/community/workflows/upgrade-from-1x), [Running in CI and from agents](/community/workflows/ci-and-agents), [Exit codes](/community/workflows/exit-codes), and five tutorials, starting with [Your first workflow](/community/workflows/tutorials/first-workflow).
+</Update>
+
+<Update label="2.0.0-alpha.9" description="November 25, 2026">
+```bash
+npx codemod@2.0.0-alpha.9 --version   # codemod 2.0.0-alpha.9
+```
+
+**Highlights**
+
+- `--control stdio`: drive a run from another program. Approvals wait for an answer on stdin instead of exiting. See [Drive codemod from a program](/community/workflows/control).
+- Rejecting an approval ends the run for good; Ctrl-C pauses it instead of canceling it.
+- `workflow attach` replays a run's events and follows it live; `workflow inspect` describes a workflow's params and steps.
+- `codemod/protocol`: TypeScript types for the JSONL events and the control commands.
+
+**Breaking changes**
+
+- **Rejecting an approval ends the run as `rejected`** ([#2525](https://github.com/codemod/codemod/pull/2525)). Before, answering no to an `approval(...)` step failed the step, and a resume asked again. Now the run is `rejected`: steps running alongside stop, nothing after the approval runs, what earlier steps changed **stays changed**, and the CLI exits `1`. `workflow resume` refuses a rejected run unless you pass `--force`, which asks the approval again. In the launcher, `n` now rejects; `l` still stops the run there to resume later.
+- **Ctrl-C pauses; `workflow cancel` ends** ([#2525](https://github.com/codemod/codemod/pull/2525)). Before, both left a `canceled` run that `workflow resume` continued. Now Ctrl-C (and closing a control channel's stdin) leaves the run `paused`, which resumes as before. A run canceled with `workflow cancel` is over: resuming it takes `--force`.
+
+  ```
+  # before (Ctrl-C)
+  The run was canceled.
+    Resume with: codemod workflow resume --id <ID>
+  # after (Ctrl-C)
+  The run was paused.
+    Resume with: codemod workflow resume --id <ID>
+
+  # after: resuming a canceled run
+  $ npx codemod@2.0.0-alpha.9 workflow resume --id <ID>
+    × run '<ID>' was canceled: it is over. Resume it anyway with --force
+  ```
+
+- **`--format jsonl` shows a nested codemod's steps as steps** ([#2525](https://github.com/codemod/codemod/pull/2525)). Before, a `codemod(...)` step's own steps came as `step_log` lines of that step. Now they are `step_started`/`step_finished` events with `step: "3/0"` and `parent: "3"`; a client that tracks steps by `position` alone should use `step`. Text output and the launcher show them as before.
+- **A dry run that reaches an approval exits `1`** ([#2525](https://github.com/codemod/codemod/pull/2525)). It is not saved, so it cannot wait to be resumed; it says to pass `--approve` instead of exiting `0` with no diff. With `--control stdio` it waits like a real run.
+
+**New**
+
+- **`--control stdio`** on `workflow run`, `workflow resume` and `codemod <package>` ([#2525](https://github.com/codemod/codemod/pull/2525)), with `--format jsonl`: a `hello` line first, then the run's events; `question` / `question_closed` around every approval and agent pick; commands `approve`, `reject`, `answer` and `stop` on stdin. Experimental.
+- **`workflow resume --approve <QUESTION_ID>`** gives one approval (`approval:3`); `--approve` alone still gives all. `workflow status` and `run_finished` show the `question` a run waits for.
+- **Events**: `seq` keeps counting across resumes; step events carry `step`, `parent` and `kind`; `run_log` carries `step`; `run_started` echoes `target`, `params`, `dry_run` and `settings`; real runs report `step_diff` per changed file.
+- **`workflow attach --id <ID>`**: every saved run keeps its events in the run store; attach prints them and follows a run another process executes.
+- **`workflow inspect -w <file> --format json`**: declared params (type, doc comment, `@default`), imports, capabilities and `step(...)` calls, for a setup form.
+- **`codemod/protocol`**: types for all of the above, kept in step with the Rust types by a test.
+
+**Fixes**
+
+- `workflow send <EVENT>` to a run waiting for an approval said it sent the event and did nothing; it now fails and names the `workflow resume --approve` command.
+- A canceled run could be resumed to success.
+- `workflow list --format json` left out `failedFiles`; `workflow status --format json` showed `attempts` and `files` as `null` for most steps. `attempts` is now always the count, and `files` is set for every step that works on files.
+- A run waiting at a question over the control channel now stops when `workflow cancel` is run from another terminal.
+
+**Known gaps**
+
+- The control protocol is experimental: messages can still change (`hello.protocol` goes up when a change breaks clients).
+- `workflow attach` only watches; answering a run's questions takes its control channel or `workflow resume`.
+- Runs started with `runWorkflow` in Node.js have no control channel and keep no event journal.
+- With `--allow-fs` or `--allow-child-process`, every `forEachFile`, function and `dependencyGraph` step counts as a write.
+- Dry runs are not saved, so `workflow status` and `workflow attach` can't show them; their output is in `run_finished` and the text output.
+- The skill files `codemod ai` installs still say `npx codemod ai ...` unpinned.
+- `codemod/assess` has no free-text question type.
+- Values interpolated into shell commands (`${{ }}` in a translated `run:`, or `${x}` in `shell(...)`) are not shell-quoted. Quote them yourself, or use the `` shell`...` `` tagged template, which does.
+</Update>
+
+<Update label="2.0.0-alpha.8" description="November 25, 2026">
+```bash
+npx codemod@2.0.0-alpha.8 --version   # codemod 2.0.0-alpha.8
+```
+
+**Highlights**
+
+- `run_finished` carries the workflow's return value and each step's result, dry runs too.
+- `fail()` ends a run as failed and keeps its report as the output (exit code `2`).
+- A run that only reads is no longer stopped by uncommitted changes.
+- `workflow status` and `workflow list` print JSON with `--format json`.
+
+**Breaking changes**
+
+- **The uncommitted-changes check happens at the first write** ([#2521](https://github.com/codemod/codemod/pull/2521), [#2523](https://github.com/codemod/codemod/pull/2523)). Before, `workflow run` and `codemod <package>` refused to start on a target with uncommitted changes (or outside a git repository) without `--allow-dirty`. Now the run starts and checks just before it first changes the target: a step that writes, renames or deletes a file, a `shell`, `agent` or `installSkill` step, a git step with `--managed-git`, or a step whose code gets `fs` or `child_process`. A run that only reads (a check, a report) never stops at it.
+
+  ```
+  # before: a check that only reads, on a dirty tree
+  $ npx codemod@2.0.0-alpha.7 workflow run -w check.ts --target . --no-interactive
+    × You have uncommitted changes in /repo. Use --allow-dirty to proceed anyway.   # exit 1, nothing ran
+
+  # after
+  $ npx codemod@2.0.0-alpha.8 workflow run -w check.ts --target . --no-interactive
+  ✓ Find var (0.0s)
+  Done
+  ```
+
+  A run that writes still stops before it writes: an interactive run asks (in the launcher too), and an unattended run fails that step, writes nothing and exits `1`. `--approve` doesn't answer it; `--allow-dirty` still skips it. `workflow resume` checks again only a run that stopped before it first wrote; `workflow resume --allow-dirty` skips that.
+
+- **`run_finished` has `output` and `steps`** ([#2521](https://github.com/codemod/codemod/pull/2521)). With `--format jsonl`, `run_finished` adds the workflow's return value and every recorded step with its result, also for dry runs. An `output` over 1 MiB as JSON is `null` with `output_omitted: { bytes, limit }`; step results share another 1 MiB. In text format, a run that returned something ends with `Output: <JSON>`, cut at 200 characters.
+
+  ```json
+  {"event":"run_finished","run_id":"…","status":"succeeded","error":null,"failed_files":0,"partial_steps":[],
+   "output":{"checks":[{"id":"count","n":2}]},
+   "steps":[{"position":0,"label":"Count","status":"succeeded","result":2}],"seq":7,"ts":"…"}
+  ```
+
+**New**
+
+- **`fail(message, { output?, exitCode? })`** ([#2521](https://github.com/codemod/codemod/pull/2521)) from `codemod/workflow`: end the run as `failed` and keep a report. Before, throwing lost the output and catching the failure exited `0`. The run's error is `message`, its output is `output` (in `run_finished.output`, `workflow status --format json` and `runWorkflow(...).output`), and the CLI exits `2`, or `exitCode` (1 to 125). A plain `throw` still exits `1`. Call it from the workflow body.
+
+  ```ts
+  import { fail, forEachFile, step } from "codemod/workflow";
+
+  export default async function main() {
+    const found = await step("Find var", forEachFile("src/**/*.ts", (file) =>
+      file.text.includes("var ") ? file.path : undefined));
+    const report = { checks: [{ id: "no-var", status: found.outputs.length ? "fail" : "pass", files: found.outputs }] };
+    if (found.outputs.length) fail("1 check failed: no-var", { output: report });
+    return report;
+  }
+  ```
+
+- **`workflow status --format json`** and **`workflow list --format json`** ([#2521](https://github.com/codemod/codemod/pull/2521)): a run's status, params, timings, error, `output`, `exitCode` and steps with their results and durations.
+- **A repo health workflow in CI** ([#2522](https://github.com/codemod/codemod/pull/2522)): the codemod repo checks itself with `.codemod/workflows/health.ts` (one crossterm in the binary, no `@latest` pins in docs and CLI messages), which reports with `fail()`.
+
+**Fixes**
+
+- The no-command next steps (`npx codemod ai`, `init`, `<package>`) and `codemod ai`'s "no coding agent detected" warning pin the version you are running instead of `codemod@latest`, which is 1.x.
+- The MCP setup, troubleshooting, publish-from-CI and Codemod Studio docs no longer point at the `latest` tag, which is 1.x.
+- The test that guards CLI messages against `@latest` pins read only up to a file's first `#[cfg(test)]`; it now skips only test code.
+
+**Known gaps**
+
+- With `--allow-fs` or `--allow-child-process`, every `forEachFile`, function and `dependencyGraph` step counts as a write.
+- Dry runs are not saved, so `workflow status` can't show them; their output is in `run_finished` and the text output.
+- A `--dry-run` that reaches `approval()` without `--approve` exits `0` at "Waiting for approval" with no diff, and can't be resumed. Use `--dry-run --approve`.
+- The skill files `codemod ai` installs still say `npx codemod ai ...` unpinned.
+- `codemod/assess` has no free-text question type.
+- Values interpolated into shell commands (`${{ }}` in a translated `run:`, or `${x}` in `shell(...)`) are not shell-quoted. Quote them yourself, or use the `` shell`...` `` tagged template, which does.
+</Update>
+
+<Update label="2.0.0-alpha.7" description="November 25, 2026">
+```bash
+npx codemod@2.0.0-alpha.7 --version   # codemod 2.0.0-alpha.7
+```
+
+**Highlights**
+
+- An interactive launcher for runs in a terminal.
+- `codemod/assess`: ask an AI decision model typed questions about a file.
+- A run where some files failed now exits with code `2`.
+- `workflow upgrade` writes plain, typed `forEachFile` callbacks.
+
+**Breaking changes**
+
+- **A run with failed files exits 2** ([#2516](https://github.com/codemod/codemod/pull/2516)). A step where some files failed is `partial`. Before, `workflow run`, `codemod <package>` and `workflow resume` still exited 0. Now they exit `2` when the run finished but files failed (`1` is still a hard failure or a cancel, `0` is success or waiting for an approval). If your CI treated exit 0 as "all good", it now sees failed files.
+
+  ```
+  # before
+  ◐ Upper-case: 1 of 3 files failed (0.0s)
+  Done (some files failed in 1 step)
+                                                      # exit 0
+  # after
+  ◐ Upper-case: 1 of 3 files failed (0.0s)
+  Done (1 file failed in 1 step)
+
+  1 file failed; changes to the other files were written.
+                                                      # exit 2
+  ```
+
+  With `--format jsonl`, `run_finished` gains `failed_files` and `partial_steps`. `status` stays `succeeded`.
+
+- **The launcher opens in interactive terminals** ([#2519](https://github.com/codemod/codemod/pull/2519)). `workflow run`, `codemod <package>` and `workflow resume` open a terminal UI instead of printing lines. Scripts, pipes, CI, `--format jsonl` and `--no-interactive` get the same plain output as before. To keep plain output in a terminal:
+
+  ```bash
+  CODEMOD_LAUNCHER=0 npx codemod@alpha workflow run -w workflow.ts
+  npx codemod@alpha workflow run -w workflow.ts --no-interactive
+  ```
+
+- **`workflow upgrade` writes plain typed callbacks** ([#2518](https://github.com/codemod/codemod/pull/2518)). It imports each jssg transform and calls it from a `forEachFile` callback, instead of wrapping it in the internal `codemod-internal:jssg-compat` adapter. Files you already upgraded keep working. Re-run `upgrade` on the `workflow.yaml` to get the new shape.
+
+  ```ts
+  // before
+  import * as workflowTransform from "./src/workflow.ts";
+  import { jssgFile } from "codemod-internal:jssg-compat";
+  await step("Handle DEP0147", forEachFile({ include: ["**/*.js"], language: "typescript" },
+    (file) => jssgFile(workflowTransform, file, { language: "typescript", params })));
+
+  // after
+  import { parse } from "codemod/ast-grep";
+  import { forEachFile, step } from "codemod/workflow";
+  import transform from "./src/workflow.ts";
+  await step("Handle DEP0147", forEachFile({ include: ["**/*.js"], language: "typescript" }, (file) => {
+    const out = transform(parse(file));
+    if (typeof out === "string") file.write(out);
+  }));
+  ```
+
+  The adapter is kept only where a plain callback can't do the job (`root.rename()`, `jssgTransform`, a `dry_run` step, a templated `base_path`), and `upgrade` says which transform and why.
+
+**New**
+
+- **`codemod/assess`** ([#2517](https://github.com/codemod/codemod/pull/2517)): ask a decision model (System One by default, or OpenAI) typed questions about a file from a `forEachFile` callback or a function step. Answers are recorded with the step, so a resume doesn't ask again.
+
+  ```ts
+  import { assess, yesNo, choice } from "codemod/assess";
+
+  const { answers } = await assess(file, {
+    questions: {
+      handlesErrors: yesNo("Does this file handle the errors its async calls can throw?"),
+      smell: choice("Which smell fits best?", { swallowed: "Caught and dropped", "logged-only": null, none: null }),
+    },
+  });
+  // answers.handlesErrors: boolean; answers.smell: "swallowed" | "logged-only" | "none"
+  ```
+
+- **`--allow-ai`** ([#2517](https://github.com/codemod/codemod/pull/2517)): a workflow that uses `codemod/assess` checks for permission and an API key before step 1. Pass `--allow-ai`, or answer the prompt in an interactive run.
+- **The launcher** ([#2519](https://github.com/codemod/codemod/pull/2519)): a setup screen (target, dry run, params, capabilities, agent, decision model), then live steps, logs, diffs and in-place approvals. After a dry run, press `a` to apply it for real.
+- **`--model <provider>/<model>`** ([#2519](https://github.com/codemod/codemod/pull/2519)) picks the decision model for `codemod/assess`. `--agent` defaults to the agent you picked in the launcher.
+- **More lockfiles** ([#2515](https://github.com/codemod/codemod/pull/2515)): `dependencyGraph` reads Yarn 1 `yarn.lock`, `bun.lock`, `package-lock.json` v1 and `npm-shrinkwrap.json`.
+- **`codemod <package> --approve --managed-git`** ([#2515](https://github.com/codemod/codemod/pull/2515)): registry runs take the same start flags as `workflow run`.
+
+**Fixes**
+
+- `dependencyGraph` on a target with no lockfile runs the callback on an empty graph instead of failing the step.
+- `codemod publish` respects `.gitignore` files (nested too) and never packs `node_modules` or `.git`.
+- `shard` in a dry run sees the files earlier steps changed.
+- Hints after login, publish and `init` pin the version you are running (`npx codemod@2.0.0-alpha.7 login`) instead of `codemod@latest`, which is 1.x.
+- Callbacks wrapped in `satisfies`, `as` or parentheses build.
+- A callback that leaves a timer running no longer keeps its worker alive.
+- `jssg test` checks `data.json` once per case, and `--filter` and `--fail-fast` respect it.
+- Poetry path dependencies outside the repo are plain nodes, not repo packages.
+
+**Known gaps**
+
+- The docs still show `npx codemod@latest` in places, which is 1.x.
+- `npx codemod ai` and `npx codemod init` hints are not version-pinned yet.
+- `codemod/assess` has no free-text question type.
+- Values interpolated into shell commands (`${{ }}` in a translated `run:`, or `${x}` in `shell(...)`) are not shell-quoted. Quote them yourself, or use the `` shell`...` `` tagged template, which does.
+</Update>
+
+<Update label="2.0.0-alpha.6" description="November 24, 2026">
+```bash
+npx codemod@2.0.0-alpha.6 --version
+```
+
+**Highlights**
+
+- Dry runs keep each step's changes in memory, so later steps see them, and end with the diff of the whole run.
+- `forEachFile` takes a reducer.
+- A simpler `codemod/deps` graph API.
+- Git steps moved to `codemod/git`.
+
+**Breaking changes**
+
+- **`codemod/deps` renames** ([#2506](https://github.com/codemod/codemod/pull/2506)). `dependencyGraph(callback)` no longer needs an options object. `node.workspace` → `node.dir`, `node.isWorkspace` → `node.local`, `node.dependents()` → `node.installedBy()`. `node.workspacesReaching()` is gone: use `g.chains({ to })`. `g.node(name)` throws when several versions are installed: use `g.nodes(name)`.
+
+  ```ts
+  // before
+  await step(dependencyGraph({}, (g) => ({
+    direct: g.dependents("moment").filter((e) => e.from.isWorkspace).map((e) => e.from.workspace),
+    reaching: g.node("moment").workspacesReaching().map((r) => r.workspace.workspace),
+  })));
+
+  // after
+  await step(dependencyGraph((g) => ({
+    declaredBy: g.dependents("moment").map((e) => e.from.dir),
+    reachedBy: g.chains({ to: g.nodes("moment") }).map((chain) => chain[0].dir),
+  })));
+  ```
+
+- **`dependents` returns only your own packages by default** ([#2506](https://github.com/codemod/codemod/pull/2506)). Pass `{ includeThirdParty: true }` for the old behavior.
+
+  ```ts
+  g.dependents("react");                              // your packages that declare react
+  g.dependents("react", { includeThirdParty: true }); // also libraries that do
+  ```
+
+- **Git steps moved to `codemod/git`** ([#2507](https://github.com/codemod/codemod/pull/2507)). Importing them from `codemod/workflow` is a build error that names the new module.
+
+  ```ts
+  // before
+  import { step, branch, commit, pullRequest } from "codemod/workflow";
+  // after
+  import { step } from "codemod/workflow";
+  import { branch, commit, pullRequest } from "codemod/git";
+  ```
+
+- **`definition()` resolves through barrel files** ([#2509](https://github.com/codemod/codemod/pull/2509)). It follows re-exports and tsconfig `paths` to where the symbol is declared. Code that expected the barrel's `export { x } from "./x"` line now gets the original file.
+- **`deps.dependencyGraph` through a namespace import is a build error** ([#2513](https://github.com/codemod/codemod/pull/2513)). Import `dependencyGraph` by name. `import * as deps` still works for `semver` and `registry`.
+
+**New**
+
+- **Reducer for `forEachFile`** ([#2508](https://github.com/codemod/codemod/pull/2508)): folds each file's output into one value, in path order, without holding every output in memory.
+
+  ```ts
+  // before
+  const { outputs } = await step(forEachFile("src/**/*.ts", count));
+  const total = outputs.reduce((sum, n) => sum + n, 0);
+  // after
+  const { reduced: total } = await step(forEachFile("src/**/*.ts", count, (sum, n) => sum + n, 0));
+  ```
+
+- **Dry runs show a diff** ([#2511](https://github.com/codemod/codemod/pull/2511)): `--dry-run` keeps changes in memory across steps and ends with the diff of the whole run (`run_diff` events with `--format jsonl`).
+- **Test a callback file on its own** ([#2510](https://github.com/codemod/codemod/pull/2510)): `codemod jssg test --callback -l typescript ./scripts/migrate.ts`, or `runCallback` from `codemod/testing`.
+- **`shard` takes every file by default** ([#2507](https://github.com/codemod/codemod/pull/2507)) when you give no `files` or `filter`.
+- **Docs**: a [Build your first workflow](/community/workflows/getting-started) tutorial ([#2490](https://github.com/codemod/codemod/pull/2490)).
+
+**Fixes**
+
+- An `astGrep` rule with `language: "typescript"` also runs on `.js`, `.mjs` and `.cjs` files (and `"tsx"` on `.jsx`).
+- `definition()` and `references()` follow re-export chains and tsconfig `paths`.
+- `g.chains()` goes from one workspace to another (`packages/web → @demo/shared → moment`).
+- `codemod jssg run` keeps the edits a transform makes to other files with `jssgTransform`.
+- `${{ }}` in a translated `workflow.yaml` prints arrays and objects as JSON again, not `[object Object]`.
+- `jssg test` writes `data.json` at the case root instead of failing with "Unexpected output file".
+- Function and `dependencyGraph` steps no longer hang on leftover timers.
+- `**/*` never enters `.git`.
+
+**Known gaps** (fixed in alpha.7)
+
+- `dependencyGraph` fails when the target has no lockfile, and on Yarn 1 lockfiles.
+- `codemod publish` packs gitignored files and nested `node_modules`.
+- `codemod <package>` has no `--approve` or `--managed-git`.
+- In a dry run, `shard` reads files from disk, not earlier steps' changes.
+</Update>
+
+<Update label="2.0.0-alpha.5" description="November 22, 2026">
+```bash
+npx codemod@2.0.0-alpha.5 --version
+```
+
+**Highlights**
+
+- Per-file logic is a `forEachFile` callback, written inline or imported from its own file. `jssg(...)` and file paths are gone from the workflow API.
+- The dependency API moved to `codemod/deps`, and reads Python lockfiles.
+- Fixes from the review of the v2 engine: safer file writes, agent cancel on Windows, and more.
+- `--version` prints the real version. Earlier alphas print `1.18.7`.
+
+**Breaking changes**
+
+Each of these is a build error that says what to write instead. `workflow.yaml` files need no change: the translation handles them.
+
+- **`jssg(...)` was removed: per-file logic is a `forEachFile` callback** ([#2498](https://github.com/codemod/codemod/pull/2498)). Write it inline, or keep it as a file's default export and import it. Values a transform read from `options.params` become variables the callback captures.
+
+  ```ts
+  // before
+  await step(forEachFile({ language: "tsx" }, jssg("./scripts/codemod.ts", { params: { strict: true } })));
+
+  // after
+  import migrate from "./scripts/migrate.ts"; // export default (file) => { ... }
+  await step(forEachFile({ language: "tsx" }, migrate));
+  ```
+
+  In the callback, `parse(file)` (from `codemod/ast-grep`) gives you the root, `file.write(text)` replaces returning text, and `file.rename(path)` replaces `root.rename()`. `semanticAnalysis` and `capabilities` are now `forEachFile` selector options. `jssg(path, { reduce })` is gone; a `forEachFile` reducer arrives in alpha.6.
+
+- **`astGrep(rules)` runs only inside `forEachFile`, and takes rules, not paths** ([#2498](https://github.com/codemod/codemod/pull/2498)). Import YAML rules or write them inline. Its only option is `repeat`.
+
+  ```ts
+  // before
+  await step(astGrep("./rules/config.yml", { include: ["src/**"], basePath: "app" }));
+
+  // after
+  import rules from "./rules/config.yml";
+  await step(forEachFile({ include: ["app/src/**"] }, astGrep(rules)));
+  ```
+
+- **`shard` takes functions, not paths** ([#2498](https://github.com/codemod/codemod/pull/2498)). `method: { function: "./scripts/shard.ts" }` → an imported or inline function. `jssg: { path }` → `filter: (file) => boolean`. `filePattern` → `files`.
+- **The dependency API moved to `codemod/deps`** ([#2493](https://github.com/codemod/codemod/pull/2493)).
+
+  ```ts
+  // before
+  import { step, dependencyGraph, registry, semver } from "codemod/workflow";
+  // after
+  import { step } from "codemod/workflow";
+  import { dependencyGraph, registry, semver } from "codemod/deps";
+  ```
+
+- **`dependencyGraph` reads only root lockfiles by default** ([#2492](https://github.com/codemod/codemod/pull/2492)). Nested ones need a glob, such as `{ lockfiles: "**/yarn.lock" }`.
+- **Shell steps run in the target directory by default** ([#2496](https://github.com/codemod/codemod/pull/2496)). Pass `cwd` to run somewhere else.
+- **Managed git steps can't run alongside other steps** ([#2496](https://github.com/codemod/codemod/pull/2496)). `branch`, `commit` and `pullRequest` fail when started while other steps run, including in parallel shards. Sequential shards still work.
+
+**New**
+
+- **`astGrep(rules, { repeat: true })`** ([#2498](https://github.com/codemod/codemod/pull/2498)) runs the rules again on their own output until nothing changes, so nested matches such as `console.log(console.log(x))` are all fixed in one step.
+- **Python lockfiles** ([#2494](https://github.com/codemod/codemod/pull/2494)): `dependencyGraph` reads `uv.lock`, `poetry.lock` and `Pipfile.lock`. `semver` follows PEP 440 with `{ ecosystem: "pypi" }`, and `registry.pypi(name)` reads PyPI.
+- **Cross-file `jssgTransform` in translated `workflow.yaml`** ([#2504](https://github.com/codemod/codemod/pull/2504), [#2505](https://github.com/codemod/codemod/pull/2505)): a 1.x transform that edits other files keeps working, and concurrent edits to the same file are no longer lost.
+- **Faster `forEachFile`** ([#2500](https://github.com/codemod/codemod/pull/2500)): files are read lazily and in parallel, with much lower memory on large targets.
+
+**Fixes**
+
+- Overlapping ast-grep matches no longer corrupt files ([#2499](https://github.com/codemod/codemod/pull/2499)). The outer match wins; use `repeat` to fix the inner ones too.
+- `--version` prints the npm version, not `1.18.7` ([#2502](https://github.com/codemod/codemod/pull/2502)).
+- From the engine review ([#2496](https://github.com/codemod/codemod/pull/2496)):
+  - Renames through symlinks that leave the target are refused, and so are ast-grep base paths outside it.
+  - Canceling stops an agent even after it closed its output, and stops its child processes on Windows.
+  - Nested registry runs respect preview-only restrictions.
+  - `workflow upgrade` updates the manifest of a nested workflow.
+  - A shard prescan fails when the transform fails on every file.
+  - Registry packages with only a `workflow.ts` validate and cache.
+  - `import { sep, delimiter } from "node:path"` works.
+
+**Known gaps**
+
+- Semantic analysis (`definition()`, `references()`) in callbacks doesn't work on the Node.js host.
+- Imports in a workflow need the real file extension (`./migrate.ts`).
+- Several bugs found in this alpha are fixed in alpha.6, including TypeScript rules not running on `.js` files and `[object Object]` in translated `${{ }}` values.
+</Update>
+
+<Update label="2.0.0-alpha.4" description="November 19, 2026">
+```bash
+npx codemod@2.0.0-alpha.4 workflow run -w workflow.ts --target .
+```
+
+Shipped with the blog post [Your migration workflow is a program, so we made it one](https://codemod.com/blog/migration-workflows-as-code).
+
+**Highlights**
+
+- Workflow state is gone. Steps get values from the workflow and return what they found.
+- Shell steps return `{ stdout, stderr, exitCode }`.
+- Transforms return data, and metrics are removed.
+- A dependency graph step: query the target's lockfiles and the npm and crates.io registries.
+
+**Breaking changes**
+
+- **No workflow state** ([#2489](https://github.com/codemod/codemod/pull/2489)). `getState`, `setState`, `unsetState`, `acquireLock` and the step-output functions were removed; importing one is a build error. Give a step what it needs (captured variables, shell `env`) and read what it found from its result.
+
+  ```ts
+  // before
+  await step("Detect", shell('echo "version=19" >> "$STATE_OUTPUTS"'));
+  const version = getState("version");
+
+  // after
+  const { stdout } = await step("Detect", shell`node -p "JSON.stringify({ version: 19 })"`);
+  const { version } = JSON.parse(stdout.trim().split("\n").at(-1)!);
+  ```
+
+  `${{ state.x }}` in `workflow.yaml` still translates. A jssg transform that calls `getState`/`setState` fails to load.
+
+- **Shell steps return what the command printed** ([#2491](https://github.com/codemod/codemod/pull/2491)): `{ stdout, stderr, exitCode }`, keeping the last 1 MiB of each stream. A non-zero exit fails the step; `shell(cmd, { allowFailure: true })` returns the exit code instead. Step logs tag stderr lines with `[stderr]`.
+- **Transforms return `{ edit, data }`, and metrics are removed** ([#2489](https://github.com/codemod/codemod/pull/2489), [#2491](https://github.com/codemod/codemod/pull/2491)). `codemod/metrics` and `useMetricAtom` are gone. A transform returns its findings as `data` (any JSON), and the step's `data` is `[{ file, data }]`, sorted by path. `jssg test` snapshots `data.json` instead of `metrics.json`.
+
+  ```ts
+  // before
+  import { useMetricAtom } from "codemod/metrics";
+  const props = useMetricAtom("prop-usage");
+  const transform = async (root) => {
+    for (const attr of findProps(root)) props.increment({ propName: attr.text() });
+    return null;
+  };
+
+  // after
+  const transform = async (root) => ({
+    edit: null,
+    data: findProps(root).map((attr) => attr.text()),
+  });
+  ```
+
+**New**
+
+- **`dependencyGraph`, `registry` and `semver`** ([#2486](https://github.com/codemod/codemod/pull/2486)): a step reads the target's lockfiles (Yarn Berry, pnpm, package-lock, Cargo) into a graph, and its callback queries the graph and the npm and crates.io registries. Registry answers are recorded with the step, so a resume doesn't ask again. These moved to `codemod/deps` in alpha.5.
+
+**Fixes**
+
+- `workflow validate -w src/workflow.ts` resolves local imports when the path is relative ([#2488](https://github.com/codemod/codemod/pull/2488)).
+- Shell redirects such as `2>&1` work in Windows batch scripts.
+
+**Known gaps**
+
+- `--version` prints `1.18.7` (fixed in alpha.5).
+- `dependencyGraph` fails on Yarn 1 lockfiles, and reads no Python, Go or bun lockfiles.
+- A translated `workflow.yaml` step that writes `$STATE_OUTPUTS` needs a POSIX shell; on Windows it loses the state.
+</Update>
+
+<Update label="2.0.0-alpha.3" description="November 16, 2026">
+```bash
+npx codemod@2.0.0-alpha.3 workflow run -w workflow.ts --target .
+```
+
+**Highlights**
+
+- Step retries, timeouts, `sleep` and `waitForEvent`.
+- A step where some files fail is `partial`, and the run goes on.
+- `codemod init` scaffolds `src/workflow.ts` and a `tests/workflow.test.ts`.
+
+**Breaking changes**
+
+- **`codemod workflow test` was removed.** New packages get a `tests/workflow.test.ts` that runs the workflow on each fixture with `node:test` and `codemod/testing`.
+- **`codemod init` no longer asks to add an agent skill**, and `--with-skill` is gone. `--skill` still makes a skill-only package. Angular was dropped from the `init` templates.
+- **A step is matched on resume by its label and content**, not by the order steps ran in. `NondeterminismError` is gone: a changed step runs again. Runs recorded by alpha.2 replay nothing.
+
+**New**
+
+- **Step options** `retries`, `retryDelay` and `timeout`: `step(label, task, { retries: 2, timeout: "10m" })`.
+- **`sleep(duration)` and `waitForEvent(name, { timeout })`** steps, and `codemod workflow send <event> --id <run>` to deliver an event to a run.
+- **Partial steps**: a `forEachFile`, `jssg` or `astGrep` step fails only when every file fails. Otherwise the rest of its changes apply, the failed files are logged with their errors, and the run goes on.
+- **`` shell`...` ``** as a tagged template quotes each interpolated value for the shell.
+- **`import.meta.dirname`, `filename` and `url`** in workflows, steps and callbacks.
+- **`codemod init`** writes `src/workflow.ts`, with transforms inline as `forEachFile` callbacks, scripts in `src/scripts/` and rules in `src/rules/`.
+
+**Fixes**
+
+- Shell commands started at the same time no longer wait for each other's output pipes.
+- Language types import as types in ES module projects.
+- The C and Python `init` templates.
+
+**Known gaps**
+
+- `--version` prints `1.18.7` (fixed in alpha.5).
+</Update>
+
+<Update label="2.0.0-alpha.2" description="November 13, 2026">
+```bash
+npx codemod@2.0.0-alpha.2 workflow run -w workflow.ts --target .
+```
+
+**Highlights**
+
+The first build with the v2 engine ([#2485](https://github.com/codemod/codemod/pull/2485)).
+
+- **Workflows are TypeScript.** A `workflow.ts` default export runs steps. `step()` records each step's result, so a resumed run replays finished steps and runs failed ones again.
+- **`forEachFile(selector, callback)`** runs a per-file callback in parallel and applies all of a step's file changes together.
+- **`workflow.yaml` is translated** into the same TypeScript at run time. `codemod workflow upgrade [PATH] [--keep-yaml] [--dry-run]` writes that translation to disk.
+- **`codemod/testing`** (`runWorkflow`, `fixtures`, `assertTree`) runs workflows from `node:test`, Vitest or Bun, and **`codemod/host`** runs them in Node.js.
+- Modules are imported as `codemod/workflow`, `codemod/ast-grep` and so on. The `codemod:*` spelling still works.
+
+```ts workflow.ts
+import { step, forEachFile, approval, shell } from "codemod/workflow";
+
+export default async function main() {
+  await step("Rename stylesheets", forEachFile("src/**/*.less", (file) => {
+    file.rename(file.path.replace(/\.less$/, ".css"));
+  }));
+  await step(approval("Run the formatter?"));
+  await step("Format", shell("npx prettier --write src"));
+}
+```
+
+**Breaking changes from 1.x**
+
+- `codemod init` writes `workflow.ts`.
+- `codemod workflow tui` and the TUI were removed. Runs print text, or JSONL with `--format jsonl`.
+- Runs are resumed by id: `codemod workflow resume --id <run-id> [--approve]`. Runs started by 1.x can't be resumed.
+- Git steps (`branch`, `commit`, `pullRequest`) need `--managed-git`.
+- `runtime: docker` and `runtime: podman` are not supported; those steps run on the machine.
+
+**Known gaps**
+
+- `--version` prints `1.18.7` (fixed in alpha.5).
+- `codemod:llm` doesn't work inside transforms run by `jssg` steps.
+- Not yet checked on Windows.
+</Update>
+
+<Update label="2.0.0-alpha.1" description="November 13, 2026">
+This version was built from `main`, not from the v2 branch. It is the 1.18.7 CLI plus the `sdk-migration` agent skill, under a 2.0 version number, and has no v2 engine. Use alpha.2 or later.
+</Update>

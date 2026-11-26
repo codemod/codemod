@@ -10,6 +10,15 @@ on:
         description: "Version to release (e.g., 0.1.0)"
         required: true
         type: string
+      dist-tag:
+        description: "npm tag for the CLI and its platform packages (2.0.0 must use next)"
+        required: true
+        type: choice
+        default: alpha
+        options:
+          - alpha
+          - next
+          - latest
 
 permissions:
   id-token: write
@@ -17,8 +26,49 @@ permissions:
   pull-requests: write
 
 jobs:
+  release_metadata:
+    name: Resolve release version and npm tag
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      npm_tag: ${{ steps.release.outputs.npm_tag }}
+    steps:
+      - id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_NPM_TAG: ${{ inputs.dist-tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            version="$INPUT_VERSION"
+            npm_tag="$INPUT_NPM_TAG"
+            case "$npm_tag" in
+              alpha|next|latest) ;;
+              *) echo "::error::Select alpha, next, or latest"; exit 1 ;;
+            esac
+          else
+            version="${REF_NAME#codemod-cli@}"
+            case "$version" in
+              2.0.0) npm_tag=next ;;
+              1.18.*-*) npm_tag=alpha ;;
+              1.18.*) npm_tag=v1 ;;
+              *) npm_tag=latest ;;
+            esac
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Not a release version: $version"
+            exit 1
+          fi
+          if [[ "$version" == 2.0.0 && "$npm_tag" != next ]]; then
+            echo "::error::Publish 2.0.0 under next and promote it only after the soak"
+            exit 1
+          fi
+          printf 'version=%s\nnpm_tag=%s\n' "$version" "$npm_tag" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build Release
+    needs: release_metadata
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -64,9 +114,15 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" == "windows-2022" ]; then
             echo "path=target/${{ matrix.target }}/release/codemod.exe" >> "$GITHUB_OUTPUT"
+            echo "addon=target/${{ matrix.target }}/release/codemod_node.dll" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "path=target/${{ matrix.target }}/release/codemod" >> "$GITHUB_OUTPUT"
+          if [ "${{ matrix.os }}" == "macos-latest" ]; then
+            echo "addon=target/${{ matrix.target }}/release/libcodemod_node.dylib" >> "$GITHUB_OUTPUT"
+          else
+            echo "addon=target/${{ matrix.target }}/release/libcodemod_node.so" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -111,6 +167,7 @@ jobs:
         run: pnpm --filter codemod-report-ui build
 
       - name: Verify report UI build
+        shell: bash
         run: test -f crates/cli/report-ui/dist/index.html
 
       - name: Verify telemetry configuration
@@ -123,6 +180,22 @@ jobs:
         env:
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
 
+      # `codemod --version` and telemetry report the crate version, so use
+      # the same version in Cargo.toml as in the published npm packages.
+      - name: Set crate version to the release version
+        shell: bash
+        env:
+          VERSION: ${{ needs.release_metadata.outputs.version }}
+        run: |
+          sed -i.bak -E '/^\[workspace\.package\]/,/^\[workspace\.dependencies\]/ s/^version = ".*"/version = "'"$VERSION"'"/' Cargo.toml
+          rm Cargo.toml.bak
+          # A Windows checkout may end lines with CR.
+          if ! tr -d '\r' < Cargo.toml | grep -Fx "version = \"$VERSION\"" > /dev/null; then
+            echo "::error::Could not set the workspace version to $VERSION"
+            exit 1
+          fi
+          echo "Building version $VERSION"
+
       - name: Build
         run: |
           cargo build --release -p codemod --target ${{ matrix.target }}
@@ -131,7 +204,19 @@ jobs:
           # Optional override; falls back to the default Scarf gateway when unset.
           SCARF_GATEWAY_URL: ${{ vars.SCARF_GATEWAY_URL }}
 
+      # The Node.js addon behind `codemod/host` and `codemod/testing`. Node on
+      # musl loads addons dynamically, so musl builds link the C runtime
+      # dynamically here.
+      - name: Build Node.js addon
+        shell: bash
+        run: |
+          if [[ "${{ matrix.target }}" == *-musl ]]; then
+            export RUSTFLAGS="-C target-feature=-crt-static"
+          fi
+          cargo build --release -p codemod-node --target ${{ matrix.target }}
+
       - name: Chmod binary
+        shell: bash
         run: |
           chmod 755 ${{ steps.binary_path.outputs.path }}
 
@@ -151,10 +236,26 @@ jobs:
             --verbose \
             ${{ steps.binary_path.outputs.path }}
 
+      - name: Sign Node.js addon (macOS only)
+        if: matrix.os == 'macos-latest'
+        env:
+          APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          timeout 300 codesign \
+            --force \
+            --timestamp \
+            --sign "$APPLE_IDENTITY" \
+            --team-id "$APPLE_TEAM_ID" \
+            --options runtime \
+            --verbose \
+            ${{ steps.binary_path.outputs.addon }}
+
       - name: Verify Signing (macOS only)
         if: matrix.os == 'macos-latest'
         run: |
           codesign --verify --deep --verbose=4 ${{ steps.binary_path.outputs.path }}
+          codesign --verify --verbose=4 ${{ steps.binary_path.outputs.addon }}
 
       - name: Create ZIP for Notarization (macOS only)
         if: matrix.os == 'macos-latest'
@@ -191,11 +292,21 @@ jobs:
           cd target/${{ matrix.target }}/release
           mv codemod.exe ${{ matrix.binary_name }}
 
+      - name: Name Node.js addon
+        shell: bash
+        run: cp ${{ steps.binary_path.outputs.addon }} target/${{ matrix.target }}/release/codemod.node
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+
+      - name: Upload Node.js addon
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}-node
+          path: target/${{ matrix.target }}/release/codemod.node
 
   changelog:
     name: Generate Changelog
@@ -277,7 +388,7 @@ jobs:
 
   release_npm:
     name: Release NPM Package
-    needs: [build]
+    needs: [release_metadata, build]
     environment: production
     runs-on: ubuntu-22.04
     permissions:
@@ -292,27 +403,24 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
+      # The package's JavaScript is built from TypeScript and not committed.
+      # Before the versions below are written into package.json, which the
+      # lockfile does not know.
+      - uses: pnpm/action-setup@v6
+
+      - name: Install npm package dependencies
+        run: pnpm install --frozen-lockfile --filter codemod...
+
+      - name: Build npm package
+        run: pnpm --filter codemod build
+
+      - name: Verify npm package build
+        run: test -f crates/cli/npm/runtime/host.mjs && test -f crates/cli/npm/testing/index.d.mts
+
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
           path: artifacts
-
-      - name: Extract version from tag or input
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            # Use manual input version for workflow_dispatch
-            VERSION="${{ github.event.inputs.version }}"
-            NPM_TAG="alpha"
-          else
-            # Extract version from tag (e.g., codemod-cli@0.1.0 -> 0.1.0)
-            VERSION=$(echo "${{ github.ref_name }}" | sed 's/codemod-cli@//')
-            NPM_TAG="latest"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION"
-          echo "NPM Tag: $NPM_TAG"
 
       - name: Setup npm packages with binaries
         run: |
@@ -337,21 +445,33 @@ jobs:
           # Make binaries executable
           chmod +x crates/cli/npm/platforms/*/codemod
 
+          # Node.js addons, for codemod/host and codemod/testing
+          cp artifacts/aarch64-apple-darwin-node/codemod.node crates/cli/npm/platforms/darwin-arm64/codemod.node
+          cp artifacts/x86_64-apple-darwin-node/codemod.node crates/cli/npm/platforms/darwin-x64/codemod.node
+          cp artifacts/x86_64-unknown-linux-gnu-node/codemod.node crates/cli/npm/platforms/linux-x64-gnu/codemod.node
+          cp artifacts/x86_64-unknown-linux-musl-node/codemod.node crates/cli/npm/platforms/linux-x64-musl/codemod.node
+          cp artifacts/aarch64-unknown-linux-gnu-node/codemod.node crates/cli/npm/platforms/linux-arm64-gnu/codemod.node
+          cp artifacts/aarch64-unknown-linux-musl-node/codemod.node crates/cli/npm/platforms/linux-arm64-musl/codemod.node
+          cp artifacts/x86_64-pc-windows-msvc-node/codemod.node crates/cli/npm/platforms/win32-x64-msvc/codemod.node
+
       - name: Update package versions
+        env:
+          VERSION: ${{ needs.release_metadata.outputs.version }}
         run: |
           # Update main package version
-          sed -i 's/"version": "0.0.0"/"version": "${{ steps.version.outputs.version }}"/' crates/cli/npm/package.json
+          sed -i "s/\"version\": \"0.0.0\"/\"version\": \"$VERSION\"/" crates/cli/npm/package.json
 
           # Update platform package versions
           for platform in crates/cli/npm/platforms/*/package.json; do
-            sed -i 's/"version": "0.0.0"/"version": "${{ steps.version.outputs.version }}"/' "$platform"
+            sed -i "s/\"version\": \"0.0.0\"/\"version\": \"$VERSION\"/" "$platform"
           done
 
           # Update optional dependencies versions in main package
-          sed -i 's/"@codemod\.com\/cli-\([^"]*\)": "0\.0\.0"/"@codemod.com\/cli-\1": "${{ steps.version.outputs.version }}"/g' crates/cli/npm/package.json
-          sed -i 's/"@codemod\.com\/cli-\([^"]*\)": "workspace:0\.0\.0"/"@codemod.com\/cli-\1": "${{ steps.version.outputs.version }}"/g' crates/cli/npm/package.json
+          sed -i -E 's/("@codemod\.com\/cli-[^"]*": ")(workspace:)?0\.0\.0"/\1'"$VERSION"'"/g' crates/cli/npm/package.json
 
       - name: Publish platform packages
+        env:
+          NPM_TAG: ${{ needs.release_metadata.outputs.npm_tag }}
         run: |
           # Publish each platform package with error handling
           for platform in crates/cli/npm/platforms/*/; do
@@ -370,7 +490,7 @@ jobs:
             fi
 
             # Publish with explicit tag, provenance for OIDC auth, and error handling
-            if ! npm publish --tag "${{ steps.version.outputs.npm_tag }}" --access public --provenance; then
+            if ! npm publish --tag "$NPM_TAG" --access public --provenance; then
               echo "Failed to publish $platform_name"
               exit 1
             fi
@@ -380,6 +500,8 @@ jobs:
           done
 
       - name: Publish main package
+        env:
+          NPM_TAG: ${{ needs.release_metadata.outputs.npm_tag }}
         run: |
           cd crates/cli/npm
-          npm publish --tag ${{ steps.version.outputs.npm_tag }} --provenance
+          npm publish --tag "$NPM_TAG" --provenance

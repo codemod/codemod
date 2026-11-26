@@ -4,13 +4,13 @@ use reqwest;
 use reqwest::header::CONTENT_LENGTH;
 use serde::Deserialize;
 use serde_json;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 use tempfile::TempDir;
 use thiserror::Error;
-use walkdir::WalkDir;
 
 use crate::utils::get_cache_dir;
 
@@ -35,6 +35,15 @@ pub enum RegistryError {
 
     #[error("Failed to fetch package info ({status}): {message}")]
     FetchPackageInfoFailed { status: u16, message: String },
+
+    #[error("Invalid package cache component")]
+    InvalidComponent,
+
+    #[error("Registry package does not match the advertised size or SHA-256 checksum")]
+    Integrity,
+
+    #[error("Registry archive may contain only regular files and directories within the package")]
+    InvalidArchiveEntry,
 
     #[error("Invalid scoped package name: {name}")]
     InvalidScopedPackageName { name: String },
@@ -62,6 +71,9 @@ pub enum RegistryError {
 
     #[error("Invalid package: missing {file} in {path}")]
     MissingPackageFile { file: String, path: String },
+
+    #[error("Invalid package workflow: {0}")]
+    InvalidPackageWorkflow(String),
 
     #[error("HTTP request failed")]
     HttpError(#[from] reqwest::Error),
@@ -219,8 +231,7 @@ impl RegistryClient {
         force_download: bool,
         progress_bar: Option<ProgressBarCallback>,
     ) -> Result<ResolvedPackage> {
-        // Check if it's a local path
-        if source.starts_with("./") || source.starts_with("../") || source.starts_with("/") {
+        if is_local_source(source) {
             return self.resolve_local_package(source);
         }
 
@@ -255,7 +266,11 @@ impl RegistryClient {
         let version = determine_version(&package_spec, &package_info)?;
 
         // Get or create cache directory
-        let package_cache_dir = self.get_package_cache_dir(&package_spec, &version)?;
+        let artifact = &package_info.versions[&version];
+        resolved_package_spec.validate()?;
+        validate_component(&version)?;
+        let package_cache_dir =
+            self.get_package_cache_dir(&package_spec, &version, registry, artifact)?;
         // Parallel bundle resolution can discover the same transitive package
         // through multiple branches. Serialize writes to that package's cache
         // directory so concurrent downloads cannot remove or partially copy
@@ -266,7 +281,7 @@ impl RegistryClient {
         // Check if package is cached and valid.
         let is_pro_package = package_info.access.as_deref() == Some("pro");
         let should_download = force_download
-            || !is_package_cached(&package_cache_dir)?
+            || !is_package_cached(&package_cache_dir)
             || is_pro_package
             || package_cache_dir.join(".dry_run_only").exists();
 
@@ -277,6 +292,7 @@ impl RegistryClient {
                     registry,
                     &resolved_package_spec,
                     &version,
+                    artifact,
                     &package_cache_dir,
                     progress_bar,
                 )
@@ -315,7 +331,7 @@ impl RegistryClient {
     }
 
     /// Resolves a package from a local directory.
-    pub(crate) fn resolve_local_package_at(&self, path: &Path) -> Result<ResolvedPackage> {
+    pub fn resolve_local_package_at(&self, path: &Path) -> Result<ResolvedPackage> {
         let path = path.to_path_buf();
 
         if !path.exists() {
@@ -470,22 +486,38 @@ impl RegistryClient {
         Ok(package_info)
     }
 
-    fn get_package_cache_dir(&self, spec: &PackageSpec, version: &str) -> Result<PathBuf> {
+    fn get_package_cache_dir(
+        &self,
+        spec: &PackageSpec,
+        version: &str,
+        registry: &str,
+        artifact: &PackageVersion,
+    ) -> Result<PathBuf> {
+        let identity = Sha256::digest(format!("{registry}\0{}", artifact.checksum).as_bytes());
+        let version = format!("{version}--{identity:x}");
         let package_dir = if let Some(scope) = &spec.scope {
             self.config
                 .cache_dir
                 .join(scope)
-                .join(&spec.name)
+                .join(spec.name.replace('/', "%2F"))
                 .join(version)
         } else {
             self.config
                 .cache_dir
                 .join("global")
-                .join(&spec.name)
+                .join(spec.name.replace('/', "%2F"))
                 .join(version)
         };
 
-        fs::create_dir_all(&package_dir)?;
+        for ancestor in package_dir
+            .ancestors()
+            .take_while(|p| *p != self.config.cache_dir)
+        {
+            if ancestor.is_symlink() {
+                return Err(RegistryError::InvalidComponent);
+            }
+        }
+        fs::create_dir_all(package_dir.parent().expect("cache entry has a parent"))?;
         Ok(package_dir)
     }
 
@@ -494,6 +526,7 @@ impl RegistryClient {
         registry_url: &str,
         spec: &PackageSpec,
         version: &str,
+        artifact: &PackageVersion,
         cache_dir: &Path,
         progress_bar: Option<ProgressBarCallback>,
     ) -> Result<(PathBuf, bool)> {
@@ -547,10 +580,7 @@ impl RegistryClient {
                                 "Server returned dry_run_only: {}",
                                 download_response.dry_run_only
                             );
-                            debug!(
-                                "Server returned download URL: {}",
-                                download_response.download_url
-                            );
+                            // CDN URLs may carry signed query parameters; never log them.
 
                             let dry_run_only = download_response.dry_run_only;
 
@@ -558,12 +588,13 @@ impl RegistryClient {
                             let actual_package_data = self
                                 .download_from_url(
                                     &download_response.download_url,
-                                    auth_token.as_deref(),
+                                    None,
                                     None,
                                     progress_bar,
                                 )
                                 .await?;
 
+                            artifact.note_mismatch(&actual_package_data);
                             // Check if this is a gzip file or uncompressed tar
                             if actual_package_data.len() >= 2 {
                                 let actual_magic = &actual_package_data[0..2];
@@ -601,6 +632,7 @@ impl RegistryClient {
         }
 
         // If we get here, it's a direct gzip file (public package)
+        artifact.note_mismatch(&package_data);
         self.extract_package(&package_data, cache_dir).await?;
         info!("Package cached to: {}", cache_dir.display());
         Ok((cache_dir.to_path_buf(), false))
@@ -695,38 +727,11 @@ impl RegistryClient {
     }
 
     async fn extract_package(&self, package_data: &[u8], cache_dir: &Path) -> Result<()> {
-        let temp_dir = TempDir::new()?;
-        let temp_path = temp_dir.path();
-
-        let tar_gz = flate2::read::GzDecoder::new(package_data);
-        let mut archive = tar::Archive::new(tar_gz);
-        info!("Extracting to: {}", temp_path.display());
-        archive.unpack(temp_path)?;
-
-        if cache_dir.exists() {
-            fs::remove_dir_all(cache_dir)?;
-        }
-        fs::create_dir_all(cache_dir.parent().unwrap())?;
-
-        copy_dir_recursively(temp_path, cache_dir)?;
-        Ok(())
+        install_archive(flate2::read::GzDecoder::new(package_data), cache_dir)
     }
 
     async fn extract_uncompressed_tar(&self, package_data: &[u8], cache_dir: &Path) -> Result<()> {
-        let temp_dir = TempDir::new()?;
-        let temp_path = temp_dir.path();
-
-        let mut archive = tar::Archive::new(package_data);
-        info!("Extracting uncompressed tar to: {}", temp_path.display());
-        archive.unpack(temp_path)?;
-
-        if cache_dir.exists() {
-            fs::remove_dir_all(cache_dir)?;
-        }
-        fs::create_dir_all(cache_dir.parent().unwrap())?;
-
-        copy_dir_recursively(temp_path, cache_dir)?;
-        Ok(())
+        install_archive(package_data, cache_dir)
     }
 }
 
@@ -734,6 +739,12 @@ impl Default for RegistryClient {
     fn default() -> Self {
         Self::new(RegistryConfig::default(), None)
     }
+}
+
+/// Whether `source` names a package directory on this machine (`./x`,
+/// `../x`, `/x`) rather than a registry package.
+pub fn is_local_source(source: &str) -> bool {
+    source.starts_with("./") || source.starts_with("../") || source.starts_with('/')
 }
 
 pub fn parse_package_spec(package: &str) -> Result<PackageSpec> {
@@ -763,11 +774,75 @@ pub fn parse_package_spec(package: &str) -> Result<PackageSpec> {
         (rest.to_string(), None)
     };
 
-    Ok(PackageSpec {
+    let spec = PackageSpec {
         scope,
         name,
         version,
-    })
+    };
+    spec.validate()?;
+    Ok(spec)
+}
+
+impl PackageSpec {
+    fn validate(&self) -> Result<()> {
+        for part in self.name.split('/') {
+            validate_component(part)?;
+        }
+        if let Some(scope) = &self.scope {
+            validate_component(
+                scope
+                    .strip_prefix('@')
+                    .ok_or(RegistryError::InvalidComponent)?,
+            )?;
+        }
+        if let Some(version) = &self.version {
+            validate_component(version)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_component(value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.starts_with('.')
+        || value.ends_with('.')
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._+".contains(&b))
+    {
+        return Err(RegistryError::InvalidComponent);
+    }
+    Ok(())
+}
+
+impl PackageVersion {
+    /// Not an error yet: the production registry's `checksum` and `size`
+    /// do not describe the bytes its download URL serves (every package
+    /// tried failed the check), so refusing a mismatch would refuse every
+    /// package. Once the registry advertises the archive's own digest, make
+    /// this the error [`RegistryError::Integrity`].
+    fn note_mismatch(&self, bytes: &[u8]) {
+        if self.verify(bytes).is_err() {
+            debug!(
+                "package bytes ({} bytes) do not match the registry's advertised size ({}) or checksum",
+                bytes.len(),
+                self.size
+            );
+        }
+    }
+
+    fn verify(&self, bytes: &[u8]) -> Result<()> {
+        let expected = self
+            .checksum
+            .strip_prefix("sha256:")
+            .unwrap_or(&self.checksum);
+        if bytes.len() != self.size as usize
+            || !format!("{:x}", Sha256::digest(bytes)).eq_ignore_ascii_case(expected)
+        {
+            return Err(RegistryError::Integrity);
+        }
+        Ok(())
+    }
 }
 
 fn normalize_scope(scope: &str) -> String {
@@ -854,57 +929,41 @@ fn determine_version(spec: &PackageSpec, package_info: &PackageInfo) -> Result<S
         })
 }
 
-fn is_package_cached(package_dir: &Path) -> Result<bool> {
-    if !package_dir.exists() {
-        return Ok(false);
-    }
-
-    // Check for required files
-    let codemod_yaml = package_dir.join("codemod.yaml");
-    let workflow_yaml = package_dir.join("workflow.yaml");
-
-    Ok(codemod_yaml.exists() && workflow_yaml.exists())
+fn is_package_cached(package_dir: &Path) -> bool {
+    validate_package_structure(package_dir).is_ok()
 }
 
 fn validate_package_structure(package_dir: &Path) -> Result<()> {
     let codemod_yaml = package_dir.join("codemod.yaml");
-    let workflow_yaml = package_dir.join("workflow.yaml");
 
-    if !codemod_yaml.exists() {
+    if !codemod_yaml.is_file() {
         return Err(RegistryError::MissingPackageFile {
             file: "codemod.yaml".to_string(),
             path: package_dir.display().to_string(),
         });
     }
 
-    if !workflow_yaml.exists() {
-        return Err(RegistryError::MissingPackageFile {
-            file: "workflow.yaml".to_string(),
-            path: package_dir.display().to_string(),
-        });
-    }
+    crate::package_workflows::locate_workflow(package_dir, None)
+        .map_err(RegistryError::InvalidPackageWorkflow)?;
 
     debug!("Package structure validated");
     Ok(())
 }
 
-fn copy_dir_recursively(src: &Path, dst: &Path) -> Result<()> {
-    info!(
-        "Copying directory recursively from: {} to: {}",
-        src.display(),
-        dst.display()
-    );
-    for entry in WalkDir::new(src) {
-        let entry = entry?;
-        let path = entry.path();
-        let relative_path = path.strip_prefix(src).unwrap();
-        let dst_path = dst.join(relative_path);
-        if entry.file_type().is_dir() {
-            fs::create_dir_all(&dst_path)?;
-        } else {
-            fs::copy(path, &dst_path)?;
+fn install_archive(reader: impl std::io::Read, dst: &Path) -> Result<()> {
+    let staging = TempDir::new_in(dst.parent().expect("cache entry has a parent"))?;
+    for entry in tar::Archive::new(reader).entries()? {
+        let mut entry = entry?;
+        let kind = entry.header().entry_type();
+        if !(kind.is_dir() || kind.is_file()) || !entry.unpack_in(staging.path())? {
+            return Err(RegistryError::InvalidArchiveEntry);
         }
     }
+    validate_package_structure(staging.path())?;
+    if dst.exists() {
+        fs::remove_dir_all(dst)?;
+    }
+    fs::rename(staging.path(), dst)?;
     Ok(())
 }
 
@@ -918,6 +977,123 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+
+    #[test]
+    fn registry_validation_and_cache_recognize_typescript_workflows() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("workflows")).unwrap();
+        fs::write(
+            root.join("codemod.yaml"),
+            "name: demo\nworkflow: workflows/main.ts\n",
+        )
+        .unwrap();
+        assert!(!is_package_cached(root));
+        fs::write(root.join("workflows/main.ts"), "export default () => 1;").unwrap();
+        assert!(is_package_cached(root));
+        validate_package_structure(root).unwrap();
+        fs::write(root.join("codemod.yaml"), "name: demo\n").unwrap();
+        fs::write(root.join("workflow.ts"), "export default () => 1;").unwrap();
+        assert!(is_package_cached(root));
+        validate_package_structure(root).unwrap();
+    }
+
+    #[test]
+    fn registry_integrity_requires_matching_size_and_digest() {
+        let bytes = b"fixture";
+        let mut metadata = PackageVersion {
+            version: "1".into(),
+            description: None,
+            size: 7,
+            checksum: format!("sha256:{:x}", Sha256::digest(bytes)),
+        };
+        metadata.verify(bytes).unwrap();
+        assert!(metadata.verify(b"Fixture").is_err());
+        metadata.size = 0;
+        assert!(metadata.verify(bytes).is_err());
+    }
+
+    #[test]
+    fn registry_names_are_single_components() {
+        for value in ["", ".", "..", "/tmp", "one/two", "C:", "a\\b"] {
+            assert!(validate_component(value).is_err());
+        }
+        assert!(parse_package_spec("@org/my-package@2.0.0-alpha.10").is_ok());
+        assert!(parse_package_spec("@org/group/recipe@1.0.0").is_ok());
+        assert!(parse_package_spec("@org/group/../recipe").is_err());
+    }
+
+    fn write_package(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("package dir");
+        for (name, contents) in files {
+            let path = dir.path().join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent");
+            }
+            fs::write(path, contents).expect("write package file");
+        }
+        dir
+    }
+
+    #[test]
+    fn package_with_declared_workflows_list_is_valid_and_cached() {
+        let package = write_package(&[
+            (
+                "codemod.yaml",
+                "name: demo\nworkflows:\n  - name: main\n    path: workflow.ts\n",
+            ),
+            ("workflow.ts", "export default {};\n"),
+        ]);
+        validate_package_structure(package.path()).expect("code-first package is valid");
+        assert!(is_package_cached(package.path()));
+    }
+
+    #[test]
+    fn yaml_package_is_still_valid_and_cached() {
+        let package = write_package(&[
+            ("codemod.yaml", "name: demo\n"),
+            ("workflow.yaml", "version: '1'\n"),
+        ]);
+        validate_package_structure(package.path()).expect("YAML package is valid");
+        assert!(is_package_cached(package.path()));
+    }
+
+    #[test]
+    fn package_without_any_workflow_is_rejected() {
+        let package = write_package(&[("codemod.yaml", "name: demo\n")]);
+        let error = validate_package_structure(package.path()).unwrap_err();
+        assert!(
+            matches!(error, RegistryError::InvalidPackageWorkflow(_)),
+            "unexpected error: {error}"
+        );
+        assert!(!is_package_cached(package.path()));
+    }
+
+    #[test]
+    fn package_whose_declared_workflow_is_missing_is_rejected() {
+        let package = write_package(&[
+            (
+                "codemod.yaml",
+                "name: demo\nworkflows:\n  - name: main\n    path: workflow.ts\n",
+            ),
+            // A stray workflow.yaml does not stand in for the declared workflow.
+            ("workflow.yaml", "version: '1'\n"),
+        ]);
+        let error = validate_package_structure(package.path()).unwrap_err();
+        assert!(error.to_string().contains("workflow.ts"), "{error}");
+        assert!(!is_package_cached(package.path()));
+    }
+
+    #[test]
+    fn package_without_codemod_yaml_is_rejected() {
+        let package = write_package(&[("workflow.ts", "export default {};\n")]);
+        let error = validate_package_structure(package.path()).unwrap_err();
+        assert!(matches!(
+            error,
+            RegistryError::MissingPackageFile { ref file, .. } if file == "codemod.yaml"
+        ));
+        assert!(!is_package_cached(package.path()));
+    }
 
     #[tokio::test]
     async fn package_locks_are_shared_while_live_and_pruned_after_use() {
@@ -1393,8 +1569,8 @@ mod tests {
                 "1.0.0": {
                     "version": "1.0.0",
                     "description": null,
-                    "checksum": "sha256:test",
-                    "size": 1
+                    "checksum": format!("sha256:{:x}", Sha256::digest(package_archive())),
+                    "size": package_archive().len()
                 }
             }
         })

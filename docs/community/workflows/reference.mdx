@@ -1,931 +1,1017 @@
 ---
 title: "Workflow Reference"
 sidebarTitle: "Reference"
+description: "The workflow.ts API: steps, per-file callbacks, tasks, and resuming runs."
 ---
 
-This reference documents the complete `workflow.yaml` specification for Codemod Workflows.
-
-## Complete Example
-
-This example demonstrates all five step types working together in a migration workflow:
-
-```yaml workflow.yaml
-version: "1"
-
-params:
-  schema:
-    library:
-      name: "Library"
-      description: "Target library for migration"
-      type: string
-      default: "analytics-v2"
-
-state:
-  schema:
-    - name: shards
-      type: array
-      items:
-        type: object
-        properties:
-          team: { type: string }
-          shardId: { type: string }
-
-nodes:
-  - id: migrate-analytics
-    name: Migrate legacy analytics to analytics.track({ event, properties })
-    type: automatic
-    steps:
-      # 1) Codemod Registry: run well-defined baseline migration first
-      - name: "Run registry codemod: legacy analytics -> analytics.track"
-        codemod:
-          source: "@codemod/migrate-analytics-v2"
-          args:
-            - "legacy-analytics"
-            - "analytics-v2"
-
-      # 2) JSSG: handle project-specific patterns with programmatic logic
-      - name: "Project-specific TS codemod (wrappers + key normalization)"
-        js-ast-grep:
-          js_file: "scripts/codemods/migrate-analytics-wrappers.ts"
-          language: "typescript"
-          include:
-            - "src/**/*.{ts,tsx}"
-          exclude:
-            - "**/*.test.ts"
-
-      # 3) AI: transform hard cases the rules miss
-      - name: "AI fixups: dynamic calls + edge cases -> analytics.track object form"
-        ai:
-          prompt: |
-            You are performing a code migration. Modify files directly.
-
-            Goal:
-            Convert any remaining legacy analytics calls into:
-              analytics.track({ event: <string>, properties: <object> })
-
-            Handle these hard cases:
-            1) Dynamic event names: trackEvent(getName(), props)
-              - Preserve semantics. event should become getName().
-            2) Non-object props: trackEvent("X", foo)
-              - Convert to properties: foo if foo is object-like, otherwise { value: foo }.
-
-            Constraints:
-            - Keep formatting roughly intact (prettier will run later).
-            - If unsure about a transformation, add a TODO comment explaining why.
-
-      # 4) YAML ast-grep: clean up simple leftovers (fast + deterministic)
-      - name: "Apply cleanup rules (YAML ast-grep)"
-        ast-grep:
-          config_file: "rules/analytics_cleanup.yml"
-          include:
-            - "src/**/*.{ts,tsx,js,jsx}"
-          exclude:
-            - "**/*.test.*"
-
-      # 5) Shell: format after all transformations
-      - name: "Format code"
-        run: npx prettier --write "src/**/*.{ts,tsx,js,jsx}"
-```
-
----
-
-## Workflow Structure
-
-A workflow has four top-level keys:
-
-```yaml workflow.yaml
-version: "1"
-state:
-  schema: []
-params:
-  schema: {}
-templates: []
-nodes: []
-```
-
-| Key | Required | Purpose |
-|-----|----------|---------|
-| `version` | Yes | Workflow schema version (currently `"1"`) |
-| [`nodes`](#nodes) | Yes | Executable DAG of transformation nodes |
-| [`state`](#shared-state) | No | Declares shared-state schema for persistence |
-| [`params`](#parameters) | No | Configurable parameters with schema |
-| [`templates`](#templates) | No | Reusable step blocks |
-
----
-
-## Nodes
-
-Nodes are execution units in your workflow. They can be automatic or manual, depend on other nodes, and may define strategy (matrix), trigger, runtime, env, and an ordered list of steps.
-
-```yaml
-version: "1"
-nodes:
-  - id: build
-    name: Build
-    type: automatic
-    steps:
-      - name: npm install
-        run: npm ci
-```
-
-<ParamField path="id" type="string" required>
-  Unique identifier within the workflow.
-</ParamField>
-
-<ParamField path="name" type="string" required>
-  Display name shown in logs and UI.
-</ParamField>
-
-<ParamField path="type" type="string" default="automatic">
-  `automatic` or `manual`.
-</ParamField>
-
-<ParamField path="depends_on" type="string[]">
-  Upstream node IDs that must complete before this node runs. See [Cyclic Dependencies](#cyclic-dependencies).
-</ParamField>
-
-<ParamField path="trigger" type="object">
-  `{ type: manual }` creates an approval gate. See [Manual Triggers](#manual-triggers).
-</ParamField>
-
-<ParamField path="strategy" type="object">
-  Matrix configuration for parallel fan-out. See [Matrix Strategy](#matrix-strategy).
-</ParamField>
-
-<ParamField path="steps" type="array" required>
-  Ordered list of [steps](#steps) to execute.
-</ParamField>
-
-<ParamField path="env" type="object">
-  Environment variables for all steps in this node.
-</ParamField>
-
-### Git Automation (Campaign/Cloud Runs)
-
-In Campaign/cloud runs, each task executes on its own git branch. Codemod creates that branch before the node's steps run, can create commits after successful steps, and pushes the branch plus opens a pull request when the node ends with commits.
-
-<Info>
-These git automation fields are only used in Campaign/cloud runs. Local `codemod workflow run` execution does not create branches, commits, or pull requests automatically.
-</Info>
-
-```yaml
-nodes:
-  - id: migrate
-    name: Migrate API usage
-    branch_name: "codemod-${{ matrix.team }}-${{ task.signature }}"
-    pull_request:
-      title: "refactor: migrate ${{ matrix.team }}"
-      body: "Generated from task ${{ task.id }}"
-      draft: true
-    steps:
-      - name: Run transform
-        js-ast-grep:
-          js_file: "scripts/codemod.ts"
-          language: "tsx"
-```
-
-<ParamField path="branch_name" type="string">
-  Branch name template for Campaign/cloud runs. The branch is created before the node's steps run. If omitted, Codemod uses `codemod-<task.signature>`.
-</ParamField>
-
-<ParamField path="pull_request" type="object">
-  Pull request customization for Campaign/cloud runs. If the node ends with commits, Codemod pushes the task branch and attempts to create a pull request. This field customizes the PR metadata; omitting it does not disable PR creation.
-</ParamField>
-
-<ParamField path="pull_request.title" type="string" required>
-  Pull request title template.
-</ParamField>
-
-<ParamField path="pull_request.body" type="string">
-  Optional pull request body template.
-</ParamField>
-
-<ParamField path="pull_request.draft" type="boolean" default="false">
-  Create the pull request as a draft.
-</ParamField>
-
-<ParamField path="pull_request.base" type="string">
-  Base branch to merge into. If omitted, Codemod auto-detects the remote default branch.
-</ParamField>
-
-<Info>
-**Default Campaign/cloud behavior:** 
-
-If the node ends with commits and `pull_request` is omitted, Codemod attempts to open a pull request using the node name as the default title. If no explicit commit checkpoint was created and changes remain at the end of the node, Codemod attempts a fallback commit using the node name before pushing and opening the pull request.
-</Info>
-
----
-
-## Steps
-
-Steps are atomic actions inside a node. They run sequentially and each step performs one transformation or action.
-
-### Common Step Fields
-
-All step types support `name`, `if`, `env`, and `commit`.
-
-<ParamField path="name" type="string" required>
-  Step label.
-</ParamField>
-
-<ParamField path="if" type="string">
-  Conditional expression to gate step execution. Current runtime support for generic step conditions includes `params.x`, `state.x`, and `matrix.x`. See [Variable Resolution](#variable-resolution).
-</ParamField>
-
-<ParamField path="env" type="object">
-  Step-level environment variables applied to the process environment.
-</ParamField>
-
-<ParamField path="commit" type="object">
-  Optional commit checkpoint for Campaign/cloud runs. After a successful step, Codemod stages the configured paths and creates a git commit. If no step creates a commit but changes remain at the end of the node, Codemod attempts to create a fallback commit using the node name before pushing and opening the pull request.
-</ParamField>
-
-<ParamField path="commit.message" type="string" required>
-  Commit message template.
-</ParamField>
-
-<ParamField path="commit.add" type="string[]">
-  Paths to stage before committing. If omitted, Codemod stages the entire working tree for that task branch.
-</ParamField>
-
-<ParamField path="commit.allow_empty" type="boolean" default="true">
-  If `true`, skip the checkpoint when nothing is staged. If `false`, the step fails when there are no staged changes to commit.
-</ParamField>
-
-<Info>
-Commit checkpoints are Campaign/cloud-only. They run after successful steps on the task branch created for the node.
-</Info>
-
-### JSSG Step
-
-Executes a JavaScript/TypeScript codemod using ast-grep for pattern matching and AST manipulation.
-
-```yaml
-steps:
-  - name: Replace console.log with logger
-    js-ast-grep:
-      js_file: "scripts/codemod.ts"
-      language: "tsx"
-      include:
-        - "**/*.ts"
-        - "**/*.tsx"
-      exclude:
-        - "**/*.test.ts"
-```
-
-**JSSG Step Parameters**:
-
-<ParamField path="name" type="string" required>
-  Step label.
-</ParamField>
-
-<ParamField path="if" type="string">
-  Conditional expression to gate step execution. Supports `params.x`, `state.x`, and matrix value keys. Operators: `==`, `!=`, `>`, `<`, `&&`, `||`. See [Variable Resolution](#variable-resolution).
-</ParamField>
-
-<ParamField path="js-ast-grep.js_file" type="string" required>
-  Path to the JS/TS file that implements the codemod.
-</ParamField>
-
-<ParamField path="js-ast-grep.language" type="string">
-  Target language (e.g., `typescript`, `tsx`, `javascript`, `jsx`).
-</ParamField>
-
-<ParamField path="js-ast-grep.include" type="string[]">
-  Include glob patterns.
-</ParamField>
-
-<ParamField path="js-ast-grep.exclude" type="string[]">
-  Exclude glob patterns.
-</ParamField>
-
-<ParamField path="js-ast-grep.base_path" type="string">
-  Base path for resolving globs.
-</ParamField>
-
-<ParamField path="js-ast-grep.max_threads" type="number">
-  Maximum concurrent threads.
-</ParamField>
-
-<ParamField path="js-ast-grep.dry_run" type="boolean" default="false">
-  Perform a dry run without applying changes.
-</ParamField>
-
-<Card title="JSSG Documentation" icon="code" href="/community/jssg">
-  Learn how to write JavaScript/TypeScript codemods.
-</Card>
-
-### AI Step
-
-Calls an AI agent with a prompt for LLM-powered transformations.
-
-```yaml
-steps:
-  - name: Review diffs with AI
-    ai:
-      prompt: |
-        Summarize risky changes and suggest tests.
-      model: "gpt-4o"
-```
-
-**AI Step Parameters**:
-
-<ParamField path="name" type="string" required>
-  Step label.
-</ParamField>
-
-<ParamField path="if" type="string">
-  Conditional expression to gate step execution. See [Variable Resolution](#variable-resolution).
-</ParamField>
-
-<ParamField path="ai.prompt" type="string" required>
-  Prompt to send to the AI agent.
-</ParamField>
-
-<ParamField path="ai.model" type="string" default="gpt-4o">
-  Model identifier. Overrides `LLM_MODEL` if set.
-</ParamField>
-
-<ParamField path="ai.system_prompt" type="string">
-  System prompt to scope the AI agent's behavior.
-</ParamField>
-
-<ParamField path="ai.max_steps" type="number" default="30">
-  Maximum number of agent steps before stopping.
-</ParamField>
-
-<ParamField path="ai.llm_protocol" type="string" default="openai">
-  LLM provider/protocol. Supported: `openai`, `anthropic`, `google_ai`, `azure_openai`.
-</ParamField>
-
-<ParamField path="ai.endpoint" type="string">
-  LLM base URL. Defaults to the provider's standard endpoint.
-</ParamField>
-
-<ParamField path="ai.api_key" type="string">
-  API key for LLM access.
-
-  ```bash Environment variables for AI steps
-  LLM_API_KEY=YOUR_KEY
-  LLM_PROVIDER=openai  # or anthropic, google_ai, azure_openai
-  LLM_MODEL=gpt-4o
-  LLM_BASE_URL=https://api.openai.com/v1  # optional
-  ```
-</ParamField>
-
-### Install Skill Step
-
-Installs package skill behavior into a supported harness via the Codemod CLI. Use this in skill-only or workflow + skill packages when you want authored skill files from the package to be installable for coding-agent workflows.
-
-```yaml
-steps:
-  - name: Install package skill
-    install-skill:
-      package: "@your-scope/my-codemod"
-```
-
-In dry-run mode, this step is skipped. In non-interactive runs, it is also skipped by default unless the workflow is run with `--install-skill`. See [CLI reference](/community/cli#codemod-workflow).
-
-The target package must expose an authored `SKILL.md` with valid frontmatter and the authored-package markers:
-
-```md
----
-name: "my-skill"
-description: "Project-specific migration guidance"
-allowed-tools:
-  - Bash(codemod *)
----
-codemod-compatibility: skill-package-v1
-codemod-skill-version: 0.1.0
-```
-
-If you see `mcs-v1`, that is the marker for the built-in Codemod core skill profile, not for authored package skills installed by this workflow step.
-
-**Install Skill Step Parameters**:
-
-<ParamField path="name" type="string" required>
-  Step label.
-</ParamField>
-
-<ParamField path="if" type="string">
-  Conditional expression to gate step execution. See [Variable Resolution](#variable-resolution).
-</ParamField>
-
-<ParamField path="install-skill.package" type="string" required>
-  Package identifier to install, for example `@codemod/jest-to-vitest`.
-</ParamField>
-
-<ParamField path="install-skill.path" type="string">
-  Optional authored skill source path inside the package. Defaults to the conventional `agents/skill/<skill-name>/SKILL.md` layout.
-</ParamField>
-
-<ParamField path="install-skill.harness" type="string" default="auto">
-  Target harness adapter: `auto`, `claude`, `goose`, `opencode`, `cursor`, or `codex`.
-</ParamField>
-
-<ParamField path="install-skill.scope" type="string" default="project">
-  Install scope: `project` or `user`.
-</ParamField>
-
-<ParamField path="install-skill.force" type="boolean" default="false">
-  Overwrite existing skill files if needed.
-</ParamField>
-
-### YAML ast-grep Step
-
-Executes ast-grep using declarative YAML rules for simple, fast pattern matching.
-
-```yaml
-steps:
-  - name: "Apply cleanup rules"
-    ast-grep:
-      config_file: "rules/config.yml"
-      include:
-        - "**/*.js"
-      exclude:
-        - "**/*.test.js"
-```
-
-<Tip>
-When to use YAML ast-grep vs JSSG
-
-- **YAML ast-grep**: Simple find/replace, no conditional logic, fastest to write
-- **JSSG**: Conditional logic, complex AST manipulations, cross-file coordination
-</Tip>
-
-**YAML ast-grep Step Parameters**:
-
-<ParamField path="name" type="string" required>
-  Step label.
-</ParamField>
-
-<ParamField path="if" type="string">
-  Conditional expression to gate step execution. See [Variable Resolution](#variable-resolution).
-</ParamField>
-
-<ParamField path="ast-grep.config_file" type="string" required>
-  Path to the ast-grep configuration file (.yaml).
-</ParamField>
-
-<ParamField path="ast-grep.include" type="string[]">
-  Include glob patterns.
-</ParamField>
-
-<ParamField path="ast-grep.exclude" type="string[]">
-  Exclude glob patterns.
-</ParamField>
-
-<ParamField path="ast-grep.base_path" type="string">
-  Base path for resolving globs.
-</ParamField>
-
-<ParamField path="ast-grep.max_threads" type="number">
-  Maximum concurrent threads.
-</ParamField>
-
-### Codemod Registry Step
-
-Runs another codemod by package name or local path.
-
-```yaml
-steps:
-  - name: Run registry codemod
-    codemod:
-      source: "@scope/package"
-      args: ["--flag", "value"]
-```
-
-**Codemod Registry Step Parameters**:
-
-<ParamField path="name" type="string" required>
-  Step label.
-</ParamField>
-
-<ParamField path="if" type="string">
-  Conditional expression to gate step execution. See [Variable Resolution](#variable-resolution).
-</ParamField>
-
-<ParamField path="codemod.source" type="string" required>
-  Codemod source (registry package or local path). Supports version pinning: `@scope/pkg@1.2.3`. A local path that starts with `./` or `../` is relative to the directory that contains the workflow file with the step, not to the directory you run the CLI from.
-</ParamField>
-
-<ParamField path="codemod.args" type="string[]">
-  CLI arguments passed to the codemod.
-</ParamField>
-
-<ParamField path="codemod.env" type="object">
-  Environment variables used during execution.
-</ParamField>
-
-<ParamField path="codemod.working_dir" type="string">
-  Working directory for execution.
-</ParamField>
-
-<Info>
-You can aggregate multiple codemods by adding multiple `codemod` steps in the same node. Steps run sequentially from top to bottom.
-</Info>
-
-### Shell Command Step
-
-Runs shell commands on the host for setup, cleanup, or external tools.
-
-```yaml
-steps:
-  - name: Install dependencies
-    run: |
-      npm install
-      npm run build
-```
-
-On macOS and Linux, use `$CODEMOD_PATH` to run a shell script bundled with your codemod package. It points to the package root. Quote the script path so it works when the package directory contains spaces:
-
-```yaml workflow.yaml
-steps:
-  - name: Install dependency
-    run: |
-      "$CODEMOD_PATH/scripts/add-dependency.sh"
-```
-
-**Shell Command Step Parameters**:
-
-<ParamField path="name" type="string" required>
-  Step label.
-</ParamField>
-
-<ParamField path="if" type="string">
-  Conditional expression to gate step execution. See [Variable Resolution](#variable-resolution).
-</ParamField>
-
-<ParamField path="run" type="string" required>
-  Inline shell command to execute. It runs with `sh -c` on macOS and Linux, and as a batch file with `cmd.exe` on Windows. Use the `CODEMOD_PATH` environment variable for scripts or files bundled with the codemod package.
-</ParamField>
-
-<Note>
-  On Windows, every line runs in order and the step's exit code is the last command's, as with `sh`. Batch-file rules apply: write a literal `%` as `%%` (for example in a URL, `%%20`) and `for` loop variables as `%%i`. A command that is itself a batch file, such as `npm`, `npx` or `pnpm`, is run with `call` automatically at the start of a line or after `&`, `&&` or `||`, so the lines after it still run. Inside `if` or `for`, write `call npm ...` yourself.
-</Note>
-
-<ParamField path="env" type="object">
-  Step-level environment variables applied to the process environment.
-</ParamField>
-
-### Shard Step
-
-Evaluates file shards and writes results to workflow state for use with [matrix strategies](#matrix-strategy). Supports built-in grouping algorithms (directory, codeowner) and custom shard functions.
-
-```yaml
-steps:
-  - name: Build shards
-    shard:
-      method:
-        type: directory
-        max_files_per_shard: 20
-      target: "./src"
-      output_state: shards
-      js-ast-grep:
-        js_file: scripts/codemod.ts
-        language: tsx
-        include: ["**/*.{ts,tsx}"]
-```
-
-**Shard Step Parameters**:
-
-<ParamField path="name" type="string" required>
-  Step label.
-</ParamField>
-
-<ParamField path="shard.method" type="object" required>
-  Sharding method. Either `{ type: "directory" | "codeowner", max_files_per_shard: N }` for built-in methods, or `{ function: "path/to/shard.ts" }` for custom logic.
-</ParamField>
-
-<ParamField path="shard.target" type="string" default=".">
-  Root directory to scan for files. Defaults to the workflow run target.
-</ParamField>
-
-<ParamField path="shard.output_state" type="string" required>
-  State key to write shard results to.
-</ParamField>
-
-<ParamField path="shard.js-ast-grep" type="object">
-  JSSG codemod configuration for pre-filtering. Dry-runs the codemod and only shards files where the transform produces changes.
-</ParamField>
-
-<ParamField path="shard.file_pattern" type="string">
-  Glob pattern for eligible files (used when `js-ast-grep` is not set).
-</ParamField>
-
-<Card title="Sharding Guide" icon="layer-group" href="/community/workflows/sharding">
-  Full guide covering built-in methods, custom functions, re-evaluation, and examples.
-</Card>
-
----
-
-## Matrix Strategy
-
-Matrix strategies fan out a node into multiple parallel tasks. Use them to shard work by team, directory, or configuration.
-
-```yaml
-nodes:
-  - id: matrix-codemod
-    name: Matrix Codemod
-    strategy:
-      type: matrix
-      from_state: shards
-    steps:
-      - name: Codemod
-        run: node codemod.js --team=$team --shard=$shardId
-```
-
-The `from_state` field references an array in your workflow's [state schema](#shared-state). Each array item spawns a parallel task.
-
-**Accessing Matrix Values**:
-
-In JSSG transforms via `options.matrixValues`:
-```ts
-const codemod: Codemod<TSX> = async (root, options) => {
-  const team = options.matrixValues?.team;
-  const shardId = options.matrixValues?.shardId;
-};
-```
-
-In shell steps as environment variables:
-```yaml
-- name: Process shard
-  run: |
-    echo "Team: $team"
-    echo "Shard: $shardId"
-```
-
-**Dynamic Matrix Task Recompilation**:
-
-When the array referenced by `from_state` changes:
-1. New tasks are created for new items
-2. Tasks are marked `WontDo` if their item is removed
-3. Existing tasks remain untouched if their item persists
-
-Matrix nodes have a **master task** that tracks all generated tasks.
-
----
-
-## Manual Triggers
-
-Add approval gates to pause execution until manual intervention:
-
-```yaml
-nodes:
-  - id: manual-approval
-    name: Manual Approval
-    trigger:
-      type: manual
-    steps:
-      - name: Deploy
-        run: ./deploy.sh
-```
-
-Resume paused tasks:
-```bash
-# Resume all paused tasks
-npx codemod workflow resume -i <run-id> --trigger-all
-
-# Resume a specific task
-npx codemod workflow resume -i <run-id> -t <task-uuid>
-```
-
----
-
-## Shared State
-
-State enables workflows to persist data across runs and coordinate work:
-
-```yaml
-version: "1"
-state:
-  schema:
-    - name: shards
-      type: array
-      items:
-        type: object
-        properties:
-          team: { type: string }
-          shardId: { type: string }
-nodes: []
-```
-
-You can also use object map syntax:
-
-```yaml
-state:
-  schema:
-    shards:
-      type: array
-      items:
-        type: object
-        properties:
-          team: { type: string }
-          shardId: { type: string }
-```
-
-### State Updates
-
-| Syntax | Meaning | Example |
-|--------|---------|---------|
-| `KEY=VAL` | Set state key to value | `count=10` |
-| `KEY@=VAL` | Append value to array | `shards@={"team":"core","shardId":"1"}` |
-| Dot notation | Set nested fields | `config.retries=5` |
-| JSON values | Use valid JSON | `user={"name":"Alice","id":123}` |
-
-<Info>
-State updates must be valid JSON if not primitive. Updates are applied only if the task exits successfully.
-</Info>
-
-When you run a nested `codemod:` step, its child steps share the parent workflow
-run's persisted state. Each child step reads that state before evaluating its `if`
-condition and executing its action, so later steps can use earlier steps' persisted
-updates, including values written with `setState` in JSSG transforms.
-
----
-
-## Parameters
-
-Parameters make workflows configurable and reusable:
-
-```yaml
-version: "1"
-params:
-  schema:
-    library:
-      name: "Library"
-      description: "Internationalization library to use"
-      type: string
-      default: "next-intl"
-    prSize:
-      name: "PR Size"
-      type: string
-      default: "50"
-nodes: []
-```
-
-### Accessing Parameters
-
-**In JSSG transforms** via `options.params`:
-```ts
-export default function transform(root, options) {
-  const library = options.params?.library || "next-intl";
+import Experimental from "/snippets/experimental.mdx";
+
+A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow`, `codemod/git`, `codemod/deps` and `codemod/assess`, and what else a workflow can import.
+
+## Complete example
+
+```ts workflow.ts
+import { step, forEachFile, shell, approval } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+import migrateCalls from "./scripts/migrate-calls.ts";
+
+const LEGACY = "moment";
+
+export default async function main({ params }: { params: { replacement: string } }) {
+  // Find the files that import the legacy library.
+  const usages = await step("Find moment imports",
+    forEachFile({ language: "typescript", containing: LEGACY }, (file) => {
+      const root = parse(file);
+      const found = root.root().findAll({ rule: { pattern: `import $X from "${LEGACY}"` } });
+      return found.length ? file.path : undefined;
+    }),
+  );
+
+  // Rewrite only those files.
+  await step("Rewrite imports", forEachFile({ language: "typescript" }, (file) => {
+    if (!usages.outputs.includes(file.path)) return;
+    file.write(file.text.replaceAll(`from "${LEGACY}"`, `from "${params.replacement}"`));
+  }));
+
+  // A callback kept in its own file, then the formatter.
+  await step("Migrate calls", forEachFile("src/**/*.ts", migrateCalls));
+  await step(approval("Run the formatter?"));
+  await step("Format", shell("npx prettier --write src"));
 }
 ```
 
-**In shell steps** as `PARAM_` prefixed environment variables:
-```yaml
-- name: Run script
-  run: echo "Library: $PARAM_LIBRARY"
+Run it with:
+
+```bash
+npx codemod workflow run -w . --param replacement=dayjs
 ```
 
-**In codemod steps** forwarded with `env_` prefix:
-```yaml
-- name: Run nested codemod
-  codemod:
-    source: "@org/package"
-  env:
-    LIBRARY: ${{ params.library }}
+## How a workflow runs
+
+A workflow file contains three kinds of code, each with its own rules:
+
+| Where | When it runs | Rule |
+|---|---|---|
+| Workflow body, outside any step | On every run and every resume | Deterministic; see [The workflow body](#the-workflow-body) |
+| Inside a function step, `step(() => ...)` | Once, in its own isolate; its result is recorded | Outside variables arrive as frozen copies; the result must be JSON |
+| Inside a `forEachFile` callback | Once per file, in parallel, in isolates | Outside variables arrive as frozen copies; changes go through the file object |
+
+- **Steps are durable.** Each step's result is saved as soon as the step finishes. If a run fails or is canceled, `codemod workflow resume` replays the finished steps from their saved results and continues from the step that failed.
+- **A step starts when you call `step()`.** `await` waits for it. `Promise.all([step(a), step(b)])` runs two steps at the same time. Git steps are the exception: see [Git steps](#git-steps).
+- **Each step is identified by its label and content.** On resume, a step reuses its saved result when a step with the same label and the same content (the task, its options and the outside values it uses) already finished in this run. Other steps normally run again, but a side-effecting step whose outcome was not saved [needs a rerun or skip decision](/community/cli#workflow-resume). Steps with the same label and content take the saved results in the order they are called.
+
+## `step(label?, task, options?)`
+
+Runs a task as a durable step and returns a promise for its result.
+
+```ts
+const result = await step("Rename files", forEachFile("src/**/*.less", (file) => {
+  file.rename(file.path.replace(/\.less$/, ".css"));
+}));
 ```
 
-<Card title="Advanced Parameter Usage" icon="gear" href="/community/jssg/advanced/workflow#parameters-and-configuration">
-  Complete parameter patterns and examples in JSSG.
-</Card>
+- **`label`** (optional): shown in progress output, `codemod workflow status` and errors. Defaults to a description of the task.
+- **`task`**: `forEachFile(...)`, one of the [tasks](#tasks), or a function whose result should be computed once and recorded.
+- **`options`** (optional): [retries and a timeout](#retries-and-timeouts).
+- **Result:** deeply frozen and read-only. Copy it before changing it.
 
----
+### Retries and timeouts
 
-## Variable Resolution
-
-Workflow expressions are evaluated in a few different runtime contexts today. The available variables are not identical across all of them.
-
-### Template interpolation
-
-`${{ ... }}` interpolation is used in:
-- `run`
-- `ai.prompt`
-- `branch_name`
-- `commit.message`
-- `pull_request.title`
-- `pull_request.body`
-
-Current variable availability:
-
-| Syntax | Available today |
-|--------|-----------------|
-| `${{ params.x }}` | Available in all of the interpolation sites above |
-| `${{ state.x }}` | Available in `run`, `ai.prompt`, and `commit.message`, but not in `branch_name` or `pull_request.title`/`body` |
-| `${{ matrix.x }}` | Available in all of the interpolation sites above |
-| `${{ task.id }}` | Available only in `branch_name`, `commit.message`, and `pull_request.title`/`body` during Campaign/cloud runs |
-| `${{ task.signature }}` | Available only in the same Campaign/cloud git automation fields; default branch names use this value |
-
-<Tip>
-In matrix tasks, each object key becomes an environment variable (e.g., `$team`, `$shardId`). Inside steps, matrix variables are unprefixed.
-</Tip>
-
-<Info>
-`${{ env.x }}` and generic `steps.<id>.outputs.*` interpolation are not wired into workflow runtime expression resolution.
-</Info>
-
-### `if` Conditions
-
-Current generic workflow `if` evaluation receives:
-- `params.*`
-- `state.*`
-- `matrix.*`
-
-Current generic workflow `if` evaluation does not receive:
-- `task.*`
-- `env.*`
-- `steps.<id>.outputs.*`
-
-Operators supported in `if` conditions: `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`
-
-```yaml
-- name: Run only for TypeScript
-  if: params.language == "typescript"
-  js-ast-grep:
-    js_file: "scripts/codemod.ts"
+```ts
+await step("Install", shell("pnpm install"), { retries: 2, timeout: "10m" });
 ```
 
----
+| Option | Default | |
+|---|---|---|
+| `retries` | `0` | Run the step again when it fails, up to this many more times. The workflow sees only the last failure. |
+| `retryDelay` | `"1s"` | How long to wait before each retry. |
+| `timeout` | none | Stop the step and fail it when one attempt takes longer. A shell command is terminated, and file changes not yet written are dropped. |
 
-## Task Statuses
+Durations are milliseconds or a number with a unit: `"500ms"`, `"30s"`, `"10m"`, `"1h"`, `"2d"`.
 
-| Status | Description |
-|--------|-------------|
-| `Pending` | Queued; waiting for runner |
-| `Running` | Currently executing |
-| `Completed` | Succeeded; diff applied |
-| `Failed` | Script exited non-zero; diff discarded |
-| `AwaitingTrigger` | Waiting for manual approval |
-| `Blocked` | Dependencies not finished |
-| `WontDo` | Matrix item removed; task skipped |
+- A step that times out fails like any other, so it is retried if it has retries left.
+- These options say how to run a step, not which step it is. Changing them does not make a finished step run again on resume.
+- A canceled step and a step waiting for approval are not retried.
 
----
+### Function steps
 
-## Cyclic Dependencies
+A function step runs once, in its own isolate, and records what it returns. It may be async.
 
-Workflows cannot have circular dependencies:
+```ts
+import { files } from "codemod/files";
 
-```yaml
-nodes:
-  - id: a
-    depends_on: [b]
-    steps:
-      - run: echo "A"
-  - id: b
-    depends_on: [a]
-    steps:
-      - run: echo "B"
+const plan = await step("Plan batches", () =>
+  usages.outputs.reduce((batches, path, index) => {
+    (batches[index % 4] ??= []).push(path);
+    return batches;
+  }, [] as string[][]),
+);
+const config = await step("Read config", () => JSON.parse(files.read("codemod.config.json")));
 ```
 
-This produces an error:
+- Write the function inline, so the build can extract it. Outside variables arrive as frozen copies, with the same rules as [forEachFile callbacks](#using-outside-variables).
+- Inside, `Date` and `Math.random` are real, and [`files`](#target-files) reads the target and stages new files. The function is [pure](#callbacks-are-pure): no network, commands or unrecorded writes.
+- The result must be JSON. On resume, a finished function step is replayed from its record; if you changed it, it runs again.
+
+## `forEachFile(selector?, callback)`
+
+Runs `callback` once per selected file and returns a task for `step()`. Without a selector, it visits the files of the package's `targets.languages` in `codemod.yaml`.
+
+Per-file logic is a callback: written inline, or [imported from its own file](#imported-callbacks). In place of the callback, `forEachFile` also takes [ast-grep rules](#ast-grep-rules), `forEachFile(selector, astGrep(rules))`, which the engine applies with no JavaScript per file. After the callback, it takes an optional [reducer](#reducing-outputs) and its initial value, `forEachFile(selector, callback, reducer, initial)`, which folds what the callback returns into one value.
+
+### Selector
+
+| Form | Example |
+|---|---|
+| A glob | `"src/**/*.less"` |
+| A list of globs | `["**/*.ts", "**/*.tsx"]` |
+| An object | `{ language: "tsx", exclude: "**/*.test.tsx", containing: "moment" }` |
+
+Object fields:
+
+| Field | Meaning |
+|---|---|
+| `include` | Glob or globs to select |
+| `exclude` | Glob or globs to skip |
+| `language` | Selects the language's file extensions when `include` is not set, and is the default language for `parse(file)` and `parse(text)` |
+| `containing` | Only files whose text contains this string |
+| `concurrency` | Files each worker keeps in flight (default `1`). Raise it for async callbacks that wait on the network or `codemod/llm` |
+| `semanticAnalysis` | **Experimental.** What [`definition()` and `references()`](/community/jssg/semantic-analysis) on roots `parse(file)` makes can find: `"file"` (the default) within each file, `"workspace"` across the selected files of the target (or `{ mode: "workspace", root: "src" }`), `"none"` nothing. The analysis only runs when they are called |
+| `capabilities` | Deprecated: callbacks no longer get capabilities (see [Callbacks are pure](#callbacks-are-pure)). Still accepted; the step's log says it is ignored |
+
+Files are selected as `astGrep` selects them: `.gitignore` is respected, hidden files and directories (`.github/`) are included, and a `language` means the same extensions for both (`"typescript"` also takes `.js` files, which that parser reads). A selector is plain data, so you can reuse and refine it: `{ ...sources, containing: "moment" }`.
+
+### The file object
+
+| Member | Meaning |
+|---|---|
+| `file.path` | Path relative to the target |
+| `file.text` | Contents when the step read the file: files are read as the step gets to them, not all when it starts (with `concurrency`, a batch at a time) |
+| `file.language` | The selector's `language`, if it has one |
+| `file.write(text)` | Replace the contents |
+| `file.rename(path)` | Move the file |
+| `file.delete()` | Remove the file |
+
+Changes are recorded, not written immediately. When every file is done, the step checks for conflicts and applies all changes together. Nothing is written when two files are renamed to the same path, when a file changed on disk since the step read it (another step or command edited it meanwhile), or when the run was canceled. If writing fails part-way, what was written is put back. A file the callback leaves as it was (it changes nothing, or only writes back the same text, without renaming or deleting it) is not part of this: other steps may change it meanwhile.
+
+File changes, including rename destinations, must stay inside the target after resolving symlinks.
+An `astGrep` step also rejects a `basePath` that resolves outside the target.
+
+### The callback
+
+- The callback may be async: `async (file) => { ... }`.
+- Return a value to collect it; returned values become `result.outputs`, in path order. Return nothing to collect nothing.
+- A callback that throws fails only that file; the error appears in `result.failures`, and the file and its error are logged under the step.
+- When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again. A run with a partial step exits with code 2 when it finishes (see [exit codes](/community/cli#exit-codes)); a `codemod(...)` step is partial when files failed in the codemod it ran.
+- When the callback fails on every file it ran on, the step fails, with the first file's error.
+- To count what a callback found, return it: outputs are values, so add them up after the step, or give a [reducer](#reducing-outputs) that adds them up as files finish.
+
+```ts
+export default async function main() {
+  const result = await step(forEachFile({ language: "tsx", concurrency: 4 }, async (file) => {
+    const root = parse(file);
+    const edits = root.root().findAll({ rule: { pattern: "moment($A)" } }).map((node) => node.replace("dayjs()"));
+    if (edits.length) file.write(root.root().commitEdits(edits));
+    return { file: file.path, rewrites: edits.length };
+  }));
+  const rewrites = result.outputs.reduce((sum, output) => sum + output.rewrites, 0);
+}
 ```
-Error: Cyclic dependency detected: a → b → a
+
+### Result
+
+```ts
+{
+  outputs: unknown[];
+  changes: { written: string[]; renamed: { from: string; to: string }[]; deleted: string[] };
+  failures: { path: string; error: string }[];
+}
 ```
 
----
+### Reducing outputs
 
-## Templates
+`forEachFile(selector, callback, reducer, initial)` folds what the callback returns into one value, as `Array#reduce` does: `reducer(result, output, path)` gets the result so far, one file's output and that file's path, and returns the new result. The step's result has that value as `reduced`, in place of `outputs`:
 
-Templates define reusable step blocks (planned feature):
-
-```yaml
-templates:
-  - id: format
-    steps:
-      - name: Format
-        run: npx prettier --write .
+```ts
+// Rewrites per package.
+const { reduced } = await step("Migrate calls", forEachFile(
+  "packages/*/src/**/*.ts",
+  (file) => {
+    const root = parse(file);
+    const edits = root.root().findAll({ rule: { pattern: "moment($A)" } }).map((node) => node.replace("dayjs()"));
+    if (!edits.length) return;
+    file.write(root.root().commitEdits(edits));
+    return edits.length;
+  },
+  (counts, rewrites, path) => {
+    const name = path.split("/")[1];
+    return { ...counts, [name]: (counts[name] ?? 0) + rewrites };
+  },
+  {} as Record<string, number>,
+));
+reduced; // { "app": 12, "ui": 3 }
 ```
 
----
+```ts
+{
+  reduced: unknown; // what the reducer returned last, or `initial` when no file returned anything
+  changes: { written: string[]; renamed: { from: string; to: string }[]; deleted: string[] };
+  failures: { path: string; error: string }[];
+}
+```
 
-## Roadmap
+- Use it when there are many files: without a reducer, every output is kept until the step ends and is held in the workflow's memory as `outputs`. With one, each output is folded as its file finishes, so only the result is kept.
+- Outputs are folded in path order, whatever order files finish in, so the result is the same on every run and a reducer may depend on the order. Outputs of files that finish early wait for those before them, and workers stay at most about a thousand files ahead of the reducer (a few `concurrency`-sized batches per worker, when that is more), so what waits stays small.
+- Files that return nothing, and files whose callback throws, are not folded; the latter are in `failures`, as without a reducer.
+- `initial` must be JSON, and so must the reducer's result. The reducer may be async.
+- Write the reducer inline or [import it](#imported-callbacks) from its own file (type it with `FileReducer<Result, Output>`). With the CLI it runs in an isolate of its own (on the Node.js host, in the same process as the callbacks, so don't share module state between them), with the same rules for outside variables as callbacks; captured variables, the reducer and `initial` are part of the step, so changing them runs it again on resume.
+- A reducer that throws fails the step, and nothing the step's callbacks changed is written.
+- `astGrep(...)` returns nothing per file, so `forEachFile(selector, astGrep(rules), reducer, initial)` is a build and type error.
 
-<Steps>
-  <Step title="Container runtime support" icon="flag-pennant">
-    Support for `runtime: docker` and other container runtimes.
-  </Step>
-  <Step title="Nested matrix strategies" icon="flag-pennant">
-    Matrix strategies within matrix strategies for complex fan-out.
-  </Step>
-</Steps>
+### Callbacks are pure
 
----
+Function steps, `forEachFile` callbacks and reducers, `dependencyGraph` callbacks and the jssg transforms they run change the world only through what the run records. Inside them you get:
 
-## Next Steps
+- the `file` object: `file.write()`, `file.rename()` and `file.delete()` for the current file, and `jssgTransform` for others;
+- [`codemod/files`](#target-files), for reading and creating files in the target;
+- parsing and analysis (`codemod/ast-grep`, `codemod/assess`, `registry` and `semver` from `codemod/deps`).
 
-<CardGroup cols={2}>
-  <Card title="Package Structure" icon="folder-tree" href="/community/package-structure">
-    Directory layout and codemod.yaml reference.
-  </Card>
-  <Card title="CLI Reference" icon="terminal" href="/community/cli#codemod-workflow">
-    Validate and run workflows from the command line.
-  </Card>
-  <Card title="JSSG" icon="code" href="/community/jssg">
-    Write JavaScript/TypeScript codemods.
-  </Card>
-  <Card title="Publishing" icon="upload" href="/community/publishing">
-    Share your codemod via the Registry.
-  </Card>
-</CardGroup>
+Everything else that reaches outside fails with the step to use instead:
+
+| In a callback | Fails with | Use instead |
+|---|---|---|
+| `fetch`, `XMLHttpRequest`, `WebSocket` | `fetch is not available in workflow callbacks …` | [`http()`](#http-requests) |
+| `child_process` (`exec`, `spawn`, …) | `child_process.execSync is not available …` | [`shell()`](#shell-commands) |
+| `fs`, `node:fs`, or their `/promises` variants | `fs is not available in 2.0 workflows …` | [`files`](#target-files), `file.write()`, or a `shell()` step |
+| setting `process.env` | `process.env cannot be changed …` | `shell(command, { env })` |
+| reading `process.env` | every variable is `undefined`: callbacks get none of the machine's environment, but keep `process.cwd()` and `process.argv` | pass values as [parameters](#parameters); a step takes variables with `shell(command, { env })` or an `http()` header `{ env: "NAME" }` |
+| importing a data file (`.yaml`) from outside the workflow's package | `cannot be imported` | keep the file in the package; JavaScript and TypeScript import from anywhere |
+| `setTimeout`, `setInterval`, `setImmediate` | `setTimeout is not available …` | [`sleep()`](#sleepduration) between steps |
+
+`fetch` and timers written in a workflow file are build errors, in the body and in callbacks, so the workflow fails before a run starts. `--allow-fs`, `--allow-fetch`, `--allow-child-process` and `capabilities` in `codemod.yaml` no longer give callbacks anything: the flags print a deprecation warning, and `codemod.yaml` capabilities are noted when the run starts. `codemod jssg run` and `codemod jssg test` on their own (outside a workflow) still take `--allow-*`.
+
+### Target files
+
+Import `files` from `codemod/files` to read the target or stage a new file. Use it inside a function step, `forEachFile` callback, reducer or JSSG transform, not in the workflow body.
+
+| Method | Returns |
+|---|---|
+| `files.read(path)` | The file's UTF-8 text. Throws if the file is missing or isn't a UTF-8 file. |
+| `files.exists(path)` | `true` if the path exists, otherwise `false`. |
+| `files.list(glob)` | A sorted array of target-relative file paths matching the glob, for example `src/**/*.ts`. |
+| `files.create(path, text)` | Nothing. Stages a new UTF-8 file and creates its parent directories if needed. Throws if the path already exists. |
+
+Paths are relative to the target, or absolute inside it. Paths that leave the target or traverse symlinks throw. Reads see pending changes, including edits and creations from earlier steps in a dry run. New files commit with the step's other edits, appear in the diff, and survive resume without rerunning a finished step.
+
+For 1.x YAML packages, legacy `fs.mkdirSync`, `fs.mkdir`, and `fs.promises.mkdir` validate that the path stays in the target but do not create empty directories. Writing a new file creates any needed parent directories when the step commits.
+
+```ts workflow.ts
+import { files } from "codemod/files";
+import { step } from "codemod/workflow";
+
+export default async function main() {
+  await step("Write source inventory", () => {
+    if (!files.exists("source-files.txt")) {
+      files.create("source-files.txt", files.list("src/**/*.ts").join("\n") + "\n");
+    }
+  });
+  return step("Read source inventory", () => files.read("source-files.txt"));
+}
+```
+
+Standalone `jssg run` and `jssg test` also support `codemod/files` without `--allow-fs`. They keep the flag for transforms that explicitly import `fs`.
+
+### Using outside variables
+
+A callback (or function step) runs in its own isolate, so the build copies in what it needs:
+
+- **Module-level constants, functions and classes** it uses are copied in.
+- **Local variables of the surrounding function** are passed in as frozen copies when the step starts. They must be JSON values.
+- **Imports** it uses are available: `codemod/ast-grep`, `codemod/runtime`, `codemod/assess`, `codemod/files`, Node-style modules such as `path`, npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
+
+These are build errors, reported with the file, line and column:
+
+- assigning to a variable declared outside the callback (return a value instead);
+- using a local variable that is reassigned after it is declared;
+- using a function or class declared inside the surrounding function (move it to module level);
+- calling `step()`, `forEachFile` or another task inside the callback;
+- passing a callback by name instead of writing it inline or importing it from its file;
+- calling `forEachFile` with a callback, or `step` with a function, in a file the workflow imports: callbacks are only extracted from the workflow file itself;
+- importing `codemod/workflow` as a namespace (`import * as`): import `step`, `forEachFile` and the rest by name.
+
+A local that is not JSON (a `Set`, a `Map`, a class instance) fails when the step starts, naming the variable.
+
+### Imported callbacks
+
+A callback can live in its own file, as that file's default export, with the same signature as an inline one. Import it and give it to `forEachFile`:
+
+```ts scripts/migrate-calls.ts
+import type { FileCallback } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+
+const migrateCalls: FileCallback<{ file: string; rewrites: number }> = (file) => {
+  const root = parse(file).root();
+  const edits = root.findAll({ rule: { pattern: "moment($A)" } }).map((node) => node.replace("dayjs()"));
+  if (!edits.length) return;
+  file.write(root.commitEdits(edits));
+  return { file: file.path, rewrites: edits.length };
+};
+
+export default migrateCalls;
+```
+
+```ts workflow.ts
+import { step, forEachFile } from "codemod/workflow";
+import migrateCalls from "./scripts/migrate-calls.ts";
+
+export default async function main() {
+  const result = await step("Migrate calls", forEachFile({ language: "tsx" }, migrateCalls));
+  result.outputs; // readonly { file: string; rewrites: number }[]
+}
+```
+
+- The build extracts it as it does an inline callback: the module it runs in imports the file. The workflow body never loads it, with the CLI and with `runWorkflow(path)` on Node.js (a module you import yourself, or Bun, loads it with the workflow: see [Node.js](/community/workflows/node#import-workflows-yourself)).
+- The step is identified by the file's content and the content of the files it imports (relatively): change either and a finished step runs again on resume, as an edited inline callback does.
+- Publishing includes the file, bundled with what it imports from npm packages.
+- `FileCallback<Output>` types the function; what it returns is collected into `outputs`.
+
+These are build errors, each with the fix:
+
+- a file path where the callback goes: `forEachFile takes a callback, not a file path: export the function as the default of "./scripts/rename-imports.ts", add import renameImports from "./scripts/rename-imports.ts" at the top of the workflow, and write forEachFile(selector, renameImports)`;
+- a named or namespace import, an import from an npm package, or one without the file's extension;
+- using the imported callback for anything else, in the body or in another callback (`'migrate' is the callback imported from "./scripts/migrate.ts": only give it to forEachFile(...) as its callback or reducer, or as shard's method.function or filter`).
+
+To test an imported callback, run the workflow on fixtures: see [Testing workflows](/community/workflows/testing).
+
+### ast-grep rules
+
+`astGrep(rules)` goes where the callback goes: `forEachFile(selector, astGrep(rules))` applies the rules to each selected file, in the engine (no JavaScript runs per file, so it is the fastest way to apply rules). It is not a step on its own.
+
+```ts
+import { step, forEachFile, astGrep } from "codemod/workflow";
+import rules from "./rules/config.yml";
+
+// A YAML rule file, imported as its rules.
+const result = await step("Apply rules", forEachFile("src/**/*.ts", astGrep(rules)));
+result.matches; // matches of all the rules
+
+// Or rules written in the workflow (one, or an array), which may use its values.
+await step("Rename", forEachFile(astGrep({
+  id: "rename",
+  language: "typescript",
+  rule: { pattern: `${params.from}($$$ARGS)` },
+  fix: `${params.to}($$$ARGS)`,
+})));
+```
+
+**Rules** are data: an object of the shape of an ast-grep YAML rule (`id`, `language`, `rule`, `fix`, `constraints`, `utils`, `transform`, ...), an array of them, or an imported YAML rule file. Import a YAML file with `import rules from "./rules/config.yml"` (no import attribute needed): the import gives the file's rule as an object, or an array when the file has several documents (`---`), and publishing includes the file. Rules can also be written in the workflow, or built from params and earlier results; they must be JSON (a function, a `RegExp` or a cycle in a rule is an error naming it; a field left `undefined` is left out). The rules are part of the step, so a changed rule runs the step again on resume. A YAML import is data anywhere: in the body, in callbacks, and in Node.js through `codemod/host`. The `AstGrepRule` type describes a rule, and `.yaml` imports are typed as rules.
+
+**The selector** is a glob, a list of globs, or an object with `include`, `exclude` and `containing`. Without `include`, the files of the rules' languages are selected; selected files of other languages are skipped, as no rule is for them. Each rule runs on the files with its language's extensions, parsed as that language: a `"typescript"` rule also runs on `.js`, `.mjs` and `.cjs` files, as TypeScript, and a `"tsx"` rule on `.jsx` files too. The callback options (`language`, `semanticAnalysis`, `capabilities`, `concurrency`) do not apply: each rule names its language, and rules have no semantic analysis.
+
+**Repeat until nothing changes.** Of overlapping matches of one language's rules, such as both calls in `console.log(console.log(x))`, one pass fixes only the outer one. When rules of several languages apply to a file (a `typescript` and a `javascript` rule on a `.js` file), each language's rules run on the text the previous language's fixed, so they can fix nested matches in one pass; rules that undo each other's fixes fail the file. `astGrep(rules, { repeat: true })` runs the rules again on the text they fixed until it no longer changes, up to 10 passes over each file (`{ repeat: 25 }` sets the most). The passes run on the text in memory, in the one step, so a dry run reports the same diff as a real run. A file still changing after the last pass, usually because a fix matches its own output, is a failure and is left as it was.
+
+```ts
+const consoleToLogger = { id: "console-to-logger", language: "typescript", rule: { pattern: "console.log($$$ARGS)" }, fix: "logger.info($$$ARGS)" };
+await step("console.log → logger.info", forEachFile("src/**", astGrep(consoleToLogger, { repeat: true })));
+```
+
+**Result:** `{ changes, matches, failures }`. `matches` counts the matches of all the rules (with `repeat`, each fix once, plus the matches of rules without a fix); `failures` lists files that could not be read or parsed, or that kept changing. As with callbacks, the step is partial when some files fail, and fails when all do.
+
+These are errors: a path given to `astGrep` (a build error: `astGrep takes rules, not a file path: add import config from "./rules/config.yml" at the top of the workflow and write astGrep(config), so the build can include the file when publishing`; a path that only shows up at run time fails the step with the same advice), a YAML file imported by name, as a namespace, or from an npm package, `step(astGrep(rules))` (`astGrep(...) is not a step on its own`), and file options given to `astGrep` instead of the selector (`astGrep: 'include' goes in forEachFile's selector`).
+
+### jssg transforms
+
+`jssg(...)` is not part of the workflow API: per-file logic is a callback. Importing `jssg` is a build error that says so. A jssg transform `(root, options) => string | null` becomes a callback in a few lines: `parse(file)` gives the root, `file.write(text)` replaces returning the text, and what the callback returns is collected. `codemod jssg run` and `codemod jssg test` still run jssg transform files on their own, and `workflow.yaml` files that run them keep working (see [Migrate](/community/workflows/migrate)).
+
+## Parsing with `codemod/ast-grep`
+
+```ts
+import { parse } from "codemod/ast-grep";
+
+parse(file);                        // a forEachFile file; root.filename() is its path
+parse(file, { language: "tsx" });
+parse(text);                        // in a forEachFile callback whose selector names a language
+parse(text, { language: "tsx" });
+parse("tsx", text);                 // the original JSSG form
+```
+
+`parse` returns the [ast-grep](/community/jssg) root. The language comes from the options, then the file, then the step's selector, then the file extension. Files you only rename are never parsed.
+
+## The workflow body
+
+The body is the code outside steps and callbacks. It runs again on every resume, and a step's saved result is reused only when the body calls that same step again, so the body has to come out the same each time:
+
+- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, `codemod/git`, `codemod/assess` (its question builders; `assess()` itself rejects in the body), and npm packages or local files whose imports only reach these. In the QuickJS workflow body, you can import `sep` and `delimiter` by name from `node:path` (or `path`); Node's `path.posix` and `path.win32` are not available there.
+- **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use `codemod/files` in a callback instead of importing `fs`.
+- **`Date`, `Math.random`, `crypto.randomUUID` and `performance.now` are replay-safe.** Random numbers come from a generator seeded by the run, and the clock starts at the run's start time and moves only when a step finishes, to the time recorded for it.
+- **`console.log`** goes to the run's output.
+
+### The return value
+
+What the body returns is the run's output: `run_finished.output` with `--format jsonl` (dry runs too), `Output: …` at the end of the text output, `output` in `workflow status --id <ID> --format json`, and `run.output` from `runWorkflow`. It must be JSON.
+
+### Failing a run with a report
+
+A check that finds problems usually wants both: report what it found, and fail CI. Throwing loses the report (a failed run has no output), and catching the failure ends the run as succeeded. Call `fail()` from the body instead:
+
+```ts
+import { fail, forEachFile, step } from "codemod/workflow";
+
+export default async function main() {
+  const found = await step("Find var", forEachFile("src/**/*.ts", (file) =>
+    file.text.includes("var ") ? file.path : undefined));
+  const report = { checks: [{ id: "no-var", status: found.outputs.length ? "fail" : "pass", files: found.outputs }] };
+  if (found.outputs.length) fail("1 check failed: no-var", { output: report });
+  return report;
+}
+```
+
+`fail(message, { output?, exitCode? })` ends the run as `failed`, with `message` as its error and `output` kept as its output, everywhere the return value goes. The CLI exits with `exitCode`: 2 by default (the code for "finished, with failures"), or any integer from 1 to 125. It throws a `WorkflowFailure`; like `step()`, it cannot be used inside a step or callback. A run that only reads, like this one, is not stopped by uncommitted changes in the target (see `--allow-dirty` in the [CLI reference](/community/cli#codemod-workflow)).
+
+## Tasks
+
+| Task | What it does |
+|---|---|
+| `forEachFile(selector?, callback)` | Run a callback, inline or imported, on every selected file. See [`forEachFile`](#foreachfileselector-callback). |
+| `forEachFile(selector, callback, reducer, initial)` | Run a callback on every selected file and fold what it returns into one value. Result: `{ reduced, changes, failures }`. See [Reducing outputs](#reducing-outputs). |
+| `forEachFile(selector?, astGrep(rules, { repeat }?))` | Apply ast-grep rules, written in the workflow or imported from YAML, to the selected files; `repeat` runs them until nothing changes. Result: `{ changes, matches, failures }`. See [ast-grep rules](#ast-grep-rules). |
+| `shell(command, { env, cwd, allowFailure })`, ``shell`command` `` | Run a shell command. Result: `{ stdout, stderr, exitCode }`. See [Shell commands](#shell-commands). |
+| `http(url, options?)`, `http({ url, ... })` | Send an HTTP request. Result: `{ status, statusText, ok, url, headers, body, json? }`. See [HTTP requests](#http-requests). |
+| `shard(options)` | Split files into groups. See [Sharding](/community/workflows/sharding). |
+| `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
+| `agent(prompt, options)` | Hand a prompt to a coding agent. See [Coding agents](#coding-agents). |
+| `installSkill({ package, path, harness, scope, force })` | Install a package's agent skill. |
+| `dependencyGraph(callback)`, `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback`, written inline, on it. Imported from `codemod/deps`. See [Dependencies](#dependencies). Result: what the callback returns. |
+| `approval(message)` | Wait for a person to approve. See [Approvals](#approvals). |
+| `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base, branch })` | Git automation. Imported from `codemod/git`. See [Git steps](#git-steps). |
+
+Callbacks kept in files and YAML rule files are imported, relative to the workflow file: there are no file paths to pass.
+
+### Git steps
+
+<Experimental />
+
+`branch`, `commit` and `pullRequest` come from `codemod/git`:
+
+```ts
+import { branch, commit, pullRequest } from "codemod/git";
+```
+
+They only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped. They moved out of `codemod/workflow`; when the CLI or `codemod/host` builds the workflow, importing one from there is an error that names `codemod/git`.
+
+They all work on the run's one checkout, so they can't run in parallel. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`, before it touches git. So does one inside a `codemod(...)` step that was started while other steps were running. The check happens when a step starts: a git step, or a `codemod(...)` step, that started first is not stopped by steps started after it, so don't start other steps while git work runs. To open one pull request per shard, run the shards one after another:
+
+```ts
+import { forEachFile, shard, step } from "codemod/workflow";
+import { branch, commit, pullRequest } from "codemod/git";
+import migrate from "./scripts/migrate.ts";
+
+const shards = await step(shard({ method: { type: "directory", maxFilesPerShard: 50 }, files: "src/**/*.tsx" }));
+for (const current of shards) {
+  await step(branch(`codemod-${current.name}`));
+  await step(forEachFile({ include: current._meta_files, language: "tsx" }, migrate));
+  await step(commit(`refactor: migrate ${current.name}`));
+  await step(pullRequest({ title: `refactor: migrate ${current.name}` }));
+}
+```
+
+Steps without git can still run in parallel, before or after. Separate checkouts per shard are planned as an explicit API.
+
+### Dependencies
+
+<Experimental />
+
+`dependencyGraph`, `registry` and `semver` come from `codemod/deps`. `dependencyGraph` reads the target's `yarn.lock` (Yarn 1 and Yarn 2+), `pnpm-lock.yaml` (lockfile 6.0 and later), `package-lock.json` and `npm-shrinkwrap.json` (v1, v2 and v3), `bun.lock`, `Cargo.lock`, `uv.lock`, `poetry.lock` and `Pipfile.lock`, with each workspace's `package.json`, `Cargo.toml`, `pyproject.toml` or `Pipfile` for declared ranges and dependency kinds. A Yarn 1 project's workspaces are the directories its root `package.json`'s `workspaces` globs match. Bun's binary `bun.lockb` and Go lockfiles are not read.
+
+Python packages have the ecosystem `pypi`, and their names are normalized as PyPI does, so `Typing_Extensions` is `typing-extensions`. `Pipfile.lock` keeps no dependencies between packages, so only the packages the `Pipfile` names are reached from the project.
+
+Without `lockfiles`, only the lockfiles at the target's root are read, since nested ones are usually fixtures or examples, and one that cannot be read is left out and listed in `g.skipped` as `{ lockfile, error }`. A target with no lockfile at its root, or none that can be read, gets an empty graph: `g.lockfiles` is empty, and the callback still runs. `lockfiles` picks which lockfiles are read instead, as a glob or a list of globs relative to the target: `**/yarn.lock` reads every `yarn.lock`, the root's included. When you name lockfiles you expect them, so globs that match no lockfile fail the step, and so does a lockfile they match that cannot be read.
+
+`dependencyGraph`, `registry` and `semver` run with the codemod CLI. The Node.js host that `codemod/testing` uses by default doesn't have them yet: test a workflow that uses them with `{ host: "quickjs" }`.
+
+The callback gets the graph itself, not a copy. It runs in its own isolate, like a `forEachFile` callback, may be `async`, and only what it returns is recorded:
+
+```ts
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+
+const usesMui = await step(
+  dependencyGraph((g) =>
+    g.dependents("@material-ui/core", { kinds: "prod" }).map((edge) => edge.from.dir),
+  ),
+);
+```
+
+| On the graph | Returns |
+|---|---|
+| `g.workspaces()` | The repository's own packages |
+| `g.nodes(name?)` | Every node, or every installed version of `name` |
+| `g.node(name, version?)` | One node, or `undefined` when none matches. Throws when several versions of `name` are installed and no version is given: use `g.nodes(name)` |
+| `g.dependents(name, { kinds, includeThirdParty })` | Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the peer it was installed with) |
+| `g.chains({ from, to, kinds })` | The shortest chain from each `from` node (default: every one of the repository's own packages) to a `to` node, `from` first. Chains pass through the repository's own packages |
+| `node.dependencies({ kinds })` | Edges the node declares |
+| `node.installedBy({ kinds, includeThirdParty })` | Edges installed onto this exact node |
+| `node.releases({ accepting, newerThanMine })` | The package's releases from the registry, each with `breaking` relative to the installed version |
+| `edge.accepts(version)` | Whether the edge's declared range accepts a version: `true`, `false`, or `null` when it cannot tell |
+
+What lists dependents is about the repository's own packages: `g.dependents` and `node.installedBy` return only edges from them unless you pass `includeThirdParty: true`, and `g.chains` starts from them unless you pass the `from` nodes. So `g.dependents("react")` is the repository's packages that declare React, not every library that does.
+
+A node has `ecosystem`, `name` and `version`, and `dir` (the directory, relative to the target) when it is one of the repository's own packages, which `local` tells. Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to` (`null` when the lockfile does not resolve it), `name`, `range` and `kind`. In a step's result, nodes become `name@version` text and edges `{ from, to, kind, range }`.
+
+Who uses a package, and how: `g.dependents` gives the repository's packages that declare it, with their ranges, and `g.chains` the ones that reach it through other packages. A chain goes through the repository's own packages, so in a monorepo where `packages/web` depends on `@demo/shared`, which depends on `moment`, web reaches moment through `@demo/shared`:
+
+```ts
+const moment = await step(dependencyGraph((g) => {
+  const installed = g.nodes("moment");
+  return {
+    installed: installed.map((node) => node.version),
+    // Declared in a package.json, Cargo.toml or pyproject.toml.
+    declaredBy: g.dependents("moment")
+      .map((edge) => ({ dir: edge.from.dir, range: edge.range, kind: edge.kind })),
+    // Reached only through other packages.
+    reachedBy: g.chains({ to: installed })
+      .filter((chain) => chain.length > 2)
+      .map((chain) => ({ dir: chain[0].dir, via: chain.slice(1, -1).map((node) => node.name) })),
+  };
+}));
+// { installed: ["2.29.4"],
+//   declaredBy: [{ dir: "packages/api", range: "^2.29.4", kind: "prod" }, { dir: "packages/shared", range: "^2.29.4", kind: "prod" }],
+//   reachedBy: [{ dir: "packages/web", via: ["@demo/shared"] }] }
+```
+
+### `registry` and `semver`
+
+<Experimental />
+
+`registry.npm(name)`, `registry.cargo(name)` and `registry.pypi(name)` resolve to `{ ecosystem, name, versions }`, oldest first, with each release's `dependencies`, `peerDependencies` and `optionalDependencies`. PyPI lists dependencies per file rather than per release, so PyPI releases have none, and `releases({ accepting })` on a Python package throws. They work inside a function step or a `forEachFile` or `dependencyGraph` callback, and in the files those import, so the answer is recorded with the step and a resumed run does not ask again; in the workflow body they reject. Canceling the run, or a step's `timeout`, stops a lookup in progress. Each package is fetched once per run, and lookups started together are fetched together:
+
+```ts
+import { step } from "codemod/workflow";
+import { registry, semver } from "codemod/deps";
+
+const ready = await step("Releases accepting React 19", async () => {
+  const { versions } = await registry.npm("react-redux");
+  return versions.filter((r) => semver.satisfies("19.0.0", r.peerDependencies.react ?? "*") === true).map((r) => r.version);
+});
+```
+
+`semver` has `satisfies(version, range)` (`null` for ranges it cannot read, such as `workspace:`), `compare`, `gt`, `lt`, `isBreaking(from, to)` and `isPrerelease`. Pass `{ ecosystem: "cargo" }` for Cargo's rules, or `{ ecosystem: "pypi" }` for PEP 440, which also reads Poetry's `^1.2`, `~1.2` and `||`.
+
+### Shell commands
+
+A run asks before each command. With nobody to ask (`--no-interactive`, CI), your own workflow's steps go ahead, and a registry package's fail unless the run was started with `--approve`; see [Approvals](#approvals).
+
+Give `shell` the command as a string, or write it as a tagged template. In a template, each `${}` value is quoted for the shell, so a path with spaces or quotes stays one argument; an array is one argument per item. The rest of the text is taken as written, backslashes included.
+
+```ts
+// A script next to the workflow (src/scripts/setup.sh for src/workflow.ts).
+await step("Setup", shell`${import.meta.dirname}/scripts/setup.sh`);
+
+// Values are quoted: this greps for the whole name, spaces and all.
+await step("Find uses", shell`grep -rn ${params.name} src`);
+
+// Options for a template: shell(options)`command`.
+await step("Build", shell({ cwd: "packages/app" })`npm run build`);
+
+// A plain string runs as written.
+await step("Format", shell("npx prettier --write src"));
+```
+
+`import.meta.dirname` is the directory of the workflow file, `import.meta.filename` the file itself, and `import.meta.url` its `file:` URL, as in Node.js. They hold the same values inside steps and `forEachFile` callbacks, and after the package is published and installed.
+
+`shell` commands get `CODEMOD_PATH`, the workflow's directory (prefer `import.meta.dirname` in `workflow.ts`). Give a command values with `env` or in the command itself.
+
+Commands, including scripts that start with a shebang, run in the selected target directory by default (or the parent directory for a file target). Set `cwd` to run in a different directory relative to that directory.
+
+A `shell` step's result is what the command printed, as text, and its exit code: `{ stdout, stderr, exitCode }`. Parse what you need from it, for example JSON printed on the last line:
+
+```ts
+const { stdout } = await step("Detect", shell`node -p "JSON.stringify({ major: 19 })"`);
+const { major } = JSON.parse(stdout.trim().split("\n").at(-1)!);
+```
+
+A command that exits with an error fails the step, and the error ends with what it printed on stderr. Pass `allowFailure: true` to get the result instead and check `exitCode` yourself. Each stream keeps its last 1 MiB of bytes. The result preserves line endings and replaces invalid UTF-8 with `�`.
+
+Shell commands, HTTP requests, agents and skill installs are skipped in a dry run (an `http()` step with `dryRun: "perform"` is sent), and callbacks never write but through `file`: a dry run changes nothing.
+
+A dry run keeps what each step would change in memory, and later steps read that instead of the disk: `forEachFile` callbacks, `astGrep` rules, `jssgTransform` in function steps, the files `shard` picks and its `filter`, and nested `codemod()` runs see the text earlier steps left, renamed files at their new paths, and not the files they deleted. Shell commands don't run in a dry run, so they see none of it. When the run ends, the CLI prints a unified diff of everything the run would change (with `--format jsonl`, one `run_diff` event per file, with `path`, `diff`, `additions` and `deletions`). A renamed file shows as its old path removed and its new path added.
+
+If a `codemod()` step resolves a preview-only registry package during an apply run, the step fails before starting that package. Rerun the workflow with `--dry-run` to preview it. This also applies to packages called by nested workflows.
+
+### HTTP requests
+
+<Experimental />
+
+Callbacks have no network. A workflow that needs one declares the request as a step with `http()`, from `codemod/workflow`. The response is the step's result: once saved, a resumed run gets it back without sending the request again. If the process crashed before saving the response, the request may still have reached the server. Resume asks whether to rerun or skip the step.
+
+A run asks before each request, showing the method, the URL and the names of the environment variables its headers read: the workflow chooses all three. With nobody to ask (`--no-interactive`, CI), your own workflow's steps go ahead, and a registry package's fail unless the run was started with `--approve`; see [Approvals](#approvals).
+
+```ts
+import { http, step } from "codemod/workflow";
+
+const release = await step("Latest release", http("https://api.github.com/repos/org/repo/releases/latest", {
+  headers: { authorization: { env: "GITHUB_TOKEN" } },
+}));
+const tag = release.json?.tag_name;
+
+await step("Notify", http({ url: params.hook, method: "POST", json: { tag } }));
+```
+
+| Option | Meaning |
+|---|---|
+| `method` | `"GET"` (the default), `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, … |
+| `headers` | Header names to values. A value `{ env: "NAME" }` is read from the environment when the request is sent; the run records the name, never the value |
+| `body` | The body, as text |
+| `json` | A JSON body; sets `content-type: application/json`. Not with `body` |
+| `timeout` | How long the request may take, in milliseconds or as `"30s"`. Default 30 seconds |
+| `allowErrorStatus` | Return a 4xx or 5xx response as the result. Without it such a response fails the step (with the status and the start of the body), so the step's `retries` apply |
+| `dryRun` | `"skip"` (the default): a dry run logs `would request GET …` and the step gives `{ skipped: true }`. `"perform"`: send it in a dry run too, for requests that only read |
+
+The result is `{ status, statusText, ok, url, headers, body, json? }`: `url` is where it ended after redirects (a request with `{ env }` headers does not follow a redirect to another origin: that response is the result), header names are lower case, `body` is the text (up to 10 MiB; base64 with `bodyEncoding: "base64"` when it is not UTF-8), and `json` is the parsed body when the response says it is JSON. The URL, method, headers and body are the step's content: change one and the step runs again on resume.
+
+### Coding agents
+
+<Experimental />
+
+Some adapters check the installed agent’s help output to detect supported options. That check has its own timeout and falls back to defaults if the help command does not finish.
+
+`agent(prompt, options)` runs a coding agent installed on the machine, without asking it questions, in the run's target directory. The run asks before the agent starts, showing the agent and the prompt: with `autonomy: "full"` the agent runs whatever commands the prompt leads it to. With nobody to ask (`--no-interactive`, CI), your own workflow's steps go ahead, and a registry package's fail unless the run was started with `--approve`; see [Approvals](#approvals).
+
+```ts
+const review = await step(
+  "Fix the remaining call sites",
+  agent("Replace the remaining moment() calls in src/ with dayjs().", {
+    agent: "claude-code",
+    model: "sonnet",
+    timeoutSeconds: 600,
+  }),
+);
+console.log(review.result);
+```
+
+Its result holds the agent's final answer (`result`), its `sessionId`, `model` and `usage` (tokens and cost, as far as the agent reports them). What the agent does, such as its messages, tool calls and commands, shows in the run's output as it happens.
+
+| Option | |
+| --- | --- |
+| `agent` | Which agent to run. It must be installed |
+| `systemPrompt` | Extra instructions. Agents with an option for them get them there; the others get them in front of the prompt |
+| `model` | A model name the agent understands |
+| `autonomy` | `"full"` (default): the agent edits files and runs commands without asking. `"read-only"`: the agent reads and answers only. The step fails before it starts when the agent cannot be kept read-only; see the table below |
+| `timeoutSeconds` | Stop the agent after this long |
+
+When the agent fails, is stopped or runs out of time, the step fails; the step's output then says which session the agent had started and what it had used, when the agent reported them.
+On Windows, stopping an agent also stops the processes it started.
+
+Supported agents, by the id `agent` takes:
+
+| Agent | Id | Read-only | Notes |
+| --- | --- | --- | --- |
+| Claude Code | `claude-code` (or `claude`) | Yes: plan mode | |
+| Codex | `codex` | Yes: read-only sandbox | Runs outside git repositories too |
+| Cursor Agent | `cursor` | Yes: ask mode | |
+| Gemini CLI | `gemini` | Its defaults | Older versions give text only |
+| Antigravity CLI | `antigravity` (or `agy`) | Its defaults | |
+| OpenCode | `opencode` | Yes: plan agent | `model` is `provider/model` |
+| GitHub Copilot CLI | `copilot` | Its defaults | |
+| Amp | `amp` | No | Picks models by mode, so `model` is ignored |
+| Qwen Code | `qwen-code` (or `qwen`) | Yes: plan mode | |
+| Goose | `goose` | Yes: chat mode | |
+| Factory Droid | `droid` | Its defaults | |
+| Kimi Code | `kimi` | No | Always runs in Kimi's auto mode |
+| Crush | `crush` | No | Text output only; approves every action itself |
+| OpenClaw | `openclaw` | No | Reports once, at the end |
+| Aider | `aider` | Yes: ask mode | Text output only; never runs the shell commands it suggests |
+| Kiro CLI | `kiro` | Its defaults | Text output only |
+| Auggie | `auggie` | No | Text output only; tool permissions come from its settings |
+| Cline | `cline` | Yes: no auto-approval | Text output only |
+
+The **Read-only** column says what `autonomy: "read-only"` does for each agent:
+
+- **Yes**: the agent runs in its own read-only mode.
+- **Its defaults**: the agent runs without the option that lets it act freely. Left to its defaults it asks before it writes a file or runs a command, and with nobody to answer, it does neither. If your own configuration of the agent approves actions in advance, they still run.
+- **No**: the agent cannot be kept from writing. A read-only step that names it fails before the agent starts, and the agent is not offered when you pick one for a read-only step.
+
+Some agents take the prompt on their command line and not on their input: Cursor Agent, Gemini CLI, Antigravity CLI, GitHub Copilot CLI, Qwen Code, Kimi Code, Crush, Aider, Kiro CLI, Auggie and Cline. For these, a prompt (with `systemPrompt`, for those that take it in front of the prompt) larger than 100 KiB fails the step before the agent starts.
+
+Without `agent`, the step uses:
+
+1. the run's agent: `codemod workflow run --agent codex`, or the `LLM_AGENT` environment variable;
+2. the coding agent the workflow itself runs inside, for example when Claude Code runs `codemod run`. The prompt goes back to it in the step's output, and the step succeeds with `handedOff: true`;
+3. an agent you pick from the installed ones, when the run is interactive;
+4. the built-in agent, when `LLM_API_KEY` is set (with `LLM_PROVIDER`, `LLM_MODEL` and `LLM_BASE_URL`). `LLM_API_KEY` is only sent where the run's environment says: a step that sets `endpoint` or `llmProtocol` must give its own `apiKey`.
+
+Otherwise the prompt is printed as instructions and nothing runs.
+
+## Assessing files with `codemod/assess`
+
+<Experimental />
+
+`assess(file, { questions })` asks a decision model typed questions about a file, inside a `forEachFile` callback or a function step, so AI judgments and ast-grep analysis happen in the same pass. Before it asks, the engine gathers the file's context itself: the files it imports, followed through re-exports, so the model does not spend tokens looking for them.
+
+The default model is TypeSafe's [System One](https://docs.typesafe.ai/api) (`jev-latest`); OpenAI's [Decisions API](https://developers.openai.com/api/docs/guides/decisions) (`gpt-6-luna`) works too. Both answer with probabilities rather than text.
+
+This workflow classifies every file's error handling, then rewrites only the files that swallow errors, with ast-grep:
+
+```ts workflow.ts
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+import { assess, yesNo, choice, number } from "codemod/assess";
+
+// Questions are data: define them once.
+const QUESTIONS = {
+  handlesErrors: yesNo("Does this file handle the errors its async calls can throw?"),
+  smell: choice("Which error-handling smell fits it best?", {
+    swallowed: "Errors are caught and dropped",
+    "logged-only": "Errors are caught and only logged",
+    none: null,
+  }),
+  risk: number("How risky is it to change this file's error handling?", { min: 1, max: 5 }),
+};
+
+export default async function main() {
+  const classified = await step("Classify error handling",
+    forEachFile({ language: "typescript", concurrency: 4 }, async (file) => {
+      const { answers, details } = await assess(file, { questions: QUESTIONS });
+      // answers.smell: "swallowed" | "logged-only" | "none"
+      return { path: file.path, smell: answers.smell, sure: details.smell.confidence > 0.8 };
+    }),
+  );
+
+  const swallowing = classified.outputs
+    .filter((output) => output.smell === "swallowed" && output.sure)
+    .map((output) => output.path);
+
+  await step("Log swallowed errors", forEachFile({ include: swallowing, language: "typescript" }, (file) => {
+    const root = parse(file).root();
+    const edits = root.findAll({ rule: { pattern: "catch ($E) {}" } })
+      .map((node) => node.replace(`catch (${node.getMatch("E")?.text()}) { console.error(${node.getMatch("E")?.text()}); }`));
+    if (edits.length) file.write(root.commitEdits(edits));
+  }));
+}
+```
+
+Run it with `--allow-ai` (or say yes when asked) and a key in the environment:
+
+```bash
+TYPESAFE_API_KEY=... npx codemod workflow run -w . --allow-ai
+```
+
+### Questions
+
+| Builder | Answer | `details` |
+|---|---|---|
+| `yesNo(question, { yes?, no?, threshold? })` | `boolean`: the probability of yes is at least `threshold` (0.5). `yes` and `no` say what counts as each | `{ probability }` |
+| `choice(options)`, `choice(question, options)` | One of the options (2 to 255): a list of names, or names to descriptions (`null` for none) | `{ probabilities, confidence }` |
+| `number(question, { min, max, levels? })` | A number from `min` to `max`, whole numbers, 2 to 10 of them; `levels` describe each. The answer is weighted by the model's probabilities, so it may fall between two | `{ probabilities, likeliest, confidence }` |
+| `list(question, options, { threshold? })` | The options (1 to 50) that apply. Each is asked as its own yes/no question | `{ probabilities }` |
+
+The answers are typed from the questions: `answers.smell` above is `"swallowed" | "logged-only" | "none"`. Decision models answer with probabilities, not text, so there is no free-text question; use a [coding agent](#coding-agents) for prose.
+
+### `assess(file, options)`
+
+`file` is a `forEachFile` file, or a path relative to the target (in a function step). It resolves to:
+
+```ts
+{
+  answers: { [id]: answer };   // typed, as above
+  details: { [id]: detail };   // probabilities and confidence
+  context: string[];           // the file, then every file shown with it
+  provider: string;            // "systemone" or "openai"
+  model: string;               // as the provider names it, e.g. "jev-1.13.0"
+  usage: { calls: number; inputTokens: number; outputTokens: number };
+}
+```
+
+| Option | Default | |
+|---|---|---|
+| `questions` | | Questions by id, made with the builders above |
+| `context.imports` | `true` | The files it imports. Each imported name is followed through re-exports (`export { x } from`, `export *`, a name imported and exported again) to the file that defines it, so a barrel `index.ts` shows the module behind it, not the barrel. A number follows imports that many levels deep; `false` shows none |
+| `context.dependents` | `false` | The files of the target that import it, directly or through re-exports: `true` for up to 10, or how many |
+| `context.extra` | `[]` | More files to show, relative to the target |
+| `context.limit` | `100000` | Characters of context besides the file. Files past it are named but not shown |
+| `allowMoreContext` | `0` | Let the model ask for one more file, up to this many times (at most 5). Each request offers it the imports one level deeper than shown and the files that import this one, and "the context is enough"; when it picks a file, the engine shows it and asks again. Each round is another request |
+| `provider`, `model` | | Which model answers this call; see [Choosing the model](#choosing-the-model) |
+| `timeout` | `"60s"` | How long one request may take, in milliseconds or as a duration |
+
+- Imports are read from JavaScript and TypeScript files, resolved as TypeScript does (relative paths, `tsconfig.json` `paths`, package `exports`). Files outside the target and in `node_modules` are not shown. Other languages get the file and its `extra` files.
+- **Recorded with the step.** The answers are part of the step's result, so a resumed run replays a finished step instead of asking again. A step that failed asks again when it runs again.
+- **Dry runs ask too**: asking changes no files. A dry run of a workflow that uses `codemod/assess` costs the same requests as a real one.
+- **Rate limits.** At most 4 requests are in flight at once across the run (`DECISION_CONCURRENCY` changes it). Requests that hit a rate limit (429), time out or fail with a server error are retried up to 3 times, waiting as the server's `Retry-After` says, or 0.5 s doubling to 8 s.
+- **Usage.** A `forEachFile` step whose callback asked has `assessed: { assessments, calls, inputTokens, outputTokens }` in its result, and both kinds of steps log it.
+- **Where it works.** In `forEachFile` callbacks and function steps, and in the files they import. In the workflow body, `assess()` rejects; the question builders work anywhere. Reducers, `shard` functions and `dependencyGraph` callbacks cannot assess.
+- An answer the model declines (OpenAI's refusals), or one outside the question's options, fails the file.
+
+### Choosing the model
+
+The provider and model come from, first to last:
+
+1. the call: `assess(file, { provider: "openai", model: "gpt-6-luna", ... })`;
+2. the workflow: `decision_model` in its package's `codemod.yaml`:
+   ```yaml codemod.yaml
+   decision_model:
+     provider: systemone
+     model: jev-latest
+   ```
+3. the run: `--model <provider>/<model>`, or the model picked in the launcher (which also saves it to your user config);
+4. your user config: `"decisionModel"` in `config.json` in the codemod config directory (`~/.config/codemod/` on Linux, `~/Library/Application Support/codemod/` on macOS, `%APPDATA%\codemod\` on Windows):
+   ```json config.json
+   { "decisionModel": { "provider": "systemone", "model": "jev-latest" } }
+   ```
+5. the environment: `DECISION_PROVIDER` (`systemone` or `openai`) and `DECISION_MODEL` (or `TYPESAFE_DEFAULT_MODEL` for System One);
+6. System One with `jev-latest`.
+
+A level that names a provider only lends its model to that provider: a call that switches to OpenAI does not take a System One model from your config.
+
+Keys and endpoints come from the environment only:
+
+| Variable | |
+|---|---|
+| `TYPESAFE_API_KEY`, `OPENAI_API_KEY` | The provider's key |
+| `DECISION_API_KEY` | A key for the provider `DECISION_PROVIDER` names (or any, when it names none) |
+| `TYPESAFE_BASE_URL`, `OPENAI_BASE_URL` | The provider's API root |
+| `DECISION_BASE_URL`, `DECISION_PATH` | API root and request path, as `DECISION_API_KEY` applies; for Azure AI Foundry or a proxy |
+| `DECISION_AUTH_HEADER` | `authorization` (default, sends `Bearer <key>`) or a header that carries the raw key, such as `api-key` |
+| `DECISION_CONCURRENCY` | Requests in flight at once (default 4) |
+
+### Before the run
+
+The build sees whether the workflow, or a local file it imports, imports `codemod/assess`. When it does, the CLI settles two things before any step runs:
+
+- **Sending files.** `assess()` sends the file's contents and its context to the provider. `--allow-ai` allows it; an interactive run asks; a run without a terminal (or with `--no-interactive`) fails at once, naming `--allow-ai`.
+- **The key.** Without one, an interactive run asks for a key to use for that run only (it is not saved); a run without a terminal fails at once, naming the variable to set, for example `TYPESAFE_API_KEY`.
+
+`codemod workflow resume` checks both again. In tests (`codemod/testing`), nobody is asked: pass `decisionModel: { apiKey, baseUrl, provider, model }` to `runWorkflow`, for example a local fake server, or set the environment; a call without a key fails with what to set.
+
+## Values between steps
+
+Workflows have no state. A step gets what it needs from the workflow and returns what it found; the workflow passes that on.
+
+```ts
+import { step, shell, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+
+const detect = await step("Detect", shell`npm pkg get dependencies.react`);
+const version = JSON.parse(detect.stdout); // "^19.0.0"
+
+const migrated = await step("Migrate", forEachFile({ language: "tsx" }, (file) => {
+  // `version` arrives as a frozen copy.
+  if (version.startsWith("^19")) return { file: file.path };
+}));
+migrated.outputs; // what each file's callback returned
+```
+
+| Step | Values in | Values out |
+|---|---|---|
+| Function step, `forEachFile` callback | Variables it captures | Its return value; `result.outputs` for callbacks |
+| `shell` | `env`, or the command text | What it prints; `result.stdout` |
+
+`getState`, `setState`, `unsetState`, `acquireLock` and the step-output functions were removed. Importing one is a build error that says what replaced it, and a step given a `state` option fails.
+
+A step's result is saved with the step, so it comes back when the step is replayed on resume.
+
+## Parameters
+
+The default export receives `{ params, target, dryRun }`. Pass parameters with `--param key=value`.
+
+Declare them in a `Params` interface, with `WorkflowContext<Params>`, and each value arrives as its declared type: a `string` parameter stays a string (`--param version=19` gives `"19"`), while other parameters use JSON parsing when possible (`--param max=5` gives `5`). `codemod workflow inspect` lists the declared parameters. Up to alpha.9, every value that parsed as JSON arrived parsed, whatever its declared type.
+
+```ts
+export default async function main({ params }: { params: { team?: string } }) {
+  const team = params.team ?? "all";
+}
+```
+
+## Approvals
+
+`await step(approval("Ship it?"))` asks before continuing.
+
+- In the launcher, `y` approves, `n` rejects, and `l` stops the run there to resume later. In a plain interactive terminal, answering **No** stops the run there to resume later.
+- With `--no-interactive`, the run stops at the approval, waiting, and exits with code 3 (see [exit codes](/community/cli#exit-codes)), so a CI job does not pass with the run half done. Continue it with `codemod workflow resume --id <run-id> --approve <question-id>` to give that approval only (the run stops at the next one), or `--approve` alone to give it and every later one. Pass `--approve` to `workflow run` to approve everything up front.
+- A dry run is not saved, so it cannot wait: one that reaches an approval stops, exits with code 1 and says to pass `--approve`.
+- With [`--control stdio`](/community/workflows/control), the run asks the program driving it and waits for the answer, dry runs included.
+
+**Steps that run or send something ask too.** A `shell(...)` step asks before its command, an `agent(...)` step before the agent starts, an `http(...)` step before its request, and a `pullRequest(...)` step before it pushes: a workflow, also one from the registry, decides what they run and where they send it. Answering no fails the step. Their question ids are `shell:<step>`, `agent-run:<step>`, `http:<step>` and `pull-request:<step>`.
+
+With nobody to ask (`--no-interactive`, CI), it depends on whose workflow it is:
+
+- **Your own workflow** (`codemod workflow run -w <file>`, or `codemod run ./local-dir`) is trusted: these steps go ahead, as do those of local codemods it nests with `codemod("./path")`.
+- **A package from the registry** (`codemod run <package>`, 1.x packages included) is not: each of these steps fails without running, and the error names the step and the flag. So do the steps of a registry package your own workflow nests with `codemod("@org/package")`, and of anything a registry package nests. Read what the package runs, then pass `--approve` for everything, or only some kinds: `--approve=shell,http` (the kinds are `shell`, `agent`, `http`, `pull-request`, and `approval` for `approval(...)` steps). A resumed run keeps being the package's.
+
+The Node.js host (`codemod/host`, `codemod/testing`) approves everything unless you pass `approve: false`; then `approved: ["shell", "http:0"]` gives kinds or single questions.
+
+Each approval has a **question id** that stays the same across resumes: `approval:<step>`, where `<step>` is the step's key (`approval:3`, or `approval:2/0` inside a codemod that step 2 runs). The run's last lines, `workflow status` and `run_finished` name the one it waits for.
+
+**Rejecting an approval ends the run.** The run is `rejected`: steps running alongside are stopped, nothing after the approval runs, and what earlier steps changed **stays changed** (commit or stash before a run you may reject, or use `git` to undo it). A rejected run is over: `workflow resume` refuses it unless you pass `--force`, which asks the rejected approval again. Stopping a run with Ctrl-C instead leaves it `paused`, to resume; `workflow cancel` ends it as `canceled`, which also takes `--force` to resume.
+
+## Waiting
+
+<Experimental />
+
+Both of these are steps: they appear in the run's steps, and a finished wait is not repeated on resume.
+
+```ts
+import { sleep, step, waitForEvent } from "codemod/workflow";
+import { pullRequest } from "codemod/git";
+
+await step("Open the pull request", pullRequest({ title: "Migrate to v2" }));
+const ci = await waitForEvent<{ passed: boolean }>("ci-finished", { timeout: "1h" });
+if (!ci.passed) {
+  await sleep("5m");
+}
+```
+
+### `sleep(duration)`
+
+Waits for that long. The wait counts from when it began: if the run is interrupted and resumed, it waits only for what is left. A dry run does not wait.
+
+### `waitForEvent(name, { timeout }?)`
+
+Waits until the run is sent an event of that name, and resolves to the event's data (`null` when it has none). Send one from any terminal:
+
+```bash
+npx codemod workflow send ci-finished --id <run-id> --data '{"passed": true}'
+```
+
+- **The run keeps running while it waits.** If its process stops, `codemod workflow resume` goes on waiting.
+- **An event sent early is kept**, also while the run is not running, until a step takes it. Each event is taken by one step; events of one name are taken in the order sent.
+- **`timeout`** fails the step if no event comes in that time, counted from when the wait began. A resume after that waits again, for the full time.
+- **Names** are 1 to 100 letters, digits, `.`, `_` or `-`.
+- **A codemod nested with `codemod(...)`** takes events sent to the run that contains it.
+- **A dry run** is not saved and cannot be sent events, so the step fails there.
+
+## Runs
+
+Every run is saved, with each step's result, so you can inspect and resume it:
+
+```bash
+npx codemod workflow list
+npx codemod workflow status --id <run-id>
+npx codemod workflow resume --id <run-id>
+npx codemod workflow cancel --id <run-id>
+npx codemod workflow send <event> --id <run-id>
+```
+
+Runs are stored under your data directory (`~/Library/Application Support/codemod/runs` on macOS). Set `CODEMOD_RUN_STORE_DIR` to store them elsewhere, or `CODEMOD_RUN_STORE=memory` to keep nothing. A dry run is never saved.
+
+- **One run per repository at a time.** A run can't start on a target another run is working on.
+- **Each run records the CLI version that started it.** Resume with the same version when you can: a newer CLI can build a callback differently, and resume refuses if those finished steps no longer match. Use `--force` to run them again.
+- **A paused run keeps its question.** `workflow status` shows the approval it stopped at, also after Ctrl-C or a closed control channel.
+
+When a run ends early, the steps still running finish first and are recorded, so a resume does not repeat them:
+
+- **A step fails:** the run ends as failed once the steps started alongside it are done.
+- **A step waits for an approval** nobody can give: the run pauses there, also when the workflow catches the error. No step starts after it; resume with `--approve`.
+- **The run is canceled** (Ctrl-C, `workflow cancel`, or the process being terminated): steps stop where they can (running shell commands and agents are terminated, file changes not yet written are dropped), and the run can be resumed.
+
+## Installing codemod in a package
+
+A codemod package can depend on `codemod` like any other tool it runs: package scripts and `npx codemod` then use that CLI, pinned to the version in `package.json`, and editors get its types for `codemod/workflow`, `codemod/ast-grep` and the other `codemod:*` modules, which always match that CLI. Packages created with `codemod init` are already set up. For an existing package:
+
+```bash
+npm install codemod
+npm install --save-dev typescript @types/node
+```
+
+```json package.json
+{
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.ts\"",
+    "validate": "codemod workflow validate -w src/workflow.ts"
+  }
+}
+```
+
+`npm install codemod` adds it under `dependencies`.
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["codemod"],
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true
+  }
+}
+```
+
+Then `npx tsc` checks `workflow.ts` along with the callbacks it imports (add `"include": ["src"]` when they are under `src/`, as `codemod init` does). The tests run in Node.js, so they get Node's types from a `tests/tsconfig.json` of their own that extends this one with `"types": ["codemod", "node"]`; the workflow keeps only `codemod`'s, since the CLI runs it without Node's APIs. Type-only imports are available as `codemod/main` (the `SgRoot`/`SgNode` types) and `codemod/langs/<language>`; `@codemod.com/jssg-types` still works and mirrors the same declarations.
+
+- Step results are typed and read-only. `forEachFile` collects what the callback returns: returning `file.path` or `undefined` gives `outputs: readonly string[]`.
+- A step result or callback return value that is not JSON is a type error, for example a `Set`, a `Map`, a `Date`, a function, or a `Promise` returned from an `async` callback.
+- Type the default export's argument with `WorkflowContext`: `main({ params }: WorkflowContext<{ replacement?: string }>)`.
+- Use `WorkflowContext.platform` to read the platform running the workflow (`"win32"`, `"darwin"`, or `"linux"`), even if you generated the workflow on a different platform.
+- Type `parse` with a language map: `parse<TS>(file)`, where `TS` is imported from `codemod/ast-grep/langs/typescript`.
+
+The callback rules that depend on scope, such as assigning to an outside variable, are checked by `codemod workflow validate`, not by TypeScript.
+
+## Validation
+
+```bash
+npx codemod workflow validate -w src/workflow.ts
+```
+
+Validation builds the workflow, which reports the callback rules above with their source positions.
