@@ -6,8 +6,10 @@
 // owns goes through the native addon: the run store, host tasks (`shell`,
 // `astGrep`, `shard`, `codemod`, ...), and selecting and committing files.
 //
-// Code here has whatever Node.js gives it: capabilities are not enforced.
-// The codemod CLI runs workflows in its own sandboxed runtime instead.
+// The rules the CLI holds workflow code to hold here too (guards.mts), so a
+// test cannot pass here and fail with the CLI: callbacks have no network,
+// processes, file writes outside the file API, `process.env` changes or
+// timers, and the body replays its clock and random numbers.
 
 /**
  * Run a workflow in this Node.js or Bun process.
@@ -24,15 +26,22 @@
  * `astGrep`, `shard`, `codemod`, ...) and the run store go through the
  * native addon; `shard`'s functions run in the engine's isolates.
  *
- * Code here has whatever Node.js gives it: the capabilities codemod.yaml
- * declares are not enforced. The codemod CLI runs workflows in its own
- * sandboxed runtime instead; run packages from the registry with the CLI.
+ * The rules the CLI holds workflow code to hold here too. Function steps,
+ * `forEachFile` callbacks and reducers are pure: they get the file API,
+ * reading files and the analysis APIs, but not `fetch`, `child_process`,
+ * writing files (`fs.writeFile`, `fs.mkdir`, ...), changing
+ * `process.env`, or timers; use `http()`, `shell()` and `sleep()` steps
+ * instead. The body cannot either, and its `Date`, `performance.now`,
+ * `Math.random` and `crypto.getRandomValues`/`randomUUID` are replayed, so
+ * it issues the same steps on every resume. Code outside a run (the test
+ * itself) is untouched. Run packages from the registry with the CLI.
  *
  * @module
  */
 
 import "../register.mts";
 
+import { createHash } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -40,7 +49,8 @@ import type { JsonValue } from "../testing/index.mts";
 import { addon } from "./addon.mts";
 import type { Addon, DecisionModelOptions, FileEffects, NativeRun } from "./addon.mts";
 import { context, stepScope } from "./context.mts";
-import type { RunScope, StepScope } from "./context.mts";
+import type { BodyClock, RunScope, StepScope } from "./context.mts";
+import { bodyClockFor, installGuards } from "./guards.mts";
 import { ORCHESTRATOR_VERSION } from "./orchestrator-version.mts";
 import {
   AwaitingApprovalError,
@@ -101,7 +111,11 @@ export interface HostRunOptions {
   given?: Record<string, JsonValue>;
   /** Give every approval the workflow asks for. Default `true`. */
   approve?: boolean;
-  /** Capabilities for host tasks' transforms, on top of those codemod.yaml declares. */
+  /**
+   * @deprecated Capabilities for host tasks' transforms, on top of those
+   * codemod.yaml declares. Workflow callbacks get none of them: they are
+   * pure, whatever this says.
+   */
   capabilities?: ("fs" | "fetch" | "child_process")[];
   /** Which workflow to run when codemod.yaml defines several. */
   workflowName?: string;
@@ -224,15 +238,21 @@ export async function runWorkflow(
     decisionModel: options.decisionModel,
   });
 
+  const body = bodyClockFor(run.startedAt, runSeed(run.runId));
   const flight = inFlight();
-  const runtime: Runtime = createRuntime(host(run, flight, () => runtime));
+  const runtime: Runtime = createRuntime(host(run, flight, body, () => runtime));
   flight.closed = () => runtime.isClosed();
-  const scope: RunScope = { run, runtime, captureConsole: options.captureConsole ?? false };
+  const scope: RunScope = {
+    run,
+    runtime,
+    captureConsole: options.captureConsole ?? false,
+    body,
+  };
   const abort = () => run.cancel();
   if (options.signal?.aborted) abort();
   options.signal?.addEventListener?.("abort", abort, { once: true });
 
-  let body: BodyEnding;
+  let ending: BodyEnding;
   try {
     const input = {
       params: run.params,
@@ -243,17 +263,27 @@ export async function runWorkflow(
     const ended = context
       .run(scope, async () => main(input))
       .then((output): BodyEnding => ({ status: "succeeded", detail: toJson(output) }));
-    body = await Promise.race([ended, flight.stalled]);
+    ending = await Promise.race([ended, flight.stalled]);
   } catch (error) {
-    body = endingOf(error);
+    ending = endingOf(error);
   }
   // Steps still running finish and are recorded before the run reports;
   // none starts from here on.
   runtime.close();
   await flight.idle();
   options.signal?.removeEventListener?.("abort", abort);
-  const report = run.finish(JSON.stringify(body));
+  const report = run.finish(JSON.stringify(ending));
   return { ...report, events: run.takeEvents() };
+}
+
+// Wrapped before any workflow module loads, so one that keeps `fetch` or
+// `setTimeout` from its top level gets the wrapper too. The host's own code
+// runs inside runs, so it uses the real ones.
+const real = installGuards();
+
+/** The body's seed, as the CLI's (`run_seed` in crates/workflow/src/run.rs). */
+function runSeed(runId: string): number {
+  return createHash("sha256").update(runId).digest().readUInt32LE(0);
 }
 
 let addonChecked = false;
@@ -380,7 +410,7 @@ function inFlight(): Flight {
       flight.check();
     },
     check() {
-      setImmediate(() => {
+      real.setImmediate(() => {
         if (count !== 0) return;
         if (flight.closed()) stall(null);
         for (const waiter of waiters.splice(0)) waiter();
@@ -396,21 +426,22 @@ function inFlight(): Flight {
   return flight;
 }
 
-function host(run: NativeRun, flight: Flight, runtime: () => Runtime): Host {
+function host(run: NativeRun, flight: Flight, body: BodyClock, runtime: () => Runtime): Host {
   // Replayed steps settle one per turn of the event loop, so the body reacts
   // to each before the next.
   let replaying = false;
   const replay = () => {
     replaying = runtime().replayNext();
-    if (replaying) setImmediate(replay);
+    if (replaying) real.setImmediate(replay);
   };
   return {
     history: () => run.history(),
     record: (entry, ms) => run.record(JSON.stringify(entry), ms),
     event: (event) => run.event(JSON.stringify(event)),
     canceled: () => run.refusesSteps(),
-    now: () => Date.now(),
-    advanceClock() {},
+    // The real time, for records; the body's clock moves to what they say.
+    now: () => real.dateNow(),
+    advanceClock: (ms) => body.advance(ms),
     testPlan: () => run.testPlan(),
     stop() {
       run.stop();
@@ -419,7 +450,7 @@ function host(run: NativeRun, flight: Flight, runtime: () => Runtime): Host {
     wake() {
       if (replaying) return;
       replaying = true;
-      setImmediate(replay);
+      real.setImmediate(replay);
     },
     evaluate: (kind, expression, scope) => run.evaluate(kind, expression, JSON.stringify(scope)),
     callbackId,
@@ -476,7 +507,7 @@ interface Limit {
  * the work to stop where it can, and whatever it still does is discarded.
  */
 async function within<T>(ms: number | undefined, work: (limit: Limit) => Promise<T>): Promise<T> {
-  const started = performance.now();
+  const started = real.performanceNow();
   const timeout = (ms: number) => ({
     name: "Error",
     message: `timed out after ${describeDuration(ms)}`,
@@ -484,22 +515,25 @@ async function within<T>(ms: number | undefined, work: (limit: Limit) => Promise
   const limit: Limit = {
     expired: false,
     check() {
-      if (ms !== undefined && (limit.expired || performance.now() - started >= ms))
+      if (ms !== undefined && (limit.expired || real.performanceNow() - started >= ms))
         throw timeout(ms);
     },
   };
   if (ms === undefined) return work(limit);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
+    timer = real.setTimeout(() => {
       limit.expired = true;
       reject(timeout(ms));
     }, ms);
   });
   try {
-    return await Promise.race([work(limit), late]);
+    const value = await Promise.race([work(limit), late]);
+    // Work that never waited kept the timer from firing: still too late.
+    limit.check();
+    return value;
   } finally {
-    clearTimeout(timer);
+    real.clearTimeout(timer);
   }
 }
 
@@ -584,7 +618,7 @@ async function forEachFile(
       // give it a turn now and then, so a cancel can arrive.
       if (++sinceTurn >= 64) {
         sinceTurn = 0;
-        await new Promise((turn) => setImmediate(turn));
+        await new Promise((turn) => real.setImmediate(turn));
       }
       if (run.refusesSteps()) throw new CanceledError();
       if (limit.expired || fold?.failed) return;

@@ -525,8 +525,8 @@ import byDir from "./scripts/by-dir.ts";
 export default async function main() {
   const weight = 2;
   const inline = await step("Inline", forEachFile({ include: "**/*.ts", concurrency: 3 }, async (file) => {
-    // Later files finish first.
-    await new Promise((resolve) => setTimeout(resolve, file.path.includes("a") ? 20 : 1));
+    // Later files finish first. (Callbacks have no timers: they wait turns.)
+    for (let turn = 0; turn < (file.path.includes("a") ? 200 : 1); turn++) await Promise.resolve();
     file.write(file.text.replace("var", "let"));
     return file.path.includes("skip") ? undefined : file.text.length;
   }, (acc, size, path) => ({ paths: [...acc.paths, path], total: acc.total + size * weight }), { paths: [], total: 0 }));
@@ -898,7 +898,8 @@ export default async function main() {
   try {
     await step(
       "Slow",
-      async () => { await new Promise((done) => setTimeout(done, 1500)); },
+      // Callbacks have no timers: busy for longer than the timeout.
+      () => { const end = Date.now() + 400; while (Date.now() < end) {} },
       { timeout: 200 },
     );
   } catch (error) {
@@ -1195,14 +1196,17 @@ test("node: workers stay within the reducer's window", HOSTS.node, async () => {
     scratch({
       "workflow.ts": `
 import { step, forEachFile } from "codemod/workflow";
-export default async function main() {
+import { readFile } from "node:fs/promises";
+export default async function main({ target }: { target: string }) {
   // On Node.js, callbacks and the reducer share globalThis.
   const { gap } = await step("Fold", forEachFile("*.txt", () => {
     const shared = globalThis as { started?: number };
     shared.started = (shared.started ?? 0) + 1;
     return 1;
   }, async (acc: { folded: number; gap: number }) => {
-    await new Promise((resolve) => setTimeout(resolve, 1));
+    // Waits a turn of the event loop, so workers get ahead. (Callbacks have
+    // no timers; reading a file is allowed.)
+    await readFile(target + "/f0000.txt");
     const started = (globalThis as { started?: number }).started ?? 0;
     return { folded: acc.folded + 1, gap: Math.max(acc.gap, started - acc.folded - 1) };
   }, { folded: 0, gap: 0 })).then((result) => result.reduced);
@@ -1219,3 +1223,209 @@ export default async function main() {
   assert.equal(result.status, "succeeded", result.error);
   assert.ok(result.output <= 1025, `workers got ${result.output} files ahead`);
 });
+
+// ------------------------------------------------------ pure callbacks ---
+
+// What the CLI refuses workflow code, Node.js refuses too, so a test cannot
+// pass here and fail with the CLI.
+
+test("node: fetch in a function step fails the step, pointing at http()", HOSTS.node, async () => {
+  const path = join(
+    scratch({
+      "workflow.ts": `
+import { step } from "codemod/workflow";
+export default async function main() {
+  // Through a computed name: the build refuses \`fetch\` written out.
+  const name = ["fe", "tch"].join("");
+  await step("Fetch", async () => (await (globalThis as any)[name]("http://127.0.0.1:9/")).status);
+}
+`,
+    }),
+    "workflow.ts",
+  );
+  const result = await run(path, { target: {}, host: "node" });
+  assert.equal(result.status, "failed");
+  assert.match(result.error, /fetch is not available in workflow callbacks/);
+  assert.match(result.error, /http\(url, options\)/);
+  // Outside a run, the test itself still has it.
+  assert.equal(typeof fetch, "function");
+});
+
+test(
+  "node: child_process and fs writes in a forEachFile callback fail the file",
+  HOSTS.node,
+  async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+import { execSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+export default async function main({ target }: { target: string }) {
+  return await step("Files", forEachFile("*.ts", (file) => {
+    // Reading stays allowed.
+    readFileSync(target + "/" + file.path, "utf8");
+    if (file.path === "exec.ts") execSync("echo hi");
+    if (file.path === "write.ts") writeFileSync(target + "/side.txt", "x");
+    file.write("changed\\n");
+  }));
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await run(path, {
+      target: { "exec.ts": "a\n", "write.ts": "b\n", "ok.ts": "c\n" },
+      host: "node",
+    });
+    assert.equal(result.status, "succeeded", result.error);
+    const { failures } = result.step("Files").result;
+    assert.equal(failures.length, 2, JSON.stringify(failures));
+    assert.match(
+      failures[0].error,
+      /child_process\.execSync is not available in workflow callbacks/,
+    );
+    assert.match(failures[0].error, /shell\("command"\)/);
+    assert.match(failures[1].error, /fs\.writeFileSync is not available in workflow callbacks/);
+    assert.deepEqual(result.files, { "exec.ts": "a\n", "write.ts": "b\n", "ok.ts": "changed\n" });
+  },
+);
+
+test("node: process.env can be read inside a run, not changed", HOSTS.node, async () => {
+  const path = join(
+    scratch({
+      "workflow.ts": `
+import { step } from "codemod/workflow";
+export default async function main() {
+  const path = await step("Read", () => typeof process.env.PATH);
+  await step("Write", () => { process.env.CODEMOD_GUARD_TEST = "x"; });
+  return path;
+}
+`,
+    }),
+    "workflow.ts",
+  );
+  const result = await run(path, { target: {}, host: "node" });
+  assert.equal(result.status, "failed");
+  assert.equal(result.step("Read").result, "string");
+  assert.match(result.error, /process\.env cannot be changed in workflow callbacks/);
+  assert.equal(process.env.CODEMOD_GUARD_TEST, undefined);
+  // Outside a run it changes as ever.
+  process.env.CODEMOD_GUARD_TEST = "y";
+  assert.equal(process.env.CODEMOD_GUARD_TEST, "y");
+  delete process.env.CODEMOD_GUARD_TEST;
+});
+
+test("node: timers fail in the body and in callbacks", HOSTS.node, async () => {
+  const inBody = join(
+    scratch({
+      "workflow.ts": `
+export default async function main() {
+  // Through a computed name: the build refuses \`setTimeout\` written out.
+  const wait = (globalThis as any)[["set", "Timeout"].join("")];
+  await new Promise((done) => wait(done, 1));
+}
+`,
+    }),
+    "workflow.ts",
+  );
+  const body = await run(inBody, { target: {}, host: "node" });
+  assert.equal(body.status, "failed");
+  assert.match(body.error, /setTimeout is not available in the workflow body/);
+  assert.match(body.error, /sleep\(/);
+
+  const inCallback = join(
+    scratch({
+      "workflow.ts": `
+import { step } from "codemod/workflow";
+export default async function main() {
+  const name = ["set", "Immediate"].join("");
+  await step("Wait", () => new Promise((done) => (globalThis as any)[name](done)));
+}
+`,
+    }),
+    "workflow.ts",
+  );
+  const callback = await run(inCallback, { target: {}, host: "node" });
+  assert.equal(callback.status, "failed");
+  assert.match(callback.error, /setImmediate is not available in workflow callbacks/);
+});
+
+/** A local HTTP server answering JSON, counting its requests. */
+async function countingServer() {
+  const { createServer } = await import("node:http");
+  const server = createServer((request, response) => {
+    server.hits++;
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ hit: server.hits, method: request.method }));
+  });
+  server.hits = 0;
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  return { server, url: `http://127.0.0.1:${server.address().port}/data` };
+}
+
+test(
+  "node: http() is recorded and not sent again on resume; the body's clock and random numbers replay",
+  HOSTS.node,
+  async () => {
+    const { runWorkflow: runOnHost } = await import("../runtime/host.mjs");
+    const { server, url } = await countingServer();
+    const before = process.env.CODEMOD_RUN_STORE_DIR;
+    process.env.CODEMOD_RUN_STORE_DIR = mkdtempSync(join(tmpdir(), "codemod-store-"));
+    try {
+      const path = join(
+        scratch({
+          "workflow.ts": `
+import { step, http, approval } from "codemod/workflow";
+export default async function main({ params }: { params: { url: string } }) {
+  const start = Date.now();
+  const random = Math.random();
+  const uuid = crypto.randomUUID();
+  const fetched = await step("Fetch", http(params.url));
+  const after = Date.now();
+  // Real time in a callback.
+  const real = await step("Now", () => Date.now());
+  console.log(JSON.stringify({ start, random, uuid, after }));
+  await step("Go", approval("go on?"));
+  return { start, after, real, fetched };
+}
+`,
+        }),
+        "workflow.ts",
+      );
+      const target = scratch({ "a.ts": "a\n" });
+      const options = { target, params: { url }, store: "local", captureConsole: true };
+      const seen = (report) =>
+        report.events.filter((e) => e.event === "run_log").map((e) => JSON.parse(e.line));
+      const started = Date.now();
+
+      const first = await runOnHost(path, { ...options, approve: false });
+      assert.equal(first.status, "awaiting-approval", first.error ?? undefined);
+      assert.equal(server.hits, 1);
+      const fetched = first.steps.find((s) => s.label === "Fetch");
+      assert.equal(fetched.result.status, 200);
+      assert.deepEqual(fetched.result.json, { hit: 1, method: "GET" });
+      const [once] = seen(first);
+      // The body's clock starts at the run's start time.
+      assert.ok(once.start >= started - 1000 && once.start <= Date.now(), JSON.stringify(once));
+
+      const second = await runOnHost(path, { ...options, resume: first.runId });
+      assert.equal(second.status, "succeeded", second.error ?? undefined);
+      // Recorded: not sent again.
+      assert.equal(server.hits, 1);
+      assert.deepEqual(second.output.fetched.json, { hit: 1, method: "GET" });
+      // The same clock, numbers and ids on resume.
+      assert.deepEqual(seen(second), [once]);
+      // It moved to when the step finished; a callback has the real time.
+      assert.ok(once.start <= once.after && once.after <= second.output.real);
+      assert.match(
+        once.uuid,
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+    } finally {
+      if (before === undefined) delete process.env.CODEMOD_RUN_STORE_DIR;
+      else process.env.CODEMOD_RUN_STORE_DIR = before;
+      server.close();
+    }
+  },
+);
