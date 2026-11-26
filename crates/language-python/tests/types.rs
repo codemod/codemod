@@ -130,3 +130,40 @@ fn without_types_type_of_is_only_what_annotations_declare() {
         Some("list[Repo]")
     );
 }
+
+const LITERALS: &str = "\
+allowed = {\"a\", \"b\"}
+pair = (1, 2)
+";
+
+#[test]
+fn without_types_a_set_literal_is_a_set() {
+    let ws = Workspace::with_types(&[("main.py", LITERALS)], false);
+    assert_eq!(ws.type_of("main.py", "{").as_deref(), Some("set"));
+}
+
+#[test]
+fn without_types_a_tuple_literal_is_a_tuple() {
+    let ws = Workspace::with_types(&[("main.py", LITERALS)], false);
+    assert_eq!(ws.type_of("main.py", "(1, 2)").as_deref(), Some("tuple"));
+}
+
+const TOOL: &str = "\
+from typing import ClassVar
+
+class Tool:
+    configuration_schema: ClassVar[dict] = {}
+
+    def schema(self):
+        return self.configuration_schema
+";
+
+#[test]
+fn a_class_var_read_through_self_is_its_declared_type() {
+    let ws = Workspace::new(&[("tool.py", TOOL)]);
+    assert_eq!(
+        ws.type_of("tool.py", "self.configuration_schema")
+            .as_deref(),
+        Some("dict")
+    );
+}

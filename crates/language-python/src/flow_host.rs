@@ -245,7 +245,7 @@ impl PyFlow {
         let text = |range: ByteRange| content[range.start as usize..range.end as usize].to_string();
         if let Some(declared) = flow.declared_types.get(&node) {
             if flow.nodes[node as usize].kind != FlowNodeKind::Function {
-                return Some(declared.to_string());
+                return unqualified(declared);
             }
         }
         let fact = &flow.nodes[node as usize];
@@ -256,7 +256,20 @@ impl PyFlow {
             FlowNodeKind::Expression if literal_type(&text(fact.range)) == "str" => {
                 return Some("str".to_string());
             }
-            FlowNodeKind::Array => return Some("list".to_string()),
+            // Lists, tuples and sets (and their comprehensions) are arrays.
+            FlowNodeKind::Array => {
+                let kind = match text(fact.range).as_bytes().first() {
+                    Some(b'[') => "list",
+                    Some(b'{') => "set",
+                    _ => "tuple",
+                };
+                return Some(kind.to_string());
+            }
+            FlowNodeKind::Member => {
+                if let Some(found) = self.self_attribute_type(path, flow, node, depth) {
+                    return Some(found);
+                }
+            }
             FlowNodeKind::Object => return Some("dict".to_string()),
             FlowNodeKind::Class => {
                 return Some(format!("type[{}]", fact.name.as_deref().unwrap_or("?")))
@@ -356,6 +369,47 @@ impl PyFlow {
             }
         }
         None
+    }
+
+    /// The type of `self.name` read in a method: the class attribute's
+    /// declared type (`name: ClassVar[dict] = ...` is `dict`), else what the
+    /// class body or a method stores in it.
+    fn self_attribute_type(
+        &self,
+        path: &Path,
+        flow: &Arc<FileFlow>,
+        node: u32,
+        depth: u32,
+    ) -> Option<String> {
+        let name = flow.nodes[node as usize].name.as_deref()?;
+        let object = flow.in_edges[node as usize]
+            .iter()
+            .find(|(_, edge)| *edge == FlowEdgeKind::Property)?
+            .0;
+        let object = &flow.nodes[object as usize];
+        if object.kind != FlowNodeKind::This {
+            return None;
+        }
+        let class = flow.class_of(object.function)?;
+        let fields: Vec<u32> = flow
+            .class_fields
+            .get(&class)?
+            .iter()
+            .filter(|(field, field_node)| &**field == name && *field_node != node)
+            .map(|(_, field_node)| *field_node)
+            .collect();
+        if let Some(declared) = fields
+            .iter()
+            .find_map(|field| flow.declared_types.get(field))
+        {
+            return unqualified(declared);
+        }
+        fields.iter().find_map(|field| {
+            flow.in_edges[*field as usize]
+                .iter()
+                .filter(|(_, edge)| matches!(edge, FlowEdgeKind::Store | FlowEdgeKind::Assign))
+                .find_map(|(value, _)| self.type_of_node(path, flow, *value, depth + 1))
+        })
     }
 
     /// The class a callee expression names, when it is a workspace class.
@@ -540,6 +594,22 @@ impl PyFlow {
         let stub = path.with_extension("pyi");
         stub.is_file().then_some(stub)
     }
+}
+
+/// A declared type without its qualifier: `ClassVar[dict]` and
+/// `Final[int]` are `dict` and `int`. None for a bare qualifier, which
+/// declares no type.
+fn unqualified(declared: &str) -> Option<String> {
+    const QUALIFIERS: &[&str] = &["ClassVar", "Final", "Required", "NotRequired", "ReadOnly"];
+    let declared = declared.trim();
+    let open = declared.find('[');
+    let head = &declared[..open.unwrap_or(declared.len())];
+    let qualifier = head.rsplit('.').next().unwrap_or(head);
+    if !QUALIFIERS.contains(&qualifier) {
+        return Some(declared.to_string());
+    }
+    let inner = declared[open? + 1..].strip_suffix(']')?;
+    unqualified(inner)
 }
 
 /// The type of a literal's text: `"a"` and `f"{x}"` are str, `b""` bytes.
