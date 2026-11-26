@@ -147,6 +147,25 @@ node --test "tests/**/*.test.ts"
 
 `fixtures` reads the same layouts as `codemod jssg test`; point it at the directory that holds your fixtures. See [Testing workflows](/community/workflows/testing).
 
+## Running 1.x packages
+
+`codemod run <package>` runs a package written for codemod 1.x with codemod 1.18.7, the last 1.x release, so it behaves exactly as it did. It prints one line saying so:
+
+```text
+Running with codemod 1.18.7: it is a 1.x package (workflow.yaml workflow, no workflow.ts). Set CODEMOD_V1=off to run it on this version.
+```
+
+A package counts as 1.x when:
+
+- the workflow it runs is a `.yaml` or `.yml` file (codemod 1.x never ran `workflow.ts`), and
+- none of its scripts import a module spelled `codemod/<name>`, which only 2.0 has (`codemod:<name>` is the 1.x spelling).
+
+It runs on this version instead when you pass `--control`, or set `CODEMOD_V1=off`. Converting a package with `codemod workflow upgrade` makes it a 2.0 package.
+
+The first such run downloads the codemod 1.18.7 binary for your platform from npm (about 135–160 MB), checks it against a hash built into this CLI, and keeps it in the codemod cache. Set `CODEMOD_V1_BIN` to use a binary you already have, for example on a machine without network access.
+
+`--target`, `--param`, `--dry-run`, `--allow-dirty`, `--no-interactive`, the `--allow-*` capability flags, `--agent`, `--format jsonl` and `--workflow` are passed on, and the command exits with codemod 1.x's exit code. Options 1.x doesn't have (`--approve`, `--managed-git`, `--allow-ai`, `--model`) are ignored. Runs made this way are kept by codemod 1.x, so `codemod workflow list`, `status` and `resume` don't see them.
+
 ## What behaves differently
 
 Most codemods run exactly as before. These are the differences, for both `workflow.yaml` and `workflow.ts`:

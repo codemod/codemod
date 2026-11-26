@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 mod llm_usage;
+pub mod v1_delegate;
 
 fn telemetry_codemod_name(
     registry_metadata: Option<&RegistryPackageMetadata>,
@@ -274,6 +275,18 @@ pub async fn handler(
         return Err(error);
     }
 
+    if !resolved_package.dry_run_only {
+        let asks = v1_delegate::RunAsks {
+            control: args.flags.control.is_some(),
+            env: std::env::var("CODEMOD_V1").ok(),
+        };
+        if let v1_delegate::Engine::V1 { reason } =
+            v1_delegate::detect(&resolved_package.package_dir, &workflow_path, &asks)
+        {
+            return run_on_v1(args, &resolved_package, &reason, disable_analytics).await;
+        }
+    }
+
     let mut params = parse_params(args.params.as_deref().unwrap_or(&[]))
         .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
 
@@ -465,6 +478,71 @@ pub async fn handler(
 
     // Some files failed: exit code 2, after the summary.
     outcome.result()
+}
+
+/// Runs a 1.x package with codemod 1.x, passing its exit code on.
+async fn run_on_v1(
+    args: &Command,
+    resolved: &butterflow_core::registry::ResolvedPackage,
+    reason: &str,
+    disable_analytics: bool,
+) -> Result<()> {
+    let is_local = ["./", "../", "/"]
+        .iter()
+        .any(|prefix| args.package.starts_with(prefix));
+    let package = if is_local {
+        resolved.package_dir.to_string_lossy().into_owned()
+    } else {
+        // The version 2.0 just resolved, so 1.x runs the same one.
+        let mut spec = resolved.spec.clone();
+        spec.version = Some(resolved.version.clone());
+        butterflow_core::registry::format_package_spec(&spec)
+    };
+    // One line, on stderr so `--format jsonl` stays clean.
+    eprintln!(
+        "{}",
+        style(format!(
+            "Running with codemod {}: {reason}. Set CODEMOD_V1=off to run it on this version.",
+            v1_delegate::V1_VERSION
+        ))
+        .dim()
+    );
+    let (binary, downloaded) = v1_delegate::resolve_binary().await?;
+    if downloaded {
+        info!(
+            "Downloaded codemod {} to {}",
+            v1_delegate::V1_VERSION,
+            binary.display()
+        );
+    }
+    let v1_args = v1_delegate::v1_args(&v1_delegate::Passthrough {
+        package,
+        registry: args.registry.clone(),
+        force: args.force,
+        dry_run: args.dry_run,
+        params: args.params.clone().unwrap_or_default(),
+        allow_dirty: args.allow_dirty,
+        // codemod 1.x starts in this directory, so a relative target holds.
+        target: args.target_path.clone(),
+        no_color: args.no_color,
+        report: args.report,
+        llm_usage_output: args.llm_usage_output.clone(),
+        workflow: args.workflow.clone(),
+        allow_fs: args.flags.allow_fs,
+        allow_fetch: args.flags.allow_fetch,
+        allow_child_process: args.flags.allow_child_process,
+        no_interactive: args.flags.no_interactive,
+        agent: args.flags.agent.clone(),
+        install_skill: args.flags.install_skill,
+        jsonl: args.flags.format == OutputFormat::Jsonl,
+        verbose: log::log_enabled!(log::Level::Debug),
+        disable_analytics,
+    });
+    debug!("Running {} {:?}", binary.display(), v1_args);
+    match v1_delegate::run(&binary, &v1_args)? {
+        0 => Ok(()),
+        exit_code => Err(crate::workflow_exec::FailedByWorkflow { exit_code }.into()),
+    }
 }
 
 /// Returns an error for a failed legacy codemod command.
