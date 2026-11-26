@@ -183,6 +183,41 @@ fn jssg_run_reports_a_write_error_once() {
     assert_eq!(fixture.read("src/ro.ts"), "const ro = 'OLD';\n");
 }
 
+/// Without a terminal nothing is asked: a capability given with its flag is
+/// used, and one that wasn't fails the run naming the flag.
+#[test]
+fn jssg_run_without_a_terminal_uses_the_capability_flags_given() {
+    let fixture = Fixture::new(&[]);
+    write(
+        fixture.package.path(),
+        "codemod.ts",
+        r#"
+import * as childProcess from "child_process";
+export default function transform(root: any) {
+  const text: string = root.root().text();
+  const granted = typeof childProcess.spawn === "function";
+  return granted && text.includes("OLD") ? text.replace("OLD", "NEW") : null;
+}
+"#,
+    );
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("pass --allow-child-process"),
+        "{}",
+        text(&output)
+    );
+    assert!(fixture.read("src/f00.ts").contains("'OLD'"));
+
+    let output = fixture.run(&["--allow-child-process"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        fixture.read("src/f00.ts").contains("'NEW'"),
+        "{}",
+        text(&output)
+    );
+}
+
 /// A JavaScript error does not hide another file's error.
 #[cfg(unix)]
 #[test]

@@ -18,7 +18,9 @@ pub fn capabilities_security_callback(
         UNSAFE_MODULES.iter().copied().collect();
 
     Arc::new(move |config: &CodemodExecutionConfig| {
-        if no_interaction {
+        // Unattended (no terminal, CI, --no-interactive): the --allow-*
+        // flags given are the grant, and nothing is asked.
+        if !crate::utils::interactive::is_interactive(no_interaction) {
             return Ok(());
         }
         let checked = checked_capabilities.lock().unwrap();
