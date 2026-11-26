@@ -272,25 +272,35 @@ const ANALYSES: &[&str] = &[
     "crawl",
 ];
 
-/// The semantic analysis code gets when it names none: workspace scope when
-/// it imports an analysis from `codemod/ast-grep` (with the TypeScript 7
-/// checker when it imports `types`), otherwise what `semanticAnalysis`
-/// says.
+/// The semantic analysis code gets: what `semanticAnalysis` says, or
+/// workspace scope when it names none and the code imports an analysis from
+/// `codemod/ast-grep`. Importing `types` turns the TypeScript 7 checker on,
+/// also under `semanticAnalysis: "workspace"`, unless the option sets
+/// `types` itself.
 pub(crate) fn semantic_mode_for(
     task: &TaskContext<'_>,
     option: Option<&Value>,
     code: &str,
 ) -> Result<SemanticMode, String> {
-    match (option, imported_analyses(code)) {
-        (None, imported) if !imported.is_empty() => {
-            let types = if imported.contains(&"types") {
-                SemanticTypes::Ts7
-            } else {
-                SemanticTypes::Off
-            };
-            Ok(SemanticMode::Workspace(task.run.target.clone(), types))
+    let imported = imported_analyses(code);
+    let types = if imported.contains(&"types") {
+        SemanticTypes::Ts7
+    } else {
+        SemanticTypes::Off
+    };
+    match option {
+        None if !imported.is_empty() => Ok(SemanticMode::Workspace(task.run.target.clone(), types)),
+        _ => {
+            let sets_types = option
+                .and_then(|value| value.get("types"))
+                .is_some_and(|value| !value.is_null());
+            Ok(match semantic_mode(task, option)? {
+                SemanticMode::Workspace(root, SemanticTypes::Off) if !sets_types => {
+                    SemanticMode::Workspace(root, types)
+                }
+                mode => mode,
+            })
         }
-        _ => semantic_mode(task, option),
     }
 }
 

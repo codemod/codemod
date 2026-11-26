@@ -75,11 +75,13 @@ declare module "codemod:ast-grep" {
      * The type of this expression or declaration name, as the TypeScript
      * checker prints it (`"UserRepo"`, `"{ id: string; }"`, `"void"`).
      *
-     * Needs types to be on: `semanticAnalysis: { mode: "workspace", types:
-     * "ts7" }` with TypeScript 7.0 installed in the workspace (or
-     * `CODEMOD_TS_API` naming its `tsc`). Null otherwise, in file scope,
-     * and when no expression has exactly this node's range. Answers describe
-     * the files as they were when the checker first read them.
+     * Needs the checker: import `types` from `"codemod/ast-grep"` in the
+     * step's code, with TypeScript 7.0 installed in the workspace (or
+     * `CODEMOD_TS_API` naming its `tsc`). Null otherwise, and when no
+     * expression has exactly this node's range. Answers describe the files
+     * as they were when the checker first read them. The selector option
+     * `semanticAnalysis: { mode: "workspace", types: "ts7" }` is a
+     * deprecated shorthand for importing `types`.
      * @experimental
      */
     typeInfo(): string | null;
@@ -397,8 +399,9 @@ declare module "codemod:ast-grep" {
     /**
      * The type of this expression as the TypeScript 7 checker prints it
      * (`"Promise<User>"`), or `null` when there is no checker or no answer.
-     * Needs `semanticAnalysis: "workspace"` and a TypeScript 7 checker: the
-     * target's `node_modules/@typescript/native-preview-<os>-<arch>` (or
+     * Needs the checker: import `types` from `"codemod/ast-grep"` in the
+     * step's code, with a TypeScript 7 checker in the target's
+     * `node_modules/@typescript/native-preview-<os>-<arch>` (or
      * `typescript-<os>-<arch>`), or `CODEMOD_TS_API=<path to tsc/tsgo>`.
      *
      * @experimental
@@ -1237,7 +1240,7 @@ declare module "codemod:ast-grep" {
     /** The same call as `node`. */
     callSite: CallSite<M>;
     /**
-     * With types on (`semanticAnalysis: { mode: "workspace", types: "ts7" }`):
+     * With the checker on (the step imports `types`):
      * where the TypeScript checker says the called member is declared, when
      * that is not a function in the workspace. For example the
      * `isOpen: Accessor<boolean>` property of a context interface, in a

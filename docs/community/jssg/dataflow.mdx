@@ -259,19 +259,20 @@ result. With types on, the TypeScript 7 checker answers instead (experimental):
 - `node.typeInfo()` returns the type as the checker prints it: `"UserRepo"`,
   `"{ id: string; }"`. It is `null` with types off.
 
-Turn them on for a step:
+Turn them on by importing `types` in the code that uses them. That also turns on workspace analysis:
 
 ```ts
-forEachFile(
-  {
-    include: "src/**/*.{ts,tsx}",
-    semanticAnalysis: { mode: "workspace", types: "ts7" },
-  },
-  (file) => { /* ... */ },
-);
+import { types } from "codemod/ast-grep";
+
+const { typeOf } = types("typescript");
+forEachFile({ include: "src/**/*.{ts,tsx}" }, (file) => {
+  // typeOf.get(node), node.typeInfo() and via: "type" call edges all answer here
+});
 ```
 
-In `workflow.yaml`: `semantic_analysis: { mode: workspace, types: ts7 }`.
+The selector option `semanticAnalysis: { mode: "workspace", types: "ts7" }` still works, as a
+deprecated shorthand for the import. In `workflow.yaml`, where there is no import:
+`semantic_analysis: { mode: workspace, types: ts7 }`.
 
 What types need:
 
@@ -655,7 +656,7 @@ it models and says where it stops. Build automatic rewrites only on complete ans
 | Result limits (50,000 steps or entries) | `truncated: true` on the array |
 | Edits during a run | Every answer describes the workspace when the step started: a step sees earlier steps' edits, never its own. A query on a root parsed from text the step produced throws |
 | Callers from outside the workspace | `callers()` lists call sites only. Package exports and declared rules are in `entryPoints()` |
-| Types (with `types: "ts7"`) | `via: "type"` edges trust the declared type: a value cast with `as` or typed `any` is followed as declared, or not at all |
+| Types (with `types` imported) | `via: "type"` edges trust the declared type: a value cast with `as` or typed `any` is followed as declared, or not at all |
 
 ### When the answer is "can't tell"
 

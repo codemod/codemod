@@ -295,8 +295,11 @@ declare module "codemod:workflow" {
      * What `definition()` and `references()` on roots `parse(file)` makes can
      * find: `"file"` (the default) looks within each file, `"workspace"`
      * across the selected files of the target (or under `root`), and
-     * `"none"` turns it off. Analysis runs only when they are called.
-     * `{ mode: "workspace", types: "ts7" }` adds types (experimental).
+     * `"none"` turns it off. Analysis runs only when they are called. Code
+     * that imports an analysis from `"codemod/ast-grep"` (`callGraph`,
+     * `dataflow`, `symbols`, `types`, `entryPoints`) gets workspace analysis
+     * without this option, and importing `types` turns the TypeScript 7
+     * checker on.
      */
     semanticAnalysis?: SemanticAnalysis;
     /**
@@ -319,6 +322,7 @@ declare module "codemod:workflow" {
         mode: "workspace";
         root?: string;
         /**
+         * @deprecated Import `types` from `"codemod/ast-grep"` instead.
          * Types from the TypeScript 7 checker: `node.typeInfo()`, and
          * `callees()` / `callers()` that follow `x.m()` by the type of `x`
          * (`via: "type"`). Needs `typescript@7.0` in the target's
