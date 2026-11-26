@@ -445,6 +445,38 @@ fn codemod_run_where_some_files_failed_exits_2() {
 }
 
 #[test]
+fn resume_refuses_removed_1x_flags_with_what_replaced_them() {
+    let fixture = Fixture::new();
+    let resume = |extra: &[&str]| {
+        let mut args = vec!["workflow", "resume", "--id", "some-run"];
+        args.extend_from_slice(extra);
+        fixture.codemod(&args)
+    };
+
+    let output = resume(&["--tasks_ids", "abc"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("--tasks_ids was removed")
+            && text(&output).contains("--approve <question-id>"),
+        "{}",
+        text(&output)
+    );
+
+    let output = resume(&["--dry-run"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("workflow run --dry-run"),
+        "{}",
+        text(&output)
+    );
+
+    // The run remembers its workflow and target: these still parse.
+    let output = resume(&["-w", "workflow.yaml", "-t", "."]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(text(&output).contains("not found"), "{}", text(&output));
+}
+
+#[test]
 fn a_failed_run_is_listed_and_resumes_after_the_fix() {
     let fixture = Fixture::new();
     fixture.package_file("workflow.ts", TS_FAILING);

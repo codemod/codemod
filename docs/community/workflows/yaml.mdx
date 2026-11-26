@@ -701,14 +701,16 @@ nodes:
         run: ./deploy.sh
 ```
 
-Resume paused tasks:
+Resume a run waiting for approval:
 ```bash
-# Resume all paused tasks
-npx codemod workflow resume -i <run-id> --trigger-all
+# Give every approval the run asks for
+npx codemod workflow resume -i <run-id> --approve
 
-# Resume a specific task
-npx codemod workflow resume -i <run-id> -t <task-uuid>
+# Give one approval, by the question id `workflow status` shows (e.g. approval:3)
+npx codemod workflow resume -i <run-id> --approve <question-id>
 ```
+
+The 1.x `resume` flags `--tasks_ids` and `--dry-run` are gone: `--approve <question-id>` replaces `--tasks_ids`, and a dry run is not saved, so it can't be resumed.
 
 ---
 
