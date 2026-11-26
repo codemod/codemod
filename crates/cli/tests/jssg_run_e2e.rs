@@ -153,6 +153,8 @@ fn jssg_run_drops_a_failed_files_changes_to_other_files() {
     let output = fixture.run(&[]);
     assert!(!output.status.success(), "{}", text(&output));
     assert!(text(&output).contains("bad.ts fails on purpose"));
+    // Piped, so no color codes in the error.
+    assert!(!text(&output).contains('\u{1b}'), "{}", text(&output));
     assert_eq!(fixture.shared_lines(), touched_by_all());
     assert_eq!(
         fixture.read("src/bad.ts"),
