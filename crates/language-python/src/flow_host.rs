@@ -68,6 +68,8 @@ pub struct PyFlow {
     pub(crate) modules: crate::modules::PyModules,
     /// Packaging, `__main__` and framework entry points.
     builtin: BuiltinEntryPoints,
+    /// `[tool.pytest.ini_options] pythonpath`, read once per step.
+    pytest_paths: RwLock<Option<Vec<PathBuf>>>,
 }
 
 impl std::fmt::Debug for PyFlow {
@@ -90,6 +92,7 @@ impl PyFlow {
             ty: None,
             modules: Default::default(),
             builtin: BuiltinEntryPoints::default(),
+            pytest_paths: RwLock::default(),
         }
     }
 
@@ -120,6 +123,7 @@ impl PyFlow {
         self.callers.clear();
         self.modules.clear();
         self.builtin.clear();
+        *self.pytest_paths.write() = None;
     }
 
     /// Use `content` for `path` from now on (the file as the codemod sees it).
@@ -442,9 +446,17 @@ impl PyFlow {
     /// `shopfloor/orders/tasks.py`.
     fn search_roots(&self, from: &Path) -> Vec<PathBuf> {
         let mut roots = Vec::new();
+        let mut add = |dir: PathBuf| {
+            if !roots.contains(&dir) {
+                roots.push(dir);
+            }
+        };
         if let Some(root) = &self.root {
-            roots.push(root.clone());
-            roots.push(root.join("src"));
+            add(root.clone());
+            add(root.join("src"));
+            for dir in self.pytest_paths() {
+                add(dir);
+            }
         }
         let mut base = from.parent();
         while let Some(dir) = base {
@@ -455,11 +467,57 @@ impl PyFlow {
             base = dir.parent();
         }
         if let Some(base) = base {
-            if !roots.iter().any(|r| r == base) {
-                roots.push(base.to_path_buf());
+            add(base.to_path_buf());
+        }
+        // pytest puts the directory of each conftest.py outside a package
+        // on sys.path, so tests import helpers that sit next to it.
+        if let Some(root) = &self.root {
+            for dir in from.ancestors().skip(1) {
+                if !dir.starts_with(root) {
+                    break;
+                }
+                if dir.join("conftest.py").is_file() && !dir.join("__init__.py").is_file() {
+                    add(dir.to_path_buf());
+                }
             }
         }
         roots
+    }
+
+    /// The workspace's `[tool.pytest.ini_options] pythonpath` directories.
+    fn pytest_paths(&self) -> Vec<PathBuf> {
+        if let Some(paths) = &*self.pytest_paths.read() {
+            return paths.clone();
+        }
+        let paths: Vec<PathBuf> = self
+            .root
+            .as_deref()
+            .map(|root| {
+                let text = std::fs::read_to_string(root.join("pyproject.toml")).unwrap_or_default();
+                let table = toml::from_str::<toml::Table>(&text).unwrap_or_default();
+                let listed = table
+                    .get("tool")
+                    .and_then(|tool| tool.get("pytest"))
+                    .and_then(|pytest| pytest.get("ini_options"))
+                    .and_then(|options| options.get("pythonpath"))
+                    .cloned();
+                let entries: Vec<String> = match listed {
+                    Some(toml::Value::Array(items)) => items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .collect(),
+                    Some(toml::Value::String(one)) => vec![one],
+                    _ => Vec::new(),
+                };
+                entries
+                    .iter()
+                    .map(|entry| root.join(entry))
+                    .filter(|dir| dir.starts_with(root))
+                    .collect()
+            })
+            .unwrap_or_default();
+        *self.pytest_paths.write() = Some(paths.clone());
+        paths
     }
 
     pub(crate) fn module_file(base: &Path, parts: &[&str]) -> Option<PathBuf> {

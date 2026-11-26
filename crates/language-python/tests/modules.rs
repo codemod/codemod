@@ -535,3 +535,40 @@ fn a_file_with_no_importable_name_has_no_public_specifiers() {
     let ws = Ws::new(&[("my-tools/run.py", "")]);
     assert_eq!(ws.public("my-tools/run.py"), Vec::<String>::new());
 }
+
+#[test]
+fn a_test_imports_helpers_from_a_directory_pytest_puts_on_the_path() {
+    let ws = Ws::new(&[
+        (
+            "pyproject.toml",
+            "[tool.pytest.ini_options]\npythonpath = [\"src\", \"tests\"]\n",
+        ),
+        ("tests/factories.py", ""),
+        (
+            "tests/orders/test_orders.py",
+            "from factories import make_order\n",
+        ),
+    ]);
+    assert_eq!(
+        ws.resolve("tests/orders/test_orders.py", "factories")
+            .as_deref(),
+        Some("tests/factories.py")
+    );
+}
+
+#[test]
+fn a_test_imports_helpers_next_to_a_conftest_outside_a_package() {
+    let ws = Ws::new(&[
+        ("tests/conftest.py", ""),
+        ("tests/factories.py", ""),
+        (
+            "tests/orders/test_orders.py",
+            "from factories import make_order\n",
+        ),
+    ]);
+    assert_eq!(
+        ws.resolve("tests/orders/test_orders.py", "factories")
+            .as_deref(),
+        Some("tests/factories.py")
+    );
+}
