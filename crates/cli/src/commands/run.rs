@@ -542,9 +542,7 @@ fn select_workflow_for_run(
         return Ok((path, Some(entry.name)));
     }
 
-    let stdin_is_tty = io::stdin().is_terminal();
-    let stdout_is_tty = io::stdout().is_terminal();
-    if no_interactive || !stdin_is_tty || !stdout_is_tty {
+    if !crate::utils::interactive::is_interactive(no_interactive) || !io::stdout().is_terminal() {
         let entry = manifest.default_workflow()?;
         return Ok((package_dir.join(&entry.path), Some(entry.name)));
     }

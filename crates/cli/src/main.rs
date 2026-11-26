@@ -273,7 +273,7 @@ fn no_command_message() -> String {
 }
 
 fn should_prompt_for_no_command_action() -> bool {
-    io::stdin().is_terminal() && io::stdout().is_terminal()
+    crate::utils::interactive::is_interactive(false) && io::stdout().is_terminal()
 }
 
 fn exit_with_code(code: i32) -> ! {

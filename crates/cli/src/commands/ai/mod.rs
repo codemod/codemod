@@ -977,8 +977,7 @@ impl fmt::Display for ScopePromptOption {
 fn resolve_install_inputs(
     command: &InstallCommand,
 ) -> std::result::Result<InstallInputs, HarnessAdapterError> {
-    let interactive = !command.no_interactive
-        && std::io::stdin().is_terminal()
+    let interactive = crate::utils::interactive::is_interactive(command.no_interactive)
         && std::io::stdout().is_terminal();
     let scope_explicit = command.project || command.user;
 
