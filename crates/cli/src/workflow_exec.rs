@@ -308,10 +308,20 @@ impl ExecOutcome {
         }
     }
 
-    /// Like [`Self::ended`], but a run that finished with failed files is
-    /// an error too: [`FinishedWithFailedFiles`], exit code 2.
+    /// Like [`Self::ended`], but a run that waits for an approval is an
+    /// error too ([`WaitingForInput`], exit code 3), and so is one that
+    /// finished with failed files ([`FinishedWithFailedFiles`], exit code 2).
     pub fn result(&self) -> Result<()> {
         self.ended()?;
+        if matches!(self.report.ending, Ending::AwaitingApproval(_)) {
+            let run = &self.report.run;
+            return Err(WaitingForInput {
+                run_id: run.id.clone(),
+                question: run.question.clone(),
+                quiet: self.format == OutputFormat::Jsonl,
+            }
+            .into());
+        }
         match self.failed_files() {
             0 => Ok(()),
             failed => Err(FinishedWithFailedFiles {
@@ -327,6 +337,47 @@ impl ExecOutcome {
 /// The exit code of a run that finished, but with some files failed. A run
 /// that failed outright exits with 1.
 pub const EXIT_FAILED_FILES: i32 = 2;
+
+/// The exit code of a run that stopped to wait for input (an approval):
+/// it is saved, and `workflow resume` continues it. Not 0, so a CI job does
+/// not pass with half a migration done; not 1, which is a failure.
+pub const EXIT_WAITING: i32 = 3;
+
+/// A run stopped to wait for an approval. The CLI exits with
+/// [`EXIT_WAITING`]; the text output already said how to go on.
+#[derive(Debug)]
+pub struct WaitingForInput {
+    pub run_id: String,
+    /// The question it waits for (`approval:3`).
+    pub question: Option<String>,
+    /// The output is JSONL, where `run_finished` already says it.
+    pub quiet: bool,
+}
+
+impl WaitingForInput {
+    /// The command that gives the approval and continues the run.
+    pub fn resume_command(&self) -> String {
+        match &self.question {
+            Some(question) => format!(
+                "codemod workflow resume --id {} --approve {question}",
+                self.run_id
+            ),
+            None => format!("codemod workflow resume --id {} --approve", self.run_id),
+        }
+    }
+}
+
+impl std::fmt::Display for WaitingForInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "waiting for input (exit code {EXIT_WAITING}); continue with: {}",
+            self.resume_command()
+        )
+    }
+}
+
+impl std::error::Error for WaitingForInput {}
 
 /// A run finished, but some of its files failed. The CLI ends its output
 /// with this and exits with [`EXIT_FAILED_FILES`].
@@ -383,6 +434,33 @@ impl std::error::Error for WorkflowFailureAlreadyReported {}
 /// The run store selected by `CODEMOD_RUN_STORE`.
 pub fn store() -> Arc<dyn RunStore> {
     Arc::from(store_from_env())
+}
+
+/// A run's record; for a run this version cannot read, an error that says
+/// which version made it.
+pub fn get_run(store: &dyn RunStore, run_id: &str) -> Result<Option<RunRecord>> {
+    match store.get_run(run_id) {
+        Ok(record) => Ok(record),
+        Err(error) => {
+            let unreadable = store.list_unreadable().unwrap_or_default();
+            match unreadable.iter().find(|run| run.id == run_id) {
+                Some(run) => Err(anyhow!(
+                    "run '{run_id}' is {}, and codemod {} cannot read it: {error}",
+                    unreadable_label(run),
+                    codemod_workflow::CODEMOD_VERSION
+                )),
+                None => Err(error.into()),
+            }
+        }
+    }
+}
+
+/// How `workflow list` shows a run this version cannot read.
+pub fn unreadable_label(run: &codemod_workflow::UnreadableRun) -> String {
+    match &run.codemod_version {
+        Some(version) => format!("unreadable (made by codemod {version})"),
+        None => "unreadable (made by another codemod version)".to_string(),
+    }
 }
 
 /// A run's status for display. A run whose record says running while
@@ -470,9 +548,8 @@ pub async fn start(mut request: ExecRequest) -> Result<ExecOutcome> {
 /// of the run behaves like its start.
 pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutcome> {
     settings.check_control()?;
-    let record = store()
-        .get_run(run_id)?
-        .ok_or_else(|| anyhow!("run '{run_id}' not found"))?;
+    let record =
+        get_run(store().as_ref(), run_id)?.ok_or_else(|| anyhow!("run '{run_id}' not found"))?;
     // Before asking anything: a run that is over stays over.
     match record.status.resumable() {
         codemod_workflow::Resumable::Yes => {}
@@ -701,6 +778,18 @@ pub(crate) fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumabl
             eprintln!(
                 "\n{} {message}\n  The run ended; what earlier steps changed was kept.",
                 style("Rejected:").red().bold(),
+            );
+        }
+        Ending::Paused if run.question.is_some() => {
+            let question = run.question.as_deref().unwrap_or_default();
+            eprintln!(
+                "\n{} {}{}",
+                style("The run was paused at an approval:").yellow().bold(),
+                run.awaiting.as_deref().unwrap_or(question),
+                hint(format!(
+                    "Approve it and go on with: codemod workflow resume --id {} --approve {question}",
+                    run.id
+                ))
             );
         }
         Ending::Paused => {

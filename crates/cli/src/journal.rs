@@ -139,6 +139,7 @@ mod tests {
                 output: None,
                 exit_code: None,
                 settings: RunSettings::default(),
+                codemod_version: None,
             })
             .unwrap();
     }

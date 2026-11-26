@@ -166,12 +166,13 @@ impl Session {
         std::thread::sleep(Duration::from_millis(150));
     }
 
-    fn finish(mut self) -> (bool, String) {
+    /// Wait for the process to exit: its exit code, and what it showed.
+    fn finish(mut self) -> (u32, String) {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             if let Some(status) = self.child.try_wait().unwrap() {
                 std::thread::sleep(Duration::from_millis(200));
-                return (status.success(), self.text());
+                return (status.exit_code(), self.text());
             }
             if Instant::now() > deadline {
                 let _ = self.child.kill();
@@ -255,8 +256,8 @@ fn a_dry_run_is_reviewed_applied_and_approved_in_the_launcher() {
     // The plain record stays in the terminal; then the report question.
     session.wait_for("View results in the browser");
     session.keys("n\r");
-    let (success, output) = session.finish();
-    assert!(success, "{output}");
+    let (code, output) = session.finish();
+    assert_eq!(code, 0, "{output}");
     assert!(output.contains("approval: Apply the change?"), "{output}");
     assert!(output.contains("1 file changed"), "{output}");
     assert_eq!(
@@ -303,8 +304,9 @@ fn pausing_at_an_approval_leaves_a_run_to_resume() {
     session.keys("l");
     session.wait_for("waiting for approval");
     session.keys("q");
-    let (success, output) = session.finish();
-    assert!(success, "{output}");
+    let (code, output) = session.finish();
+    // Waiting for input: exit code 3.
+    assert_eq!(code, 3, "{output}");
     let id = regex::Regex::new(r"workflow resume --id ([0-9a-f-]+) --approve")
         .unwrap()
         .captures(&output)
@@ -326,8 +328,8 @@ fn pausing_at_an_approval_leaves_a_run_to_resume() {
     session.keys("y");
     session.wait_for("done");
     session.keys("q");
-    let (success, output) = session.finish();
-    assert!(success, "{output}");
+    let (code, output) = session.finish();
+    assert_eq!(code, 0, "{output}");
     assert_eq!(
         fs::read_to_string(target.path().join("src/a.ts")).unwrap(),
         "let a = 1;\n"
@@ -463,8 +465,8 @@ fn quitting_the_setup_runs_nothing() {
     );
     session.wait_for("Start run");
     session.keys("q");
-    let (success, output) = session.finish();
-    assert!(success, "{output}");
+    let (code, output) = session.finish();
+    assert_eq!(code, 0, "{output}");
     assert!(output.contains("Nothing ran."), "{output}");
     assert_eq!(
         fs::read_to_string(target.path().join("src/a.ts")).unwrap(),

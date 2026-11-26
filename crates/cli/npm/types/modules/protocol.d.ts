@@ -107,7 +107,10 @@ declare module "codemod/protocol" {
   export type RunStatus =
     | "running"
     | "awaiting-approval"
-    /** Stopped on request (Ctrl-C, `stop`): resume continues it. */
+    /**
+     * Stopped on request (Ctrl-C, `stop`, stdin closed): resume continues it.
+     * Paused at an open question, it keeps `awaiting` and `question`.
+     */
     | "paused"
     | "succeeded"
     | "failed"
@@ -256,7 +259,11 @@ declare module "codemod/protocol" {
         run_id: string;
         status: RunStatus;
         error: string | null;
-        /** What the approval the run waits for asks. */
+        /**
+         * What the approval the run waits for asks: with status
+         * `"awaiting-approval"`, or `"paused"` when it was paused (stdin
+         * closed, `stop`) while the question was open.
+         */
         awaiting: string | null;
         /** Its question id: `workflow resume --approve <id>`. */
         question: string | null;

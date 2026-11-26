@@ -19,6 +19,29 @@ To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha wor
 
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
 
+<Update label="2.0.0-alpha.10" description="Unreleased">
+**Breaking changes**
+
+- **A run waiting for an approval exits `3`**. Before, `workflow run --no-interactive` (and `workflow resume`, `codemod <package>`) exited `0` when the run stopped at an approval, so a CI job passed with the migration half done. Now it exits `3`, apart from `1` (failed) and `2` (failed files, `fail()`), and ends with the command that continues it. See [exit codes](/community/cli#exit-codes).
+
+  ```
+  Waiting for approval: Go on?
+    Approve it and go on with: codemod workflow resume --id <ID> --approve approval:1
+  $ echo $?
+  3
+  ```
+
+**New**
+
+- **Runs record the codemod version.** `workflow status --format json` shows `codemodVersion`. Resuming a run another version made, whose finished function steps that version built differently, is refused with the version and the steps, instead of running those steps again silently; `--force` runs them again. `workflow list` shows runs this version cannot read as `unreadable (made by codemod <version>)` instead of leaving them out.
+
+- **One run per repository at a time.** Before, two runs on one repository both ran and could write the same files. Now a run (or resume) on a repository another run is executing fails at once, naming that run: `another run (<ID>) is already running on <repo>: wait for it, follow it with codemod workflow attach --id <ID>, or stop it with codemod workflow cancel --id <ID>`. The lock lives in the run store and goes with its process, so a killed run does not leave the repository locked. Dry runs do not lock.
+
+**Fixes**
+
+- **A run paused at an approval keeps its question.** Before, closing a control channel's stdin or sending `stop` while an approval was open left a `paused` run with `question: null`, and the approval step `canceled`. Now `run_finished` and `workflow status` keep `question` (`approval:1`) and `awaiting`, the step stays `awaiting-approval`, and `workflow resume --approve approval:1` gives it.
+</Update>
+
 <Update label="2.0.0-alpha.9" description="November 25, 2026">
 ```bash
 npx codemod@2.0.0-alpha.9 --version   # codemod 2.0.0-alpha.9

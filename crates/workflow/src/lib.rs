@@ -44,12 +44,12 @@ pub use butterflow_core::package_workflows::{
 };
 pub use butterflow_state::run_store::{
     FileCount, LocalStore, MemoryStore, Resumable, RunRecord, RunSettings, RunStatus, RunStore,
-    StepRecord, StepStatus,
+    StepRecord, StepStatus, UnreadableRun,
 };
 pub use callback_file::{run_callback_file, CallbackFileRequest, CallbackFileRun};
 pub use engine::{
     cancel_run, is_typescript, load_workflow, send_event, Canceled, Engine, EngineError,
-    LoadedWorkflow, ResumeOptions, RunReport, StartRequest, StopHandle, StopMode,
+    LoadedWorkflow, ResumeOptions, RunReport, StartRequest, StopHandle, StopMode, CODEMOD_VERSION,
 };
 pub use hosted::{HostedRun, OpenRequest, SelectedFiles};
 pub use js::orchestrator_version;

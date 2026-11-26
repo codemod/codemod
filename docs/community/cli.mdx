@@ -510,20 +510,25 @@ A run is unattended when you pass `--no-interactive`, when there is no terminal 
   The CLI creates parent directories as needed and overwrites the file with the current run's data.
 </ResponseField>
 
-**Exit codes** (`workflow run`, `workflow resume`, `codemod <package>`):
+#### Exit codes
+
+`workflow run`, `workflow resume` and `codemod <package>` exit with:
 
 | Code | Meaning |
 | ---- | ------- |
-| `0` | The run finished, or is waiting for an approval. |
+| `0` | The run finished. |
 | `1` | The run failed, was paused (Ctrl-C), canceled, or rejected at an approval. Also: a dry run reached an approval nobody could answer (a dry run is not saved, so it cannot wait; pass `--approve`, or drive it with `--control stdio`). |
 | `2` | The run finished, but some files failed. The other files' changes were written (in a dry run, nothing was), and the output ends with how many failed. A resumed run counts the files that failed in steps it reused. Also: the workflow called [`fail()`](/community/workflows/reference#failing-a-run-with-a-report) (the run is `failed`, and keeps its output). |
-| other | The workflow called `fail(message, { exitCode })` with that code (1 to 125). |
+| `3` | The run is waiting for input: it stopped at an approval nobody could answer (`--no-interactive`, CI, or answered "later"). It is saved; the last line names the command that continues it, `codemod workflow resume --id <ID> --approve <QUESTION_ID>`. |
+| other | The workflow called `fail(message, { exitCode })` with that code (1 to 125). A workflow that passes `3` exits like a waiting run: check `workflow status` to tell them apart. |
 
 **`workflow resume`**
 
 Continue a run that failed, was paused (Ctrl-C) or interrupted, or is waiting for approval. A run that was canceled or rejected is over: resuming it takes `--force`. Steps that already finished are not run again: their recorded results are reused, in the order the steps finished the first time. If you changed the workflow, steps you left alone keep their results wherever they now are in the file; a step you added or changed runs, also when it had finished before.
 
-The run continues with what it was started with: its capabilities, `--managed-git` and `--agent` carry over (a new `--agent` or `--model` wins), and flags you pass add to them. A run that another process is still executing cannot be resumed; wait for it or cancel it. A run started with `runWorkflow` in Node.js is resumed there, not here.
+The run continues with what it was started with: its capabilities, `--managed-git` and `--agent` carry over (a new `--agent` or `--model` wins), and flags you pass add to them. A run that another process is still executing cannot be resumed; wait for it or cancel it. One run at a time changes a repository: while a run executes (started or resumed), another run on the same repository (or the same directory, outside a git repository) fails at once, naming the running run and how to `workflow attach` to it or `workflow cancel` it. A run whose process was killed holds nothing: its lock goes with the process. A run started with `runWorkflow` in Node.js is resumed there, not here.
+
+Each run records the codemod version that ran it (`codemodVersion` in `workflow status --format json`). Function and `forEachFile` steps are matched by a hash of the code the CLI builds from them, which another version may build differently. When you resume a run another version made and some finished steps no longer match, `workflow resume` refuses and names the version and the steps: resume it with that version (`npx codemod@<version> workflow resume --id <ID>`), or pass `--force` to run those steps again.
 
 ```bash
 npx codemod workflow resume --id <ID> [--approve [<QUESTION_ID>]] [--force]
@@ -544,7 +549,7 @@ npx codemod workflow resume --id <ID> [--approve [<QUESTION_ID>]] [--force]
 </ResponseField>
 
 <ResponseField name="--force" type="boolean">
-  Continue a run that was canceled or rejected. Steps that finished keep their results; the step that was rejected asks again.
+  Continue a run that was canceled or rejected. Steps that finished keep their results; the step that was rejected asks again. Also continues a run another codemod version made whose finished function steps no longer match: those run again.
 </ResponseField>
 
 <ResponseField name="--allow-dirty" type="boolean">
@@ -662,12 +667,12 @@ npx codemod workflow status -i <ID> --format json
 </ResponseField>
 
 <ResponseField name="--format <text|json>" type="string">
-  `json` prints the run as one JSON object: `id`, `name`, `workflow`, `target`, `params`, `status`, `startedAt`, `endedAt`, `durationMs`, `awaiting` and `question` (what the approval it waits for asks, and its id), `error`, `output` (what the workflow returned or gave `fail()`), `exitCode` (from `fail()`, else `null`), `failedFiles`, and `steps`, each with `position`, `label`, `kind`, `status`, `error`, `result`, `finishedAt`, `durationMs`, `attempts` (how many times it ran, `1` unless it was retried) and `files` (`{ failed, total }` for a step that works on files: `forEachFile`, `astGrep`, a nested `codemod`; `null` for other steps).
+  `json` prints the run as one JSON object: `id`, `name`, `workflow`, `target`, `params`, `status`, `startedAt`, `endedAt`, `durationMs`, `awaiting` and `question` (what the approval it waits for asks, and its id), `error`, `output` (what the workflow returned or gave `fail()`), `exitCode` (from `fail()`, else `null`), `codemodVersion` (the version that last ran it; `null` for runs from 2.0.0-alpha.9 or before), `failedFiles`, and `steps`, each with `position`, `label`, `kind`, `status`, `error`, `result`, `finishedAt`, `durationMs`, `attempts` (how many times it ran, `1` unless it was retried) and `files` (`{ failed, total }` for a step that works on files: `forEachFile`, `astGrep`, a nested `codemod`; `null` for other steps).
 </ResponseField>
 
 **`workflow list`**
 
-List workflow runs.
+List workflow runs. A run this version cannot read (a newer codemod wrote it) is listed as `unreadable (made by codemod <version>)`; use that version to see or resume it.
 
 ```bash
 npx codemod workflow list [-l <LIMIT>] [--format json]
@@ -678,7 +683,7 @@ npx codemod workflow list [-l <LIMIT>] [--format json]
 </ResponseField>
 
 <ResponseField name="--format <text|json>" type="string">
-  `json` prints an array of runs, most recent first, each as `workflow status --format json` shows it without `steps`.
+  `json` prints an array of runs, most recent first, each as `workflow status --format json` shows it without `steps`. An unreadable run has only `id`, `status` (`"unreadable"`), `startedAt`, `codemodVersion` and `error`.
 </ResponseField>
 
 **`workflow cancel`**

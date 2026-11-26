@@ -32,7 +32,8 @@ pub struct Command {
     #[arg(long, hide = true)]
     trigger_all: bool,
 
-    /// Continue a run that was canceled or rejected
+    /// Continue a run that was canceled or rejected, or one another codemod version made whose
+    /// finished function steps would run again
     #[arg(long)]
     force: bool,
 
