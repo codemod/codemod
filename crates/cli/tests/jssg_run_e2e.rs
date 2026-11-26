@@ -181,6 +181,25 @@ fn jssg_run_reports_a_write_error_once() {
     assert_eq!(fixture.read("src/ro.ts"), "const ro = 'OLD';\n");
 }
 
+/// A JavaScript error does not hide another file's error.
+#[cfg(unix)]
+#[test]
+fn jssg_run_reports_every_files_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new(&[
+        ("src/bad.ts", "// throw\nconst bad = 'OLD';\n"),
+        ("src/ro.ts", "const ro = 'OLD';\n"),
+    ]);
+    let ro = fixture.target.path().join("src/ro.ts");
+    fs::set_permissions(&ro, fs::Permissions::from_mode(0o444)).unwrap();
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let text = text(&output);
+    assert!(text.contains("bad.ts fails on purpose"), "{text}");
+    assert!(text.contains("Failed to write modified file"), "{text}");
+    assert!(text.contains("jssg run failed with 2 errors"), "{text}");
+}
+
 /// A dry run writes nothing, and shows the shared file's diff with every
 /// file's change.
 #[test]

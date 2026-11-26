@@ -494,8 +494,26 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .into_iter()
         .filter(|error| seen.insert(error.clone()))
         .collect();
-    if !collected_errors.is_empty() {
-        return Err(anyhow::anyhow!("{}", collected_errors.join("\n\n")));
+    match collected_errors.as_slice() {
+        [] => {}
+        [error] => return Err(anyhow::anyhow!("{error}")),
+        // Each on its own: rendered together, a JavaScript error's
+        // diagnostic would hide the others.
+        errors => {
+            for error in errors {
+                eprintln!("{}", crate::diagnostics::render_error_message(error));
+            }
+            eprintln!(
+                "{}",
+                console::style(format!(
+                    "jssg run failed with {} errors (above).",
+                    errors.len()
+                ))
+                .red()
+                .bold()
+            );
+            return Err(crate::workflow_exec::WorkflowFailureAlreadyReported.into());
+        }
     }
 
     let collected_diffs = diff_collector
