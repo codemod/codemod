@@ -25,7 +25,7 @@ The CLI translates the workflow in memory and runs it with 1.x compatibility for
 
 A few 1.x features run differently. The full list is in [What behaves differently](/community/workflows/migrate#what-behaves-differently). The ones you are most likely to notice:
 
-- **Steps with `runtime: docker` or `runtime: podman` are refused.** The CLI refuses the workflow before running any steps and names the node or template. For now, use `npx codemod@1` if the workflow needs a container. Earlier 2.0 alphas ran those steps directly on your machine without a warning.
+- **Steps with `runtime: docker` or `runtime: podman` are refused.** The CLI refuses the workflow before running any steps and names the node or template. Use [`codemod run --v1 <package>`](/community/workflows/migrate#running-a-package-with-codemod-1x) if the workflow needs the 1.x runner. Earlier 2.0 alphas ran those steps directly on your machine without a warning.
 - **Semantic analysis is on by default** in `js-ast-grep` steps, so `definition()` and `references()` now return results in workflows.
 - **`$STATE_OUTPUTS` in shell steps needs a POSIX shell.** On Windows, a workflow that uses it fails before any step runs.
 
@@ -43,6 +43,7 @@ A few 1.x features run differently. The full list is in [What behaves differentl
 | `--no-color` | Now turns off color in all output, not only in dry-run diffs. |
 | `workflow resume --allow-dirty` | Only applies to a run that stopped before it wrote anything. |
 | `--allow-fetch` | Deprecated. Callbacks can't make network requests in 2.0; use an `http()` step. The flag is accepted and does nothing. |
+| Running a package with the 1.x binary | Use `codemod run --v1 <package>` or `CODEMOD_V1=on` to opt in to the deprecated fallback. Default package runs use the 2.0 engine. |
 
 New in 2.0: `workflow status --format json`, `workflow list --format json`, `workflow inspect`, `workflow attach`, `workflow send`, `workflow upgrade`, `--approve` on `workflow run`, `--control stdio`, and `--managed-git` for git steps. See the [CLI reference](/community/cli#codemod-workflow).
 

@@ -19,6 +19,8 @@ The 2.0 alphas are tagged `cli-2.0.0-alpha.N` and published to npm under the `al
 
 - *(workflow)* `http()` sends a request as a recorded step, without sending it again on resume
 - *(workflow)* 1.x YAML packages run without conversion, including legacy transform metrics, workflow state, and read-only target `fs`
+- *(cli)* `codemod run --v1 <package>` explicitly delegates to codemod 1.18.7; it is a deprecated fallback, not the default
+- *(workflow)* `workflow upgrade` converts legacy metrics, warns about `fs` and subprocess imports without granting capabilities, and refuses transforms that use legacy workflow state
 - *(cli)* Runs lock their repository while executing and record the CLI version; resume detects finished steps that no longer match across versions
 - *(cli)* `DO_NOT_TRACK=1` turns off telemetry; `unpublish --yes` supports unattended use
 

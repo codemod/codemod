@@ -122,7 +122,7 @@ npm install --save-dev codemod
 | A node | An `async` function. A workflow with one plain node runs its steps in `main` |
 | `depends_on` | Functions called in order; independent nodes run at the same time |
 | A step | `await step("<step name>", <task>)` |
-| `js-ast-grep` | `import transform from "./<js_file>"` and `forEachFile({ include, exclude, language, semanticAnalysis, capabilities }, (file) => { const out = transform(parse(file)); ... })`. A transform that calls `root.rename()` or `jssgTransform` runs through the compatibility adapter, `jssgFile` |
+| `js-ast-grep` | `import transform from "./<js_file>"` and `forEachFile({ include, exclude, language, semanticAnalysis }, (file) => { const out = transform(parse(file)); ... })`. A transform that calls `root.rename()` or `jssgTransform` runs through the compatibility adapter, `jssgFile` |
 | `ast-grep` | `import rules from "./<config_file>"` and `forEachFile({ include, exclude }, astGrep(rules))`. A `base_path` is joined to the globs (`base_path: app` with `include: ["src/**"]` gives `include: ["app/src/**"]`); `max_threads` is dropped |
 | `run` | `shell(command, { env })` |
 | `codemod` | `codemod(source, { params })` |
@@ -166,6 +166,30 @@ node --test "tests/**/*.test.ts"
 
 `fixtures` reads the same layouts as `codemod jssg test`; point it at the directory that holds your fixtures. See [Testing workflows](/community/workflows/testing).
 
+## Running a package with codemod 1.x
+
+`codemod run` runs 1.x packages on this version. If one doesn't run here, for example because it uses `runtime: docker` steps, you can run it with codemod 1.18.7, the last 1.x release, until you convert it:
+
+```bash
+codemod run --v1 <package>
+```
+
+In CI, set `CODEMOD_V1=on` instead of passing the flag. Each such run starts with:
+
+```text
+--v1 runs codemod 1.18.7 and will be removed in a future release.
+```
+
+<Warning>
+`--v1` is deprecated and will be removed. Convert the package with `codemod workflow upgrade` so it runs on this version.
+</Warning>
+
+`--v1` only runs packages written for 1.x: the workflow it runs is a `.yaml` or `.yml` file, and none of its scripts import a module spelled `codemod/<name>` (1.x knows only `codemod:<name>`). For any other package it stops with an error that says why. With `CODEMOD_V1=on`, other packages run on this version as usual. `--v1` can't be combined with `--control`.
+
+The first such run downloads the codemod 1.18.7 binary for your platform from npm (about 135–160 MB), checks it against a hash built into this CLI, and keeps it in the codemod cache. Set `CODEMOD_V1_BIN` to use a binary you already have, for example on a machine without network access.
+
+`--target`, `--param`, `--dry-run`, `--allow-dirty`, `--no-interactive`, the `--allow-*` capability flags, `--agent`, `--format jsonl` and `--workflow` are passed on, and the command exits with codemod 1.x's exit code. Options 1.x doesn't have (`--approve`, `--managed-git`, `--allow-ai`, `--model`) are ignored. Runs made this way are kept by codemod 1.x, so `codemod workflow list`, `status` and `resume` don't see them.
+
 ## What behaves differently
 
 Most codemods run exactly as before. These are the differences, for both `workflow.yaml` and `workflow.ts`:
@@ -173,11 +197,11 @@ Most codemods run exactly as before. These are the differences, for both `workfl
 - **Modules are imported as `codemod/workflow`, `codemod/ast-grep`, and so on.** `upgrade` writes the new spelling. Imports of the older `codemod:workflow` spelling, in workflows and in transforms, keep working and name the same modules.
 - **Semantic analysis is on by default for `jssg` steps.** Transforms get file-scope semantic analysis, as they do with `codemod jssg run` and `codemod jssg test`, so `definition()` and `references()` work in workflows too. Before, they returned nothing in workflows. Turn it off with `semantic_analysis: none` (YAML) or `semanticAnalysis: "none"` (TypeScript).
 - **A step `if:` that fails to evaluate is reported.** The step is still skipped, as before, and the run's log says why.
-- **`runtime: docker` and `runtime: podman` are not supported yet.** `workflow run` and `workflow upgrade` refuse a workflow that uses them, before anything runs. Keep running it with `npx codemod@1`.
+- **`runtime: docker` and `runtime: podman` are not supported.** Runs and upgrades refuse the whole workflow before any steps run. Use the [opt-in 1.x fallback](#running-a-package-with-codemod-1x) for packages that still need these runtimes.
 - **Shell state output requires a POSIX shell.** On Windows, a translated workflow that needs `$STATE_OUTPUTS` fails before any step runs. Run it on a POSIX system, or port the workflow so steps pass results directly.
 - **Transforms are pure.** A `jssg` transform that calls `fetch`, `child_process` or writes files with `fs` fails on each file, even with `capabilities` in `codemod.yaml` or `--allow-*` flags, which are now ignored for workflows. Reading the target with `fs` still works. Move network requests to an `http()` step and commands to a `shell` step before the transform runs, and give the transform what they returned. See [Callbacks are pure](/community/workflows/reference#callbacks-are-pure).
 - **`state.schema` is accepted but not checked.**
-- **Runs are resumed by id:** `codemod workflow resume --id <run-id>`. A manual node waits as an approval step; resume it with `--approve`. Runs started with an earlier CLI version can't be resumed.
+- **Runs are resumed by id:** `codemod workflow resume --id <run-id>`. A manual node waits as an approval step; resume it with `--approve`. 2.0 cannot resume 1.x runs. See [Resuming runs](/community/workflows/upgrade-from-1x#resuming-runs) for changes across 2.0 versions.
 - **`codemod workflow tui` was removed.** Runs show their progress in the terminal.
 
 ## Publishing workflow.ts codemods
@@ -201,7 +225,7 @@ A `workflow.ts` written for an earlier preview may need these changes. Each fail
   await step(forEachFile({ language: "tsx" }, migrate));
   ```
 
-  In the callback, `parse(file)` (from `codemod/ast-grep`) gives the root a transform got, `file.write(text)` replaces returning the text, `file.rename(path)` replaces `root.rename()`, and the value it returns is collected into `outputs` (where a transform returned `{ edit, data }`). Values a transform read from `options.params` become variables the callback captures. `semanticAnalysis` and `capabilities` are now selector options of `forEachFile`. `jssg(path, { reduce, initial })` becomes `forEachFile(selector, callback, reduce, initial)`: the reducer now gets `(result, output, path)` where it got `(result, { file, data })`, and the step's result has the folded value as `reduced` (see [Reducing outputs](/community/workflows/reference#reducing-outputs)). It folds outputs in path order as files finish, so the outputs of a large target are never all held in memory. `codemod jssg run` and `codemod jssg test` still run jssg transform files on their own, and `codemod jssg test --callback` runs a callback file on the same fixtures.
+  In the callback, `parse(file)` (from `codemod/ast-grep`) gives the root a transform got, `file.write(text)` replaces returning the text, `file.rename(path)` replaces `root.rename()`, and the value it returns is collected into `outputs` (where a transform returned `{ edit, data }`). Values a transform read from `options.params` become variables the callback captures. `semanticAnalysis` is a selector option of `forEachFile`; capabilities are not granted in callbacks. `jssg(path, { reduce, initial })` becomes `forEachFile(selector, callback, reduce, initial)`: the reducer now gets `(result, output, path)` where it got `(result, { file, data })`, and the step's result has the folded value as `reduced` (see [Reducing outputs](/community/workflows/reference#reducing-outputs)). It folds outputs in path order as files finish, so the outputs of a large target are never all held in memory. `codemod jssg run` and `codemod jssg test` still run jssg transform files on their own, and `codemod jssg test --callback` runs a callback file on the same fixtures.
 - **File paths were removed.** `forEachFile`, `shard` and `astGrep` take functions and rules, not paths:
   - `astGrep("./rules/config.yml")` → `import rules from "./rules/config.yml"` and `astGrep(rules)`, or rules written as objects: `astGrep({ id: "no-var", language: "javascript", rule: { pattern: "var $A = $B" }, fix: "let $A = $B;" })`;
   - `shard({ method: { function: "./scripts/shard.ts" } })` → an imported (or inline) shard function, `method: { function: shardFiles }`;

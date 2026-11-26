@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 mod llm_usage;
+pub mod v1_delegate;
 
 fn telemetry_codemod_name(
     registry_metadata: Option<&RegistryPackageMetadata>,
@@ -121,6 +122,11 @@ pub struct Command {
     /// Name of the workflow to run when the package defines multiple workflows
     #[arg(long, value_name = "NAME")]
     workflow: Option<String>,
+
+    /// Run a 1.x package with codemod 1.18.7 (deprecated, will be removed).
+    /// Also CODEMOD_V1=on
+    #[arg(long = "v1")]
+    v1: bool,
 
     #[command(flatten)]
     start: crate::workflow_exec::StartFlags,
@@ -281,6 +287,24 @@ pub async fn handler(
         return Err(error);
     }
 
+    // codemod 1.x runs a package only when asked: `--v1` or CODEMOD_V1=on.
+    let asks = v1_delegate::RunAsks {
+        flag: args.v1,
+        control: args.flags.control.is_some(),
+        env: std::env::var("CODEMOD_V1").ok(),
+    };
+    match v1_delegate::detect(&resolved_package.package_dir, &workflow_path, &asks) {
+        Ok(v1_delegate::Engine::V1) => {
+            return run_on_v1(args, &resolved_package, disable_analytics).await;
+        }
+        Ok(v1_delegate::Engine::V2) => {}
+        Err(error) => {
+            send_failure_event(&telemetry, &canonical_codemod_name, &error.to_string()).await;
+            return Err(error);
+        }
+    }
+
+    let is_yaml = !codemod_workflow::is_typescript(&workflow_path);
     let mut params = crate::commands::workflow::run::parse_workflow_params(
         &workflow_path,
         args.params.as_deref().unwrap_or(&[]),
@@ -357,6 +381,11 @@ pub async fn handler(
         },
     })
     .await;
+    let run_result = if is_yaml {
+        v1_delegate::with_refusal_hint(run_result, &args.package)
+    } else {
+        run_result
+    };
     let llm_usage_output_error = match args.llm_usage_output.as_deref() {
         Some(path) => llm_usage::write_llm_usage_output(path, &[]),
         None => Ok(()),
@@ -463,6 +492,64 @@ pub async fn handler(
 
     // Some files failed: exit code 2, after the summary.
     outcome.result()
+}
+
+/// Runs a 1.x package with codemod 1.x (`--v1`), passing its exit code on.
+async fn run_on_v1(
+    args: &Command,
+    resolved: &butterflow_core::registry::ResolvedPackage,
+    disable_analytics: bool,
+) -> Result<()> {
+    let is_local = ["./", "../", "/"]
+        .iter()
+        .any(|prefix| args.package.starts_with(prefix));
+    let package = if is_local {
+        resolved.package_dir.to_string_lossy().into_owned()
+    } else {
+        // The version 2.0 just resolved, so 1.x runs the same one.
+        let mut spec = resolved.spec.clone();
+        spec.version = Some(resolved.version.clone());
+        butterflow_core::registry::format_package_spec(&spec)
+    };
+    // One line, on stderr so `--format jsonl` stays clean.
+    eprintln!("{}", style(v1_delegate::DEPRECATION_NOTE).yellow());
+    let (binary, downloaded) = v1_delegate::resolve_binary().await?;
+    if downloaded {
+        info!(
+            "Downloaded codemod {} to {}",
+            v1_delegate::V1_VERSION,
+            binary.display()
+        );
+    }
+    let v1_args = v1_delegate::v1_args(&v1_delegate::Passthrough {
+        package,
+        registry: args.registry.clone(),
+        force: args.force,
+        // A Pro package may only be dry-run; codemod 1.x checks it too.
+        dry_run: args.dry_run || resolved.dry_run_only,
+        params: args.params.clone().unwrap_or_default(),
+        allow_dirty: args.allow_dirty,
+        // codemod 1.x starts in this directory, so a relative target holds.
+        target: args.target_path.clone(),
+        no_color: args.no_color,
+        report: args.report,
+        llm_usage_output: args.llm_usage_output.clone(),
+        workflow: args.workflow.clone(),
+        allow_fs: args.flags.allow_fs,
+        allow_fetch: args.flags.allow_fetch,
+        allow_child_process: args.flags.allow_child_process,
+        no_interactive: !crate::utils::interactive::is_interactive(args.flags.no_interactive),
+        agent: args.flags.agent.clone(),
+        install_skill: args.flags.install_skill,
+        jsonl: args.flags.format == OutputFormat::Jsonl,
+        verbose: log::log_enabled!(log::Level::Debug),
+        disable_analytics,
+    });
+    debug!("Running {} {:?}", binary.display(), v1_args);
+    match v1_delegate::run(&binary, &v1_args)? {
+        0 => Ok(()),
+        exit_code => Err(crate::workflow_exec::FailedByWorkflow { exit_code }.into()),
+    }
 }
 
 /// Returns an error for a failed legacy codemod command.

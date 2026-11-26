@@ -59,6 +59,7 @@ export default function replace(file: { text: string; write(text: string): void 
             .args(args)
             .env("CODEMOD_RUN_STORE_DIR", self.store.path())
             .env("DISABLE_ANALYTICS", "true")
+            .env_remove("CODEMOD_V1")
             .output()
             .expect("failed to run codemod")
     }
@@ -191,16 +192,54 @@ nodes:
     assert_eq!(output.status.code(), Some(1), "{}", text(&output));
     assert!(
         text(&output).contains("node 'where' runs its steps in a docker container")
-            && text(&output).contains("npx codemod@1"),
+            && text(&output).matches("codemod run --v1").count() == 1,
         "{}",
         text(&output)
     );
     assert!(!fixture.target.path().join("ran.txt").exists());
 
     let package = fixture.package.path().to_str().unwrap();
+    let output = fixture.codemod(&["run", package, "--no-interactive"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert_eq!(text(&output).matches("codemod run --v1").count(), 1);
+
     let output = fixture.codemod(&["workflow", "upgrade", package]);
     assert!(!output.status.success(), "{}", text(&output));
     assert!(!fixture.package.path().join("workflow.ts").exists());
+}
+
+#[test]
+fn a_legacy_fs_write_points_to_v1_without_running_it() {
+    let fixture = Fixture::new();
+    fixture.package_file("workflow.yaml", YAML);
+    fixture.package_file(
+        "scripts/codemod.ts",
+        r#"
+import { writeFileSync } from "node:fs";
+export default function transform(root) {
+  if (root.root().text().startsWith("var")) writeFileSync("extra.txt", "no");
+  return null;
+}
+"#,
+    );
+    let package = fixture.package.path().to_str().unwrap();
+    let target = fixture.target.path().to_str().unwrap();
+    let output = fixture.codemod(&[
+        "run",
+        package,
+        "--target",
+        target,
+        "--no-interactive",
+        "--allow-dirty",
+    ]);
+    let message = text(&output);
+    assert_eq!(output.status.code(), Some(2), "{message}");
+    assert!(
+        message.contains("fs.writeFileSync is not available in workflow callbacks"),
+        "{message}"
+    );
+    assert_eq!(message.matches("codemod run --v1").count(), 1, "{message}");
+    assert!(!fixture.target.path().join("extra.txt").exists());
 }
 
 #[test]

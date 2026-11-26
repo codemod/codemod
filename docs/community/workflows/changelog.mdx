@@ -56,6 +56,8 @@ Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://
 - **`http(url, options)`** in `codemod/workflow`: an HTTP request as a step. Its response is recorded and replayed on resume, not sent again. Header values can come from the environment (`{ env: "GITHUB_TOKEN" }`) so tokens stay out of the run's records. A dry run skips it unless it sets `dryRun: "perform"`. See [HTTP requests](/community/workflows/reference#http-requests).
 - `workflow inspect` lists `http` in `uses`, and shows which declared steps reach outside the target.
 - **1.x YAML packages run without conversion.** Legacy transform metrics and workflow state still work when running `workflow.yaml`, and transforms can read the target with `fs` without a flag. The compatibility path never rewrites the package. See [Upgrade from 1.x](/community/workflows/upgrade-from-1x).
+- **An explicit 1.x fallback.** `codemod run --v1 <package>` (or `CODEMOD_V1=on`) uses pinned codemod 1.18.7. It is deprecated and never selected automatically. See [Running a package with codemod 1.x](/community/workflows/migrate#running-a-package-with-codemod-1x).
+- **`workflow upgrade` converts legacy transform metrics** and warns about `fs` and `child_process` imports without granting capabilities. It refuses transforms that use legacy workflow state rather than generating a workflow that cannot run.
 - **`DO_NOT_TRACK=1` turns off telemetry.** Use `unpublish --yes` for unattended unpublishing.
 
 **Fixes**

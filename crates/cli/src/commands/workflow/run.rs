@@ -178,7 +178,15 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             ..flags.settings(capabilities, registry.clone(), &telemetry)
         },
     })
-    .await?;
+    .await;
+    let outcome = if is_yaml {
+        crate::commands::run::v1_delegate::with_refusal_hint(
+            outcome,
+            &workflow_dir.to_string_lossy(),
+        )?
+    } else {
+        outcome?
+    };
     let dry_run = outcome.dry_run;
 
     if crate::utils::report_prompt::should_show_report(

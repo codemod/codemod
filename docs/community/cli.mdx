@@ -379,6 +379,8 @@ npx codemod <package-name>
 
 A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>`) takes the same run flags as `workflow run`: `--target`, `--param`, `--dry-run`, `--approve`, `--managed-git`, `--allow-dirty`, `--allow-ai`, `--no-interactive`, `--install-skill`, `--agent`, `--model` and `--format`. It picks one of the package's workflows with `--workflow <NAME>` instead of `--workflow-name`.
 
+Package runs use the 2.0 engine by default. `codemod run --v1 <package>` (or `CODEMOD_V1=on`) is a deprecated [opt-in fallback to codemod 1.18.7](/community/workflows/migrate#running-a-package-with-codemod-1x) for eligible 1.x YAML packages.
+
 <ResponseField name="-w, --workflow <PATH>" type="string" required>
   Path to a workflow file or a package directory. In a directory, the workflow declared in `codemod.yaml` runs, otherwise `workflow.ts`, otherwise `workflow.yaml`.
 </ResponseField>
