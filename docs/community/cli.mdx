@@ -63,7 +63,7 @@ For logged-in sessions only, the CLI may also send a separate PostHog `$set` wit
 Scarf), deduped locally, and skipped when you opt out.
 
 Disable all of this for a single invocation with `--disable-analytics`, or by setting
-`DISABLE_ANALYTICS=true` / `DISABLE_ANALYTICS=1` in the environment. The flag works on explicit
+`DISABLE_ANALYTICS=true` / `DISABLE_ANALYTICS=1` in the environment. `DO_NOT_TRACK=1` (any value but empty, `0` or `false`) does the same. The flag works on explicit
 commands and on implicit package runs such as `npx codemod @org/package --disable-analytics`.
 
 More detail: [Telemetry compliance](https://codemod.com/telemetry-compliance).

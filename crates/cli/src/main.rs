@@ -292,6 +292,15 @@ fn effective_disable_analytics(cli: &Cli) -> bool {
             .trailing_args
             .iter()
             .any(|arg| arg == "--disable-analytics")
+        || do_not_track(std::env::var("DO_NOT_TRACK").ok().as_deref())
+}
+
+/// The `DO_NOT_TRACK` convention (consoledonottrack.com): set to anything
+/// but empty, `0` or `false`, it opts out like `DISABLE_ANALYTICS`.
+fn do_not_track(value: Option<&str>) -> bool {
+    value.map(str::trim).is_some_and(|value| {
+        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+    })
 }
 
 const PERSON_TRAITS_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
@@ -886,6 +895,16 @@ mod tests {
         .expect("implicit package parse");
         assert!(!cli.disable_analytics);
         assert!(effective_disable_analytics(&cli));
+    }
+
+    #[test]
+    fn do_not_track_opts_out_unless_empty_0_or_false() {
+        for value in ["1", "true", "yes"] {
+            assert!(do_not_track(Some(value)), "{value}");
+        }
+        for value in [None, Some(""), Some("0"), Some("false"), Some("FALSE")] {
+            assert!(!do_not_track(value), "{value:?}");
+        }
     }
 
     #[test]
