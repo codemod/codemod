@@ -54,6 +54,10 @@ const shared = globalThis as { [KEY]?: AsyncLocalStorage<RunScope> };
 
 export const context: AsyncLocalStorage<RunScope> = (shared[KEY] ??= new AsyncLocalStorage());
 
+export function experimental(api: string): void {
+  context.getStore()?.run.experimental(api);
+}
+
 /** The run the calling code belongs to; throws outside a run. */
 export function current(what: string): RunScope {
   const store = context.getStore();

@@ -217,9 +217,11 @@ pub async fn run_callback_case(request: CallbackCaseRequest) -> Result<Value> {
             language: Some(request.language.clone()),
             semantic_provider: semantic_provider.clone(),
             runtime_event_callback: Some(Arc::new(move |event| {
-                if event.kind
-                    != codemod_sandbox::sandbox::runtime_module::RuntimeEventKind::SetCurrentUnit
-                {
+                if matches!(
+                    event.kind,
+                    codemod_sandbox::sandbox::runtime_module::RuntimeEventKind::Progress
+                        | codemod_sandbox::sandbox::runtime_module::RuntimeEventKind::Warn
+                ) {
                     if let Ok(mut logs) = sink.lock() {
                         logs.push(LogLine {
                             step: None,

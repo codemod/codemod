@@ -181,6 +181,7 @@ declare module "codemod/protocol" {
   }
 
   export type RunEvent =
+    | { event: "experimental"; api: string }
     | {
         event: "run_started";
         run_id: string;

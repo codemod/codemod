@@ -209,6 +209,22 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let experimental = match kind.as_str() {
+        "http" => Some("http()"),
+        "agent" => Some("agent()"),
+        "installSkill" => Some("installSkill()"),
+        "sleep" => Some("sleep()"),
+        "waitForEvent" => Some("waitForEvent()"),
+        "shard" if !task.run.v1_compat() => Some("shard()"),
+        "dependencyGraph" => Some("codemod/deps.dependencyGraph"),
+        "branch" => Some("codemod/git.branch"),
+        "commit" => Some("codemod/git.commit"),
+        "pullRequest" => Some("codemod/git.pullRequest"),
+        _ => None,
+    };
+    if let Some(api) = experimental {
+        task.run.experimental(api);
+    }
     // Steps that change the target outside the file commits `before_write`
     // already guards. Git steps only touch git with `--managed-git`.
     let git_step = matches!(kind.as_str(), "branch" | "commit" | "pullRequest");

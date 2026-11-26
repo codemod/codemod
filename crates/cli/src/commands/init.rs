@@ -405,6 +405,9 @@ pub fn handler(args: &Command) -> Result<()> {
         interactive_setup(&project_name, args)?
     };
 
+    if config.package_behavior != PackageBehavior::WorkflowOnly {
+        eprintln!("{}", crate::experimental_notice("package skills"));
+    }
     if config.workspace {
         create_workspace_project(&project_path, &config)?;
     } else {

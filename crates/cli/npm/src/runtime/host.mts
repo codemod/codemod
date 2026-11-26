@@ -252,6 +252,8 @@ export async function runWorkflow(
     decisionModel: options.decisionModel,
   });
 
+  run.experimental("codemod/host");
+
   const body = bodyClockFor(run.startedAt, runSeed(run.runId));
   const flight = inFlight();
   const runtime: Runtime = createRuntime(host(run, flight, body, () => runtime));

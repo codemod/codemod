@@ -683,6 +683,7 @@ impl Engine {
             halt,
             store,
             events: Arc::clone(&self.events),
+            experimental: Default::default(),
             interaction: Arc::clone(&self.interaction),
             services: Arc::clone(&self.services),
             cancel,
@@ -695,6 +696,9 @@ impl Engine {
             assess: Default::default(),
             write_gate,
         });
+        if record.settings.managed_git {
+            context.experimental("--managed-git");
+        }
         Execution {
             record,
             context,

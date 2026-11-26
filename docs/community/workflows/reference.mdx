@@ -136,7 +136,7 @@ Object fields:
 | `language` | Selects the language's file extensions when `include` is not set, and is the default language for `parse(file)` and `parse(text)` |
 | `containing` | Only files whose text contains this string |
 | `concurrency` | Files each worker keeps in flight (default `1`). Raise it for async callbacks that wait on the network or `codemod/llm` |
-| `semanticAnalysis` | What `definition()` and `references()` on roots `parse(file)` makes can find: `"file"` (the default) within each file, `"workspace"` across the selected files of the target (or `{ mode: "workspace", root: "src" }`), `"none"` nothing. The analysis only runs when they are called |
+| `semanticAnalysis` | **Experimental.** What [`definition()` and `references()`](/community/jssg/semantic-analysis) on roots `parse(file)` makes can find: `"file"` (the default) within each file, `"workspace"` across the selected files of the target (or `{ mode: "workspace", root: "src" }`), `"none"` nothing. The analysis only runs when they are called |
 | `capabilities` | Deprecated: callbacks no longer get capabilities (see [Callbacks are pure](#callbacks-are-pure)). Still accepted; the step's log says it is ignored |
 
 Files are selected as `astGrep` selects them: `.gitignore` is respected, hidden files and directories (`.github/`) are included, and a `language` means the same extensions for both (`"typescript"` also takes `.js` files, which that parser reads). A selector is plain data, so you can reuse and refine it: `{ ...sources, containing: "moment" }`.

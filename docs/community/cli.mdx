@@ -409,14 +409,20 @@ Package runs use the 2.0 engine by default. `codemod run --v1 <package>` (or `CO
 </ResponseField>
 
 <ResponseField name="--allow-ai" type="boolean">
+  <Experimental />
+
   Let `assess()` from [`codemod/assess`](/community/workflows/reference#assessing-files-with-codemod%2Fassess) send files to the decision model (System One unless configured otherwise). Without it, an interactive run asks before any step runs, and an unattended run that imports `codemod/assess` fails at once. The provider's key comes from the environment (`TYPESAFE_API_KEY`, `OPENAI_API_KEY`); an interactive run without one asks for a key to use for that run only. `workflow resume` checks both again.
 </ResponseField>
 
 <ResponseField name="--agent <ID>" type="string">
+  <Experimental />
+
   The coding agent `agent(...)` steps use (`claude-code`, `codex`, ...). Defaults to the one saved in the launcher; without either, an interactive run asks when a step needs one.
 </ResponseField>
 
 <ResponseField name="--model <PROVIDER/MODEL>" type="string">
+  <Experimental />
+
   The decision model `assess()` uses, e.g. `openai/gpt-6-luna`; a bare model name is System One's (`systemone/jev-latest`). It comes before the model saved in the launcher (`"decisionModel"` in the CLI's `config.json`) and the `DECISION_PROVIDER` / `DECISION_MODEL` variables; a `decision_model` in the package's `codemod.yaml`, or a model named in the `assess()` call, still comes first.
 </ResponseField>
 
@@ -429,6 +435,8 @@ By default a run in a terminal prints plain lines and asks with plain prompts. W
 A run is unattended when you pass `--no-interactive`, when there is no terminal to ask on (input piped in), and when the `CI` environment variable is set (to anything but empty, `0` or `false`). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something. See [Running in CI and from agents](/community/workflows/ci-and-agents).
 
 <ResponseField name="--managed-git" type="boolean">
+  <Experimental />
+
   Let `branch`, `commit` and `pullRequest` steps (or `branch_name`, `commit` and `pull_request` in `workflow.yaml`) change the repository. Without it, those steps are recorded as skipped.
 </ResponseField>
 
@@ -446,6 +454,8 @@ A run is unattended when you pass `--no-interactive`, when there is no terminal 
   Every event has `seq`, which counts up through the whole run, also across `workflow resume`, and `ts`. Step events carry `step`, the step's key (its position, or `"3/0"` for step 0 of the codemod that step 3 runs), and `parent` (`"3"` there, else `null`); `step_started` and `step_finished` also carry the step's `kind` (`forEachFile`, `approval`, `shell`, ...). `run_started` echoes the run's `target`, `params`, `dry_run` and `settings`. `run_log` (the workflow body's `console` output) has the `step` of the nested codemod it came from, or `null`. A real run reports each file a step changes as a `step_diff` event (`path`, `diff`, `additions`, `deletions`; a diff over 256 KiB is left out, with `diff_omitted`); a dry run reports `run_diff` at the end instead. The TypeScript types are in `codemod/protocol`; see [Drive codemod from a program](/community/workflows/control).
 
   In text format, a run that returned something ends with `Output: <JSON>`, cut at 200 characters.
+
+  Experimental API notices go to stderr in text mode and appear as `experimental` events with an `api` field in JSONL mode. They are not part of `output`.
 </ResponseField>
 
 <ResponseField name="--control stdio" type="string">

@@ -39,6 +39,10 @@ use codemod_telemetry::{
 
 pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub(crate) fn experimental_notice(api: &str) -> String {
+    format!("Experimental: {api} may change in a minor release.")
+}
+
 #[derive(Parser)]
 #[command(name = "codemod", after_help = crate::launcher::HELP)]
 #[command(

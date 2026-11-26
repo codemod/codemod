@@ -44,6 +44,9 @@ pub use setup::SetupChoices;
 use setup::{SetupAction, SetupInput, SetupState};
 use view::{Action, RunView, StepState};
 
+pub(crate) const HELP: &str =
+    "Set CODEMOD_LAUNCHER=1 for the full-screen workflow launcher (experimental).";
+
 /// Whether runs with these flags show the launcher.
 pub fn enabled(flags: &RunFlags) -> bool {
     opted_in(std::env::var("CODEMOD_LAUNCHER").ok().as_deref())
@@ -155,6 +158,7 @@ pub async fn setup(plan: Plan<'_>) -> Result<Option<SetupChoices>> {
     }));
     state.fetching_models = true;
 
+    eprintln!("{}", crate::experimental_notice("workflow launcher"));
     let mut screen = Screen::enter()?;
     let mut keys = EventStream::new();
     let mut key_error = None;
@@ -335,6 +339,7 @@ pub(crate) async fn run_resume(
     title: String,
     settings: ExecSettings,
 ) -> Result<ExecOutcome> {
+    eprintln!("{}", crate::experimental_notice("workflow launcher"));
     let (outcome, _) =
         run_on_screen(&title, Kind::Resume(run_id.to_string()), &settings, true).await?;
     Ok(outcome)
@@ -492,6 +497,9 @@ async fn run_on_screen(
     };
     drop(keys);
     drop(screen);
+    for notice in &view.experimental_notices {
+        eprintln!("{notice}");
+    }
 
     // Wait for the engine if the screen closed first.
     let result = match report {

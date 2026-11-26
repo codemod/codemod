@@ -150,7 +150,6 @@ declare module "codemod:workflow" {
   /**
    * A length of time: a number of milliseconds, or a number with a unit,
    * such as `"500ms"`, `"30s"`, `"10m"`, `"1h"` or `"2d"`.
-   * @experimental
    */
   export type Duration = number | `${number}${"ms" | "s" | "m" | "h" | "d"}`;
 
@@ -959,6 +958,8 @@ declare module "codemod:workflow" {
   /**
    * Splits files into groups ("shards"), for example one per directory or
    * code owner.
+   *
+   * @experimental
    *
    * @example
    * ```ts

@@ -975,6 +975,7 @@ impl crate::journal::Stamped for Renderer {
             return;
         };
         match event {
+            Event::Experimental { api } => self.line(crate::experimental_notice(&api)),
             // A dry run is not saved, so its id names nothing to look up.
             Event::RunStarted { dry_run: true, .. } => self.line(format!(
                 "{} {}",

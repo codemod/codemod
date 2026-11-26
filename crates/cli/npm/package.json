@@ -95,6 +95,7 @@
     "build": "node scripts/build.mjs",
     "prepack": "node scripts/build.mjs",
     "test": "node scripts/build.mjs && node --test tests/*.test.js tests/*.test.mjs",
+    "snapshot:stable-api": "node scripts/stable-api.mjs",
     "typecheck": "node scripts/build.mjs && tsc -p ../../workflow/src/js && tsc -p types && tsc -p type-tests && tsc -p type-tests/standalone/git && tsc -p type-tests/standalone/deps && tsc -p type-tests/standalone/assess && tsc -p type-tests/standalone/upgraded",
     "pull-llrt-types": "bash scripts/pull-llrt-types.sh"
   },

@@ -7,6 +7,10 @@
 // step; elsewhere it rejects. The Node.js host builds its own `assess` with
 // `makeAssess` (crates/cli/npm/src/runtime/assess.mts).
 
+function notice(): void {
+  (globalThis as { __codemodExperimentalAssess?: () => void }).__codemodExperimentalAssess?.();
+}
+
 interface OptionSpec {
   name: string;
   description?: string;
@@ -43,6 +47,7 @@ export function yesNo(
   instructions: string,
   options: { yes?: string; no?: string; threshold?: number } = {},
 ) {
+  notice();
   return Object.freeze({
     type: "yesNo" as const,
     instructions: text("yesNo", instructions),
@@ -52,6 +57,7 @@ export function yesNo(
 
 /** One of several options: `choice(["a", "b"])`, or with the question and descriptions. */
 export function choice(instructionsOrOptions: string | Options, maybeOptions?: Options) {
+  notice();
   const instructions =
     typeof instructionsOrOptions === "string" ? text("choice", instructionsOrOptions) : undefined;
   const options = typeof instructionsOrOptions === "string" ? maybeOptions : instructionsOrOptions;
@@ -68,6 +74,7 @@ export function number(
   instructions: string,
   range: { min: number; max: number; levels?: readonly string[] },
 ) {
+  notice();
   if (!range || typeof range.min !== "number" || typeof range.max !== "number") {
     throw new TypeError("number: give the range, { min, max }");
   }
@@ -86,6 +93,7 @@ export function list(
   options: Options,
   settings: { threshold?: number } = {},
 ) {
+  notice();
   return Object.freeze({
     type: "list" as const,
     instructions: text("list", instructions),
@@ -128,6 +136,7 @@ export function makeAssess(host: () => AskHost | undefined) {
     file: string | { readonly path: string; readonly text?: string },
     options: AssessOptions,
   ): Promise<unknown> {
+    notice();
     const ask = host();
     if (!ask) throw new Error(OUTSIDE);
     if (!options || typeof options !== "object") {

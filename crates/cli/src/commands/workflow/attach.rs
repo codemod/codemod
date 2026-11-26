@@ -36,6 +36,11 @@ pub struct Command {
 /// (from the run's journal), then, while the run is executing in another
 /// process, its events as they come. Ends when the run stops executing.
 pub async fn handler(args: &Command) -> Result<()> {
+    // Keep the attached run's sequence numbers and event stream intact.
+    eprintln!(
+        "{}",
+        serde_json::json!({"event": "experimental", "api": "workflow attach"})
+    );
     let store = store();
     let run = store
         .get_run(&args.id)?

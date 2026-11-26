@@ -33,6 +33,8 @@ The first line is `hello`. It names the run before anything happens, so a client
 
 Then come the run's events, the same as `--format jsonl` prints without a control channel (see [`--format`](/community/cli#codemod-workflow)). Each has `seq`, which counts up through the whole run, also across resumes, and `ts`. Step events name their step with `step`, a key that stays the same across resumes (`"3"`; `"3/0"` for step 0 of the codemod that step 3 runs, whose `parent` is `"3"`).
 
+When a workflow first uses an experimental API, an `experimental` event names it in `api`. A run emits at most one notice per API, even if it resumes. This event is part of the event stream, not the workflow result.
+
 A question looks like this:
 
 ```json

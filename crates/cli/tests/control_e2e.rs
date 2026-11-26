@@ -213,6 +213,30 @@ fn run_id(events: &[Value]) -> String {
         .to_string()
 }
 
+#[test]
+fn control_reports_one_experimental_event_without_touching_run_output() {
+    let fixture = Fixture::new(
+        r#"
+import { sleep } from "codemod/workflow";
+export default async function workflow() {
+  await sleep(1);
+  await sleep(1);
+  return { answer: 42 };
+}
+"#,
+    );
+    let mut run = fixture.control(&fixture.run_args(&[]));
+    run.event("hello");
+    let notice = run.event("experimental");
+    assert_eq!(notice["api"], "sleep()");
+    let done = run.event("run_finished");
+    assert_eq!(done["output"], json!({ "answer": 42 }));
+    let (code, events, stderr) = run.finish();
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(named(&events, "experimental").len(), 1);
+    assert!(!stderr.contains("Experimental:"));
+}
+
 const TWO_APPROVALS: &str = r#"
 import { step, approval, forEachFile } from "codemod/workflow";
 import replace from "./scripts/replace.ts";
