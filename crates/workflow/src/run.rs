@@ -19,7 +19,7 @@ use butterflow_state::run_store::{Outcome, RunStore, StepRecord, StepStatus, Sto
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::quickjs_adapters::{
-    CodemodModuleResolver, QuickJSLoader, QuickJSResolver,
+    CodemodModuleResolver, QuickJSResolver, RootedLoader,
 };
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::AstGrepModule;
@@ -323,6 +323,20 @@ pub struct TestPlan {
 }
 
 impl RunContext {
+    /// The snapshot the run reads instead of its target on disk.
+    pub(crate) fn snapshot(&self) -> Option<&Arc<dyn crate::target::TargetFiles>> {
+        self.overlay.as_deref()?.snapshot()
+    }
+
+    /// Refuse `what`, which reads the target from disk, in a run on a
+    /// snapshot: it would find nothing there and report that as the result.
+    pub(crate) fn needs_disk(&self, what: &str) -> Result<(), String> {
+        match self.snapshot() {
+            Some(_) => Err(format!("{what} does not run on a snapshot yet")),
+            None => Ok(()),
+        }
+    }
+
     /// The context of a codemod nested in this run's step at `position`: its
     /// own workflow, params and step history, everything else shared. It
     /// stops when that step does (`cancel`). `alongside`: that step ran
@@ -727,9 +741,19 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
                 .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator())
                 .with_module(SEMVER_MODULE, crate::js::semver_module())
                 .with_module(PATH_SHIM_MODULE, include_str!("js/path.js")),
-            QuickJSLoader,
+            RootedLoader {
+                root: run
+                    .services
+                    .isolation
+                    .as_ref()
+                    .map(|_| run.package_dir.clone()),
+            },
         ),
     );
+    if let Some(isolation) = &run.services.isolation {
+        runtime.set_memory_limit(isolation.memory_limit);
+        runtime.set_max_stack_size(isolation.max_stack_size);
+    }
     // Canceling interrupts the body's JavaScript, until the run's outcome is
     // decided: recording what the remaining steps did must not be cut short.
     let interruptible = Arc::new(AtomicBool::new(true));

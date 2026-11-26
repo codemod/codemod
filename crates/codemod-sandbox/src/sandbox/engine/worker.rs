@@ -24,7 +24,7 @@ use super::execution_engine::{
     JssgExecutionContext, JssgFileChanges, TargetDirectory,
 };
 use super::pending_files::PendingFiles;
-use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
+use super::quickjs_adapters::{QuickJSResolver, RootedLoader};
 use crate::ast_grep::{DefaultParseLanguage, ParseSemanticProvider};
 use crate::llm::{LlmRequestHandler, LlmRuntimeContext};
 use crate::sandbox::errors::{ExecutionError, RuntimeError};
@@ -97,6 +97,38 @@ pub struct WorkerOptions<R> {
     /// `jssgTransform` reads and changes files through it. Each worker has
     /// its own without it.
     pub pending_files: Option<PendingFiles>,
+    /// Limits for code the host does not trust; none without it.
+    pub isolation: Option<Isolation>,
+}
+
+/// How a [`Worker`] is kept from its host, for code from elsewhere (a
+/// service running packages users published).
+#[derive(Debug, Clone)]
+pub struct Isolation {
+    /// Bytes the runtime may allocate.
+    pub memory_limit: usize,
+    /// Bytes of stack the runtime may use.
+    pub max_stack_size: usize,
+    /// Imports from disk must resolve inside this directory.
+    pub import_root: PathBuf,
+}
+
+/// The modules an isolated worker leaves out: they tell code about the host
+/// (`process.env`, `os`, the terminal, timing).
+pub const ISOLATED_EXCLUSIONS: &[LlrtSupportedModules] = &[
+    LlrtSupportedModules::Process,
+    LlrtSupportedModules::Os,
+    LlrtSupportedModules::Tty,
+    LlrtSupportedModules::PerfHooks,
+];
+
+/// The `process` an isolated worker gets instead: no environment, and the
+/// target as its directory.
+pub fn isolated_process(target: &std::path::Path) -> String {
+    let cwd = serde_json::to_string(&target.to_string_lossy()).unwrap_or_else(|_| "\"/\"".into());
+    format!(
+        "globalThis.process = Object.freeze({{ env: Object.freeze({{}}), argv: [], platform: \"sandbox\", cwd() {{ return {cwd}; }} }});"
+    )
 }
 
 /// A JSSG runtime kept alive across calls. Run code in it with
@@ -133,9 +165,16 @@ impl Worker {
         runtime
             .set_interrupt_handler(Some(Box::new(move || interrupt.load(Ordering::SeqCst))))
             .await;
+        if let Some(isolation) = &options.isolation {
+            runtime.set_memory_limit(isolation.memory_limit).await;
+            runtime.set_max_stack_size(isolation.max_stack_size).await;
+        }
 
         let fetch = options.capabilities.contains(&LlrtSupportedModules::Fetch);
-        let mut module_builder = LlrtModuleBuilder::build();
+        let mut module_builder = match options.isolation {
+            Some(_) => LlrtModuleBuilder::build_with_exclusions(ISOLATED_EXCLUSIONS),
+            None => LlrtModuleBuilder::build(),
+        };
         for capability in &options.capabilities {
             match capability {
                 LlrtSupportedModules::Fetch => {
@@ -171,7 +210,13 @@ impl Worker {
                     memory_resolver,
                     QuickJSResolver::new(options.resolver),
                 ),
-                (loader, memory_loader, QuickJSLoader),
+                (
+                    loader,
+                    memory_loader,
+                    RootedLoader {
+                        root: options.isolation.as_ref().map(|i| i.import_root.clone()),
+                    },
+                ),
             )
             .await;
 
@@ -227,6 +272,9 @@ impl Worker {
                         .map_err(|e| fail(format!("{e:?}")))?;
                 }
                 globals.attach(&ctx)?;
+                if options.isolation.is_some() {
+                    ctx.eval::<(), _>(isolated_process(&target))?;
+                }
                 ctx.eval::<(), _>(TRACK_TIMERS)?;
                 install_console_bridge(&ctx)
             };
@@ -332,6 +380,7 @@ mod tests {
             default_language: None,
             semantic_provider: None,
             pending_files: None,
+            isolation: None,
         })
         .await
         .unwrap()

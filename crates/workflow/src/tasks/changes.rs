@@ -150,7 +150,11 @@ pub(crate) fn commit(
     if task.canceled() {
         return Err("canceled".to_string());
     }
-    if !planned.is_empty() {
+    let overlay = run.overlay.as_deref();
+    // A snapshot has no links to leave it by: `normalized` already refused
+    // paths that climb out.
+    let on_snapshot = overlay.is_some_and(|overlay| overlay.snapshot().is_some());
+    if !planned.is_empty() && !on_snapshot {
         let root = fs::canonicalize(target)
             .map_err(|e| format!("cannot resolve target '{}': {e}", target.display()))?;
         for plan in &planned {
@@ -160,7 +164,6 @@ pub(crate) fn commit(
             }
         }
     }
-    let overlay = run.overlay.as_deref();
     let exists = |path: &str| match overlay {
         Some(overlay) => overlay.exists(path),
         None => target.join(path).exists(),

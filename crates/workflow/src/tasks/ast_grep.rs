@@ -84,7 +84,28 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         };
         // One walk (`execute` walks twice: once to count, once to visit),
         // then the files go to the threads in walk order.
-        let mut files = config.try_collect_files()?;
+        let include = match &request.include {
+            Some(globs) => globs.clone().into_vec(),
+            None => {
+                let mut globs = Vec::new();
+                for language in config.languages.iter().flatten() {
+                    globs.extend(language_globs(language)?);
+                }
+                globs
+            }
+        };
+        let exclude = request.exclude.clone().map(Globs::into_vec).unwrap_or_default();
+        let snapshot = run
+            .overlay
+            .as_ref()
+            .and_then(|overlay| overlay.select_snapshot(&include, &exclude));
+        let mut files = match snapshot {
+            Some(paths) => paths?
+                .into_iter()
+                .map(|path| changes::under(&run.target, &path))
+                .collect(),
+            None => config.try_collect_files()?,
+        };
         // In a dry run, the files earlier steps would have removed are gone,
         // and the ones they would have renamed into place are there.
         if let Some(overlay) = &run.overlay {
@@ -92,17 +113,6 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
                 Ok(path) => !overlay.is_gone(&path.to_string_lossy().replace('\\', "/")),
                 Err(_) => true,
             });
-            let include = match &request.include {
-                Some(globs) => globs.clone().into_vec(),
-                None => {
-                    let mut globs = Vec::new();
-                    for language in config.languages.iter().flatten() {
-                        globs.extend(language_globs(language)?);
-                    }
-                    globs
-                }
-            };
-            let exclude = request.exclude.clone().map(Globs::into_vec).unwrap_or_default();
             for path in overlay.created(&include, &exclude)? {
                 files.push(changes::under(&run.target, &path));
             }

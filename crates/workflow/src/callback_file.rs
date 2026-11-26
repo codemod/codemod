@@ -96,6 +96,7 @@ pub async fn run_callback_file(request: CallbackFileRequest) -> Result<CallbackF
         default_language: language.clone(),
         semantic_provider,
         pending_files: None,
+        isolation: None,
     };
     let worker = isolate::start(options, None, None).await?;
     let sandbox = &worker;

@@ -65,6 +65,7 @@ impl Engine {
             // `runWorkflow` runs on a target the test or script chose.
             false,
             NODE_HOST,
+            None,
         )?;
         Ok(HostedRun::new(execution, Vec::new()))
     }

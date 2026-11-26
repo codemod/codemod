@@ -43,6 +43,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         .get(&request.callback)
         .ok_or_else(|| format!("unknown callback '{}'", request.callback))?;
     let only = request.lockfiles.map(Globs::into_vec).unwrap_or_default();
+    run.needs_disk("dependencyGraph")?;
     let graph = codemod_deps::load(&run.target, &only)?;
     if graph.lockfiles.is_empty() && graph.skipped.is_empty() {
         task.log(

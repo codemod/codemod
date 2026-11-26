@@ -361,6 +361,27 @@ impl Engine {
     }
 
     pub fn start(&self, request: StartRequest) -> Result<RunReport, EngineError> {
+        self.start_with(request, None)
+    }
+
+    /// Start a dry run whose target is `snapshot` rather than a directory:
+    /// steps read its files and nothing touches the disk under
+    /// `request.target`, which only names the run's paths.
+    pub fn start_on_snapshot(
+        &self,
+        mut request: StartRequest,
+        snapshot: Arc<dyn crate::target::TargetFiles>,
+    ) -> Result<RunReport, EngineError> {
+        request.dry_run = true;
+        request.check_uncommitted = false;
+        self.start_with(request, Some(snapshot))
+    }
+
+    fn start_with(
+        &self,
+        request: StartRequest,
+        snapshot: Option<Arc<dyn crate::target::TargetFiles>>,
+    ) -> Result<RunReport, EngineError> {
         let execution = self.begin_new(
             request.run_id,
             &request.workflow.path,
@@ -372,6 +393,7 @@ impl Engine {
             request.test,
             request.check_uncommitted,
             QUICKJS_HOST,
+            snapshot,
         )?;
         self.drive(execution, &request.workflow.built)
     }
@@ -428,13 +450,18 @@ impl Engine {
         test: Option<TestPlan>,
         check_uncommitted: bool,
         host: &str,
+        snapshot: Option<Arc<dyn crate::target::TargetFiles>>,
     ) -> Result<Execution, EngineError> {
         let check_uncommitted = check_uncommitted && !dry_run && test.is_none();
         let mut record = RunRecord {
             id: run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             name,
             workflow_path: absolute(workflow_path),
-            target: absolute(target),
+            target: if snapshot.is_some() {
+                target.to_path_buf()
+            } else {
+                absolute(target)
+            },
             params,
             status: RunStatus::Running,
             started_at: Utc::now(),
@@ -467,7 +494,9 @@ impl Engine {
                 Arc::clone(&store),
             ))
         });
-        Ok(self.begin(store, record, lease, callbacks, dry_run, test, false, gate))
+        Ok(self.begin(
+            store, record, lease, callbacks, dry_run, test, false, gate, snapshot,
+        ))
     }
 
     /// Take a stored run to continue it, marked running again.
@@ -520,7 +549,9 @@ impl Engine {
                 Arc::clone(&store),
             ))
         });
-        Ok(self.begin(store, record, lease, callbacks, false, None, true, gate))
+        Ok(self.begin(
+            store, record, lease, callbacks, false, None, true, gate, None,
+        ))
     }
 
     /// Announce a run and set up what its steps share.
@@ -535,6 +566,7 @@ impl Engine {
         test: Option<TestPlan>,
         resumed: bool,
         write_gate: Option<Arc<crate::write_gate::WriteGate>>,
+        snapshot: Option<Arc<dyn crate::target::TargetFiles>>,
     ) -> Execution {
         self.events.emit(Event::RunStarted {
             run_id: record.id.clone(),
@@ -572,7 +604,15 @@ impl Engine {
             services: Arc::clone(&self.services),
             cancel,
             commit_lock: Arc::new(Mutex::new(())),
-            overlay: dry_run.then(|| Arc::new(crate::tasks::overlay::Overlay::new(&record.target))),
+            overlay: match snapshot {
+                Some(snapshot) => Some(Arc::new(crate::tasks::overlay::Overlay::on_snapshot(
+                    &record.target,
+                    snapshot,
+                ))),
+                None => {
+                    dry_run.then(|| Arc::new(crate::tasks::overlay::Overlay::new(&record.target)))
+                }
+            },
             alongside: false,
             test,
             stopped: AtomicBool::new(false),

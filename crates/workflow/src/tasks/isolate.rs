@@ -12,6 +12,7 @@ use std::sync::Arc;
 use butterflow_core::jssg_runner::SemanticMode;
 use codemod_deps::Registry;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use codemod_sandbox::sandbox::engine::worker::Isolation as WorkerIsolation;
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::sandbox::runtime_module::{RuntimeEvent, RuntimeEventKind};
 use codemod_sandbox::SemanticProvider;
@@ -92,6 +93,13 @@ impl StepIsolates {
                 .overlay
                 .as_ref()
                 .map(super::overlay::Overlay::pending_files),
+            // Imports stay inside the package of the run (a nested codemod's
+            // own, in its steps).
+            isolation: run.services.isolation.map(|limits| WorkerIsolation {
+                memory_limit: limits.memory_limit,
+                max_stack_size: limits.max_stack_size,
+                import_root: run.package_dir.clone(),
+            }),
         }
     }
 }
@@ -211,6 +219,18 @@ pub(crate) fn semantic_mode(
     option: Option<&Value>,
 ) -> Result<SemanticMode, String> {
     let target = &task.run.target;
+    let mode = semantic_mode_of(target, option)?;
+    if matches!(mode, SemanticMode::Workspace(_)) {
+        task.run.needs_disk("semanticAnalysis: \"workspace\"")?;
+    }
+    Ok(mode)
+}
+
+fn semantic_mode_of(
+    target: &std::path::Path,
+    option: Option<&Value>,
+) -> Result<SemanticMode, String> {
+    let target = target.to_path_buf();
     Ok(match option {
         None => SemanticMode::File,
         Some(Value::String(mode)) if mode == "none" => SemanticMode::None,

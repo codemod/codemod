@@ -32,6 +32,7 @@ pub mod interaction;
 mod js;
 pub mod params;
 mod run;
+pub mod target;
 mod tasks;
 mod write_gate;
 
@@ -80,6 +81,27 @@ pub struct Services {
     /// Answers `assess()` calls from `codemod/assess`; `None` fails them.
     /// The CLI sets it up when the workflow imports `codemod/assess`.
     pub decision: Option<Arc<dyn assess::DecisionModel>>,
+    /// Keeps `forEachFile` callbacks' per-file outcomes across runs.
+    pub file_cache: Option<Arc<dyn target::FileCache>>,
+    /// Told each file's `forEachFile` output.
+    pub file_outputs: Option<Arc<dyn target::FileOutputs>>,
+    /// Limits for the workflow body and every isolate, for packages the
+    /// host does not trust; none without it.
+    pub isolation: Option<Isolation>,
+    /// Most workers a `forEachFile` step starts; the machine's cores
+    /// without it. A host running several runs at once shares its cores.
+    pub max_workers: Option<usize>,
+}
+
+/// How a run is kept from its host, for packages the host does not trust
+/// (a service running packages users published): the workflow body and
+/// every isolate get no host `process`, `os`, `tty` or `perf_hooks`, may
+/// allocate `memory_limit` bytes and use `max_stack_size` bytes of stack, and
+/// import files from disk only from inside the run's package.
+#[derive(Debug, Clone, Copy)]
+pub struct Isolation {
+    pub memory_limit: usize,
+    pub max_stack_size: usize,
 }
 
 /// What a run changed, for reports.
