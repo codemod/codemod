@@ -1,6 +1,6 @@
 //! The interactive launcher: a terminal UI shown when a workflow runs in an
 //! interactive terminal. A setup screen chooses the target, params, dry run,
-//! capabilities, coding agent and decision model; a run screen shows the
+//! coding agent and decision model; a run screen shows the
 //! steps live, their logs and diffs, and answers approvals in place.
 //!
 //! Only `workflow_exec` and the run commands call in here, and only when
@@ -11,7 +11,7 @@ mod render;
 mod setup;
 mod view;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{IsTerminal, Stdout};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -20,7 +20,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use butterflow_core::structured_log::OutputFormat;
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_workflow::events::Event;
 use codemod_workflow::interaction::{
     AgentChoice, Approval, Ask, Decision, Interaction, NonInteractive,
@@ -98,17 +97,12 @@ pub struct Plan<'a> {
     pub dry_run: bool,
     /// The run must be a dry run (a pro codemod).
     pub dry_run_locked: bool,
-    /// Capabilities the package's manifest asks for.
-    pub requested: HashSet<LlrtSupportedModules>,
     pub flags: &'a RunFlags,
 }
 
 impl SetupChoices {
-    /// Put the capability, agent and model choices into the flags.
+    /// Put the agent and model choices into the flags.
     pub fn apply_to(&self, flags: &mut RunFlags) {
-        flags.allow_fs = self.granted.contains(&LlrtSupportedModules::Fs);
-        flags.allow_fetch = self.granted.contains(&LlrtSupportedModules::Fetch);
-        flags.allow_child_process = self.granted.contains(&LlrtSupportedModules::ChildProcess);
         flags.agent = self.agent.clone();
         flags.model = Some(self.decision_model.clone());
     }
@@ -139,8 +133,6 @@ pub async fn setup(plan: Plan<'_>) -> Result<Option<SetupChoices>> {
         declared,
         dry_run: plan.dry_run,
         dry_run_locked: plan.dry_run_locked,
-        granted: plan.flags.granted(),
-        requested: plan.requested,
         installed_agents: codemod_agents::installed()
             .into_iter()
             .map(|(agent, _)| (agent.id().to_string(), agent.label().to_string()))

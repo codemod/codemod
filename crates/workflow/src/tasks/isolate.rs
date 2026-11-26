@@ -1,9 +1,15 @@
 //! What steps that run JavaScript in their own isolates share: `forEachFile`
 //! callbacks and function steps both run in sandbox [`Worker`]s with every
-//! `codemod:*` module, the LLRT modules the run's capabilities allow, and
-//! relative or package imports resolved from the workflow's directory, plus
+//! `codemod:*` module, the safe LLRT modules, and relative or package
+//! imports resolved from the workflow's directory, plus
 //! `codemod-internal:dependencies` (`registry`, `semver`, the dependency
 //! graph) backed by the run's package registry.
+//!
+//! Callbacks are pure: they change the current file through the file API
+//! and read the target through a read-only `fs`; the network, processes,
+//! other writes, environment changes and timers fail with the declared step
+//! to use instead (`http()`, `shell()`, `sleep()`). Capabilities granted to
+//! the run (`--allow-*`, codemod.yaml) no longer reach them.
 
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -16,19 +22,25 @@ use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::sandbox::runtime_module::{RuntimeEvent, RuntimeEventKind};
 use codemod_sandbox::SemanticProvider;
 use codemod_sandbox::{Worker, WorkerOptions};
-use rquickjs::async_with;
+use rquickjs::{async_with, CatchResultExt};
 use serde_json::Value;
 
 use super::TaskContext;
 use crate::deps_host::{self, DEPENDENCIES_MODULE};
 use crate::events::Event;
-use crate::interaction::{Approval, Decision};
 
 /// `codemod/workflow` in isolates.
 const ISOLATE_WORKFLOW_MODULE: &str = "codemod-internal:isolate-workflow";
 const ISOLATE_GIT_MODULE: &str = "codemod-internal:isolate-git";
 /// `codemod/assess` in isolates and the workflow body.
 pub(crate) const ASSESS_MODULE: &str = "codemod-internal:assess";
+/// The globals of steps' and callbacks' isolates (`js/callback_globals.ts`).
+const CALLBACK_GLOBALS_MODULE: &str = "codemod-internal:callback-globals";
+
+/// What a write through `fs` in a callback says; `{name}` is the function
+/// called. The same words as `unavailable("fs.…", "callback")` in
+/// `js/orchestrator.ts`, which the Node.js host throws.
+pub(crate) const READ_ONLY_FS: &str = "{name} is not available in workflow callbacks (function steps, forEachFile callbacks and reducers): change the current file with file.write(), file.rename() or file.delete(), and anything else with a step such as shell() or agent()";
 
 /// What the YAML translation's callbacks run jssg transforms with.
 pub(crate) const JSSG_COMPAT_MODULE: &str = "codemod-internal:jssg-compat";
@@ -37,22 +49,17 @@ pub(crate) const JSSG_COMPAT_MODULE: &str = "codemod-internal:jssg-compat";
 pub(crate) struct StepIsolates {
     pub resolver: Arc<OxcResolver>,
     pub registry: Option<Arc<dyn Registry>>,
-    /// What the step's code may use: the run's capabilities, and those the
-    /// step asked for and was given.
-    pub capabilities: HashSet<LlrtSupportedModules>,
     /// Semantic analysis for roots `parse(file)` makes.
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
 }
 
 impl StepIsolates {
     pub fn new(task: &TaskContext<'_>) -> Result<Self, String> {
-        writes_itself(task, &task.run.services.capabilities)?;
         let resolver = OxcResolver::new(task.run.bundle_dir.clone(), None)
             .map_err(|e| format!("cannot resolve imports from the workflow directory: {e}"))?;
         Ok(Self {
             resolver: Arc::new(resolver),
             registry: task.run.services.package_registry.clone(),
-            capabilities: task.run.services.capabilities.clone(),
             semantic_provider: None,
         })
     }
@@ -68,7 +75,8 @@ impl StepIsolates {
         let events = Arc::clone(&run.events);
         let at = task.at();
         WorkerOptions {
-            capabilities: self.capabilities.clone(),
+            // Callbacks get no unsafe LLRT module, whatever the run grants.
+            capabilities: HashSet::new(),
             resolver: Arc::clone(&self.resolver),
             modules: isolate_modules(),
             codemod_modules: isolate_codemod_modules(),
@@ -92,6 +100,7 @@ impl StepIsolates {
                 .overlay
                 .as_ref()
                 .map(super::overlay::Overlay::pending_files),
+            read_only_fs: Some(READ_ONLY_FS.to_string()),
         }
     }
 }
@@ -129,6 +138,18 @@ pub(crate) fn isolate_modules() -> Vec<(String, String)> {
             ASSESS_MODULE.to_string(),
             crate::js::assess_module().to_string(),
         ),
+        (
+            CALLBACK_GLOBALS_MODULE.to_string(),
+            crate::js::callback_globals_module().to_string(),
+        ),
+        (
+            "child_process".to_string(),
+            crate::js::child_process_module().to_string(),
+        ),
+        (
+            "node:child_process".to_string(),
+            crate::js::child_process_module().to_string(),
+        ),
     ]
 }
 
@@ -144,61 +165,23 @@ pub(crate) fn isolate_codemod_modules() -> Vec<(&'static str, String)> {
     ]
 }
 
-/// The capabilities a step's code gets: the run's, and the ones it asks for
-/// that the run does not grant, when the person running it approves them.
-/// What is not approved is logged, and code that needs it fails. In a dry
-/// run, workers install neither `fs` nor `child_process` whatever is granted.
-pub(crate) fn capabilities(
+/// Capabilities a `forEachFile` selector (or a translated workflow.yaml
+/// step) asks for: callbacks no longer get them, which the step's log says.
+/// An unknown name is still an error.
+pub(crate) fn ignore_capabilities(
     task: &TaskContext<'_>,
     requested: &[String],
-) -> Result<HashSet<LlrtSupportedModules>, String> {
-    let granted = &task.run.services.capabilities;
-    let mut result = granted.clone();
-    let mut missing = Vec::new();
+) -> Result<(), String> {
     for name in requested {
-        let module = LlrtSupportedModules::from_str(name).map_err(|_| {
+        LlrtSupportedModules::from_str(name).map_err(|_| {
             format!("unknown capability '{name}': use \"fs\", \"fetch\" or \"child_process\"")
         })?;
-        if !granted.contains(&module) {
-            missing.push((name.clone(), module));
-        }
     }
-    if missing.is_empty() {
-        return Ok(result);
-    }
-    let names: Vec<String> = missing.iter().map(|(name, _)| name.clone()).collect();
-    match task.approve(&Approval::Capabilities {
-        modules: names.clone(),
-    }) {
-        Decision::Approved => result.extend(missing.into_iter().map(|(_, module)| module)),
-        Decision::Denied | Decision::Deferred => {
-            task.log(format!("capabilities not granted: {}", names.join(", ")))
-        }
-    }
-    Ok(result)
-}
-
-/// The capabilities for a task's code, as [`capabilities`], checked like a
-/// write when they let that code change files itself (`fs`, `child_process`).
-pub(crate) fn capabilities_for_code(
-    task: &TaskContext<'_>,
-    requested: &[String],
-) -> Result<HashSet<LlrtSupportedModules>, String> {
-    let granted = capabilities(task, requested)?;
-    writes_itself(task, &granted)?;
-    Ok(granted)
-}
-
-/// Code with `fs` or `child_process` may change files without the engine:
-/// that counts as a write.
-fn writes_itself(
-    task: &TaskContext<'_>,
-    capabilities: &HashSet<LlrtSupportedModules>,
-) -> Result<(), String> {
-    if capabilities.contains(&LlrtSupportedModules::Fs)
-        || capabilities.contains(&LlrtSupportedModules::ChildProcess)
-    {
-        task.run.before_write()?;
+    if !requested.is_empty() {
+        task.log(format!(
+            "capabilities ({}) are no longer given to callbacks: they read the target through a read-only fs; use step(http(...)) for the network and step(shell(...)) for commands",
+            requested.join(", ")
+        ));
     }
     Ok(())
 }
@@ -265,11 +248,18 @@ pub(crate) async fn start(
         .map_err(|e| format!("could not start the step's runtime: {e}"))?;
     async_with!(worker.context => |ctx| {
         deps_host::install(&ctx, registry, cancel).map_err(|e| e.to_string())?;
-        match assess {
-            Some(handle) => crate::assess::install(&ctx, handle.run, handle.position, handle.cancel)
-                .map_err(|e| e.to_string()),
-            None => Ok(()),
+        if let Some(handle) = assess {
+            crate::assess::install(&ctx, handle.run, handle.position, handle.cancel)
+                .map_err(|e| e.to_string())?;
         }
+        // Before any of the step's code: what it may not use fails.
+        let pure = async {
+            let promise = rquickjs::Module::import(&ctx, CALLBACK_GLOBALS_MODULE)?;
+            promise.into_future::<rquickjs::Value>().await.map(|_| ())
+        };
+        pure.await
+            .catch(&ctx)
+            .map_err(|e| format!("could not start the step's runtime: {e}"))
     })
     .await?;
     Ok(worker)

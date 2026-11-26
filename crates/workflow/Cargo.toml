@@ -9,6 +9,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+base64 = "0.22"
 butterflow-core = { workspace = true }
 butterflow-models = { workspace = true }
 butterflow-runners = { workspace = true }

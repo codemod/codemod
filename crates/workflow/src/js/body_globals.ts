@@ -10,8 +10,9 @@
 //   run's start time and only moves when a step finishes, to the time
 //   recorded for it.
 //
-// Inside steps and forEachFile callbacks (their own isolates) these are the
-// real thing.
+// Inside steps and forEachFile callbacks (their own isolates) the clock and
+// randomness are the real thing: what a callback returns is recorded. The
+// network and timers fail there too (callback_globals.ts).
 (() => {
   const host = globalThis.__workflowHost;
 
@@ -65,14 +66,25 @@
   };
   globals.crypto = Object.freeze({ getRandomValues, randomUUID });
 
-  const insideAStep = (name: string) =>
+  // The words of `unavailable(name, "body")` in orchestrator.ts (this file is
+  // a script, so it cannot import it).
+  const where = "the workflow body, which runs again on every resume";
+  const refuse = (name: string, instead: string) =>
     function () {
-      throw new Error(
-        `${name} is not available in the workflow body, which runs again on every resume; use it inside a step or forEachFile callback`,
-      );
+      throw new Error(`${name} is not available in ${where}: ${instead}`);
     };
-  for (const name of ["setTimeout", "setInterval", "setImmediate", "fetch"]) {
-    if (!(name in globals)) globals[name] = insideAStep(name);
+  for (const name of ["setTimeout", "setInterval", "setImmediate"]) {
+    if (!(name in globals)) {
+      globals[name] = refuse(name, 'wait between steps with await sleep("10s")');
+    }
+  }
+  for (const name of ["fetch", "XMLHttpRequest", "WebSocket"]) {
+    if (!(name in globals)) {
+      globals[name] = refuse(
+        name,
+        'declare the request as a step, await step("label", http(url, options)), so it is recorded and not sent again on resume',
+      );
+    }
   }
 
   const format = (value: unknown) => {

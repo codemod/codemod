@@ -609,6 +609,81 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     return Object.freeze({ ...task, callbacks });
   }
 
+  /**
+   * An HTTP request, as a step: `http(url, options?)` or `http({ url, ... })`.
+   * Callbacks have no network; this is how a workflow talks to one. The
+   * response is recorded with the step, so a resumed run gets it back
+   * without sending the request again.
+   */
+  function http(request: unknown, options?: unknown): HostTask {
+    let fields: Record<string, unknown>;
+    if (typeof request === "string") {
+      if (options !== undefined && (!isRecord(options) || Array.isArray(options))) {
+        throw new TypeError("http: options must be an object: http(url, { method, headers, ... })");
+      }
+      if (isRecord(options) && "url" in options) {
+        throw new TypeError("http: give the url once: http(url, options) or http({ url, ... })");
+      }
+      fields = { ...(options as Record<string, unknown> | undefined), url: request };
+    } else if (isRecord(request) && !Array.isArray(request) && options === undefined) {
+      fields = { ...request };
+    } else {
+      throw new TypeError(
+        "http takes a url and options, http(url, { ... }), or http({ url, ... })",
+      );
+    }
+    onlyKeys(fields, HTTP_OPTIONS, "http");
+    const { url, method, headers, body, json, timeout, allowErrorStatus, dryRun } = fields;
+    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+      throw new TypeError(
+        `http: url must be an http:// or https:// URL, not ${JSON.stringify(url)}`,
+      );
+    }
+    if (method !== undefined && (typeof method !== "string" || !/^[A-Za-z]+$/.test(method))) {
+      throw new TypeError('http: method must be a method name such as "GET" or "POST"');
+    }
+    if (headers !== undefined) {
+      if (!isRecord(headers) || Array.isArray(headers)) {
+        throw new TypeError("http: headers must be an object of header names to values");
+      }
+      for (const [name, value] of Object.entries(headers)) {
+        const fromEnv =
+          isRecord(value) &&
+          Object.keys(value).length === 1 &&
+          typeof value.env === "string" &&
+          value.env !== "";
+        if (typeof value !== "string" && !fromEnv) {
+          throw new TypeError(
+            `http: header '${name}' must be a string, or { env: "NAME" } to read it from the environment when the request is sent`,
+          );
+        }
+      }
+    }
+    if (body !== undefined && json !== undefined) {
+      throw new TypeError("http: give body (text) or json, not both");
+    }
+    if (body !== undefined && typeof body !== "string") {
+      throw new TypeError("http: body must be a string; give a JSON body as json");
+    }
+    if (json !== undefined) checkJson(json, "http: json");
+    if (allowErrorStatus !== undefined && typeof allowErrorStatus !== "boolean") {
+      throw new TypeError("http: allowErrorStatus must be true or false");
+    }
+    if (dryRun !== undefined && dryRun !== "skip" && dryRun !== "perform") {
+      throw new TypeError('http: dryRun must be "skip" (the default) or "perform"');
+    }
+    return hostTask("http", {
+      url,
+      method: method === undefined ? undefined : method.toUpperCase(),
+      headers,
+      body,
+      json,
+      timeout: timeout === undefined ? undefined : milliseconds(timeout, "http: timeout"),
+      allowErrorStatus,
+      dryRun,
+    });
+  }
+
   /** Run another codemod package (registry name or local path). */
   function codemod(source: string, options: object = {}): HostTask {
     return hostTask("codemod", { ...options, source });
@@ -658,6 +733,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     forEachFile,
     dependencyGraph,
     shell,
+    http,
     astGrep,
     shard,
     codemod,
@@ -668,6 +744,18 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     waitForEvent,
   };
 }
+
+/** What `http(...)` takes. */
+const HTTP_OPTIONS = [
+  "url",
+  "method",
+  "headers",
+  "body",
+  "json",
+  "timeout",
+  "allowErrorStatus",
+  "dryRun",
+] as const;
 
 function hostTask(kind: string, options: unknown): HostTask {
   const content = withoutUndefined(options);
@@ -1345,6 +1433,8 @@ function defaultLabel(position: number, content: TaskContent): string {
       return `step #${position}`;
     case "shell":
       return `shell ${truncate(content.command)}`;
+    case "http":
+      return `http ${String(content.method ?? "GET")} ${truncate(content.url)}`;
     case "astGrep": {
       const ids = (content.rules as { id?: unknown }[]).map((rule) => rule.id).filter(Boolean);
       return ids.length ? `astGrep ${ids.join(", ")}` : "astGrep";
@@ -1471,6 +1561,40 @@ export function fileHandle(
       open = false;
     },
   };
+}
+
+// ------------------------------------------------------ pure callbacks ---
+
+/** Where workflow code runs: the body, or a step's or `forEachFile`'s callback. */
+export type CodeSite = "body" | "callback";
+
+/**
+ * Why workflow code cannot use `name` (`fetch`, `child_process`,
+ * `setTimeout`, `process.env`, `fs.writeFileSync`, ...), and the declared
+ * step to use instead. Both hosts throw this, so a test that runs on Node.js
+ * fails as the CLI would.
+ */
+export function unavailable(name: string, site: CodeSite): string {
+  const where =
+    site === "body"
+      ? "the workflow body, which runs again on every resume"
+      : "workflow callbacks (function steps, forEachFile callbacks and reducers)";
+  if (name === "fetch" || name === "XMLHttpRequest" || name === "WebSocket") {
+    return `${name} is not available in ${where}: declare the request as a step, await step("label", http(url, options)), so it is recorded and not sent again on resume`;
+  }
+  if (name === "child_process" || name.startsWith("child_process.")) {
+    return `${name} is not available in ${where}: run the command as a step, await step("label", shell("command"))`;
+  }
+  if (name === "setTimeout" || name === "setInterval" || name === "setImmediate") {
+    return `${name} is not available in ${where}: wait between steps with await sleep("10s")`;
+  }
+  if (name === "process.env") {
+    return `process.env cannot be changed in ${where}: give a step its variables, shell(command, { env })`;
+  }
+  if (name.startsWith("fs.") || name.startsWith("fs/promises.")) {
+    return `${name} is not available in ${where}: change the current file with file.write(), file.rename() or file.delete(), and anything else with a step such as shell() or agent()`;
+  }
+  return `${name} is not available in ${where}`;
 }
 
 function messageOf(error: unknown): string {

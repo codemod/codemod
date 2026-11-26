@@ -70,25 +70,13 @@ pub async fn handler(_args: &Command) -> Result<()> {
         let language = spec
             .language
             .ok_or_else(|| anyhow::anyhow!("a callback test needs a language"))?;
-        let script_dir = callback.parent().map(PathBuf::from);
-        let capabilities = granted(
-            resolve_capabilities(
-                ResolveCapabilitiesArgs {
-                    allow_fs: false,
-                    allow_fetch: false,
-                    allow_child_process: false,
-                },
-                None,
-                script_dir,
-            ),
-            &spec.capabilities,
-        )?;
+        // Callbacks get no capabilities; the names are still checked.
+        granted(HashSet::new(), &spec.capabilities)?;
         let result = run_callback_case(CallbackCaseRequest {
             callback,
             target: spec.target,
             language,
             semantic_analysis: spec.semantic_analysis,
-            capabilities,
         })
         .await?;
         println!("{result}");

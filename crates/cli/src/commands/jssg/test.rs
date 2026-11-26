@@ -364,7 +364,6 @@ async fn handler_impl(args: &Command) -> Result<()> {
                         language: language_str,
                         params: test_config.params.as_ref(),
                         semantic_provider,
-                        capabilities,
                         runtime_event_callback,
                     })
                     .await
@@ -478,7 +477,6 @@ struct CallbackCase<'a> {
     language: &'a str,
     params: Option<&'a HashMap<String, serde_json::Value>>,
     semantic_provider: Option<Arc<dyn SemanticProvider>>,
-    capabilities: Option<HashSet<LlrtSupportedModules>>,
     runtime_event_callback: codemod_sandbox::sandbox::runtime_module::RuntimeEventCallback,
 }
 
@@ -503,7 +501,6 @@ async fn run_callback(
         text: case.text.clone(),
         language: Some(case.language.to_string()),
         semantic_provider: case.semantic_provider,
-        capabilities: case.capabilities.unwrap_or_default(),
         runtime_event_callback: Some(case.runtime_event_callback),
     })
     .await

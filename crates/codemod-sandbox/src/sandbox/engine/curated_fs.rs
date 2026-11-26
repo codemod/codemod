@@ -63,6 +63,10 @@ pub struct CuratedFsConfig {
     /// where `link` is a symlink to `/etc` would pass the lexical prefix
     /// guard and let the codemod read outside the sandbox.
     pub physical_target_dir: Option<PathBuf>,
+    /// When set, every write (`writeFileSync`, `mkdirSync`, `unlinkSync` and
+    /// their promise forms) fails with this message, `{name}` replaced by the
+    /// function called (`fs.writeFileSync`). Reads work as before.
+    pub read_only: Option<String>,
 }
 
 // `CuratedFsConfig` contains no `'js`-bound references, so the `'js` lifetime
@@ -79,7 +83,15 @@ impl CuratedFsConfig {
             fetcher: None,
             deleted_paths: Arc::new(Mutex::new(HashSet::new())),
             physical_target_dir: None,
+            read_only: None,
         }
+    }
+
+    /// Refuse writes: each fails with `message`, `{name}` replaced by the
+    /// function called.
+    pub fn read_only(mut self, message: impl Into<String>) -> Self {
+        self.read_only = Some(message.into());
+        self
     }
 
     /// Attach a fallback [`FileFetcher`] that is consulted when a read targets
@@ -236,6 +248,7 @@ enum FsErrorKind {
     IsDirectory { path: String },
     NotDirectory { path: String },
     Io { message: String, path: String },
+    ReadOnly { message: String, path: String },
 }
 
 impl FsErrorKind {
@@ -247,6 +260,7 @@ impl FsErrorKind {
             FsErrorKind::IsDirectory { .. } => "EISDIR",
             FsErrorKind::NotDirectory { .. } => "ENOTDIR",
             FsErrorKind::Io { .. } => "EIO",
+            FsErrorKind::ReadOnly { .. } => "EROFS",
         }
     }
 
@@ -257,7 +271,8 @@ impl FsErrorKind {
             | FsErrorKind::InvalidPath { path }
             | FsErrorKind::IsDirectory { path }
             | FsErrorKind::NotDirectory { path }
-            | FsErrorKind::Io { path, .. } => path,
+            | FsErrorKind::Io { path, .. }
+            | FsErrorKind::ReadOnly { path, .. } => path,
         }
     }
 
@@ -282,6 +297,7 @@ impl FsErrorKind {
             FsErrorKind::Io { message, .. } => {
                 format!("EIO: {message}, {syscall} '{path}'")
             }
+            FsErrorKind::ReadOnly { message, .. } => message.clone(),
         }
     }
 }
@@ -311,6 +327,21 @@ fn map_vfs_err(err: VfsError, path: &str) -> FsErrorKind {
             message: err.to_string(),
             path: path.to_string(),
         },
+    }
+}
+
+/// Fails when the fs is read-only, naming `name` (`writeFileSync`).
+fn check_writable(ctx: &Ctx<'_>, cfg: &CuratedFsConfig, name: &str, path: &str) -> Result<()> {
+    match &cfg.read_only {
+        Some(message) => Err(throw_fs(
+            ctx,
+            FsErrorKind::ReadOnly {
+                message: message.replace("{name}", &format!("fs.{name}")),
+                path: path.to_string(),
+            },
+            name,
+        )),
+        None => Ok(()),
     }
 }
 
@@ -596,6 +627,7 @@ fn read_file_sync<'js>(
 
 fn write_file_sync_impl(ctx: &Ctx<'_>, path: &str, data: String) -> Result<()> {
     let cfg = config(ctx)?;
+    check_writable(ctx, &cfg, "writeFileSync", path)?;
     let (normalized, vfs_path) = cfg.resolve(path).map_err(|e| throw_fs(ctx, e, "open"))?;
     clear_deleted(&cfg, &normalized);
     if let Some(parent) = parent_of(&normalized) {
@@ -826,6 +858,7 @@ fn readdir_sync<'js>(ctx: Ctx<'js>, path: String, options: Opt<Value<'js>>) -> R
 
 fn mkdir_sync(ctx: Ctx<'_>, path: String, options: Opt<Value<'_>>) -> Result<()> {
     let cfg = config(&ctx)?;
+    check_writable(&ctx, &cfg, "mkdirSync", &path)?;
     let (normalized, vfs_path) = cfg.resolve(&path).map_err(|e| throw_fs(&ctx, e, "mkdir"))?;
     clear_deleted(&cfg, &normalized);
     let recursive = recursive_from_options(options);
@@ -863,6 +896,7 @@ fn stat_sync<'js>(ctx: Ctx<'js>, path: String) -> Result<Object<'js>> {
 
 fn unlink_sync(ctx: Ctx<'_>, path: String) -> Result<()> {
     let cfg = config(&ctx)?;
+    check_writable(&ctx, &cfg, "unlinkSync", &path)?;
     let (normalized, vfs_path) = cfg
         .resolve(&path)
         .map_err(|e| throw_fs(&ctx, e, "unlink"))?;

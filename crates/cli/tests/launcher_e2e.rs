@@ -194,11 +194,11 @@ fn a_dry_run_is_reviewed_applied_and_approved_in_the_launcher() {
     );
 
     // Setup: the focus starts on Start. Pick the next model, then turn on
-    // the dry run (fields: target, dry run, 3 capabilities, agent, model).
+    // the dry run (fields: target, dry run, agent, model).
     session.wait_for("Start run");
     session.keys(UP);
     session.keys(RIGHT);
-    for _ in 0..5 {
+    for _ in 0..2 {
         session.keys(UP);
     }
     session.keys(" ");

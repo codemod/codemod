@@ -302,16 +302,6 @@ pub async fn handler(
     let mut target_path = target_path;
 
     if crate::launcher::enabled(&flags) {
-        use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
-        let requested = resolve_capabilities(
-            ResolveCapabilitiesArgs {
-                allow_fs: false,
-                allow_fetch: false,
-                allow_child_process: false,
-            },
-            codemod_config.clone(),
-            None,
-        );
         let Some(choices) = crate::launcher::setup(crate::launcher::Plan {
             title: canonical_codemod_name.clone(),
             workflow: &workflow_path,
@@ -319,7 +309,6 @@ pub async fn handler(
             params,
             dry_run,
             dry_run_locked: pro_dry_run_required,
-            requested,
             flags: &flags,
         })
         .await?

@@ -19,6 +19,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 
+use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
 use super::execution_engine::{
     install_console_bridge, CallbackIsolate, DryRunExecutionFlag, ExecutionModeFlag, FileChange,
     JssgExecutionContext, JssgFileChanges, TargetDirectory,
@@ -97,6 +98,10 @@ pub struct WorkerOptions<R> {
     /// `jssgTransform` reads and changes files through it. Each worker has
     /// its own without it.
     pub pending_files: Option<PendingFiles>,
+    /// Without the `fs` capability: give the code a read-only `fs` limited to
+    /// the target directory, whose writes fail with this message (`{name}`
+    /// is replaced by the function called). `None`: no `fs` at all.
+    pub read_only_fs: Option<String>,
 }
 
 /// A JSSG runtime kept alive across calls. Run code in it with
@@ -152,7 +157,17 @@ impl Worker {
             }
         }
 
-        let (resolver, loader, globals) = module_builder.builder.build();
+        let (mut resolver, mut loader, globals) = module_builder.builder.build();
+        let read_only_fs = options
+            .read_only_fs
+            .clone()
+            .filter(|_| !options.capabilities.contains(&LlrtSupportedModules::Fs));
+        if read_only_fs.is_some() {
+            resolver = resolver.add_name("fs").add_name("fs/promises");
+            loader = loader
+                .with_module("fs", CuratedFsModule)
+                .with_module("fs/promises", CuratedFsPromisesModule);
+        }
         let (codemod_resolver, loader) = crate::with_codemod_modules!(loader, llm: fetch);
         let codemod_resolver = codemod_resolver.providing(options.codemod_modules.clone());
 
@@ -220,6 +235,14 @@ impl Worker {
                     .map_err(|e| fail(format!("{e:?}")))?;
                 if let Some(language) = &options.default_language {
                     ctx.store_userdata(DefaultParseLanguage(language.clone()))
+                        .map_err(|e| fail(format!("{e:?}")))?;
+                }
+                if let Some(message) = &read_only_fs {
+                    let root: vfs::VfsPath = vfs::PhysicalFS::new(PathBuf::from("/")).into();
+                    let config = CuratedFsConfig::new(target.to_string_lossy().into_owned(), root)
+                        .with_physical_target_dir(target.clone())
+                        .read_only(message.clone());
+                    ctx.store_userdata(config)
                         .map_err(|e| fail(format!("{e:?}")))?;
                 }
                 if let Some(provider) = &options.semantic_provider {
@@ -332,6 +355,7 @@ mod tests {
             default_language: None,
             semantic_provider: None,
             pending_files: None,
+            read_only_fs: None,
         })
         .await
         .unwrap()

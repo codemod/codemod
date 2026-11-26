@@ -11,6 +11,7 @@ import {
   codemod,
   fail,
   forEachFile,
+  http,
   installSkill,
   shard,
   shell,
@@ -217,6 +218,23 @@ export default async function main({
   await step(shell({ cwd: target })`npm run build`);
   // @ts-expect-error a template takes strings, numbers and booleans
   void step(shell`echo ${{ not: "a word" }}`);
+
+  // HTTP requests are steps; the response is recorded.
+  const got = await step(
+    "Get",
+    http("https://example.com/api", { headers: { a: { env: "TOKEN" } } }),
+  );
+  if (!got.skipped) {
+    expectType<Equal<typeof got.status, number>>(true);
+    expectType<Equal<typeof got.body, string>>(true);
+  }
+  await step(
+    http({ url: "https://example.com", method: "POST", json: { a: 1 }, dryRun: "perform" }),
+  );
+  // @ts-expect-error header values are text or { env }
+  http("https://example.com", { headers: { a: 1 } });
+  // @ts-expect-error dryRun is "skip" or "perform"
+  http("https://example.com", { dryRun: true });
 
   // Rules written in the workflow, or built from values it has.
   await step(

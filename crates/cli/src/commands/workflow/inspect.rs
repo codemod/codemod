@@ -22,7 +22,10 @@ pub struct Command {
 }
 
 /// Describe a workflow without running it: the params it declares, the
-/// modules it imports, the capabilities its package asks for, and its steps
+/// modules it imports, the declared steps that reach outside the target
+/// (`http`, `shell`, `agent`, ...), and its steps. Capabilities its package
+/// asks for are listed as `requestedCapabilities`: callbacks no longer get
+/// them, so `capabilities` is always empty.
 pub async fn handler(args: &Command) -> Result<()> {
     let (path, dir) =
         resolve_workflow_source_with_name(&args.workflow, args.workflow_name.as_deref())?;
@@ -39,7 +42,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         codemod_workflow::inspect(&file, &source).map_err(|error| anyhow!("{error}"))?;
     let params = codemod_workflow::params::declared_params(&source);
     let modules = codemod_workflow::params::imported_modules(&source);
-    let mut capabilities: Vec<String> = resolve_capabilities(
+    let mut requested: Vec<String> = resolve_capabilities(
         ResolveCapabilitiesArgs {
             allow_fs: false,
             allow_fetch: false,
@@ -51,7 +54,7 @@ pub async fn handler(args: &Command) -> Result<()> {
     .into_iter()
     .map(|capability| capability.as_str().to_string())
     .collect();
-    capabilities.sort();
+    requested.sort();
     let calls = |names: &[&str]| names.iter().any(|name| inspection.calls(name));
     let described = json!({
         "workflow": path,
@@ -64,8 +67,11 @@ pub async fn handler(args: &Command) -> Result<()> {
             "default": param.default,
         })).collect::<Vec<_>>(),
         "modules": modules,
-        "capabilities": capabilities,
+        // Callbacks get no capabilities: kept for programs that read it.
+        "capabilities": [],
+        "requestedCapabilities": requested,
         "uses": {
+            "http": calls(&["http"]),
             "approval": calls(&["approval"]),
             "agent": calls(&["agent"]),
             "shell": calls(&["shell"]),
@@ -114,12 +120,30 @@ fn print_text(described: &Value) {
             println!("{line}");
         }
     }
-    let capabilities: Vec<&str> = described["capabilities"]
+    let uses = &described["uses"];
+    let reaches: Vec<&str> = [
+        ("http", "network (http)"),
+        ("shell", "commands (shell)"),
+        ("agent", "coding agents (agent)"),
+        ("codemod", "other codemods (codemod)"),
+        ("git", "git (branch, commit, pullRequest)"),
+    ]
+    .into_iter()
+    .filter(|(key, _)| uses[*key] == true)
+    .map(|(_, what)| what)
+    .collect();
+    if !reaches.is_empty() {
+        println!("Reaches:   {}", reaches.join(", "));
+    }
+    let requested: Vec<&str> = described["requestedCapabilities"]
         .as_array()
         .map(|list| list.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
-    if !capabilities.is_empty() {
-        println!("Asks for:  {}", capabilities.join(", "));
+    if !requested.is_empty() {
+        println!(
+            "Asks for:  {} (ignored: callbacks no longer get capabilities; use http() and shell() steps)",
+            requested.join(", ")
+        );
     }
     let steps = described["steps"].as_array().cloned().unwrap_or_default();
     if !steps.is_empty() {

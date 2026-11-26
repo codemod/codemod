@@ -131,7 +131,6 @@ pub struct CallbackCaseRequest {
     pub language: String,
     /// `"file"` (the default), `"workspace"` or `"none"`.
     pub semantic_analysis: Option<String>,
-    pub capabilities: HashSet<LlrtSupportedModules>,
 }
 
 /// Run a callback case. The result has the shape of a workflow run's (with
@@ -217,7 +216,6 @@ pub async fn run_callback_case(request: CallbackCaseRequest) -> Result<Value> {
             text,
             language: Some(request.language.clone()),
             semantic_provider: semantic_provider.clone(),
-            capabilities: request.capabilities.clone(),
             runtime_event_callback: Some(Arc::new(move |event| {
                 if event.kind
                     != codemod_sandbox::sandbox::runtime_module::RuntimeEventKind::SetCurrentUnit

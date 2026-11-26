@@ -1,7 +1,6 @@
 //! `run_callback_file`: a callback file run on one file, as `forEachFile`
 //! runs it, without committing what it does.
 
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -19,7 +18,6 @@ fn run(dir: &Path, callback: &str, path: &str, text: &str) -> Result<CallbackFil
         text: text.to_string(),
         language: Some("typescript".to_string()),
         semantic_provider: None,
-        capabilities: HashSet::new(),
         runtime_event_callback: None,
     };
     tokio::runtime::Builder::new_current_thread()
@@ -137,7 +135,6 @@ fn a_callback_named_like_the_wrapper_still_runs_from_its_directory() {
             text: "x".to_string(),
             language: Some("typescript".to_string()),
             semantic_provider: None,
-            capabilities: HashSet::new(),
             runtime_event_callback: None,
         };
         let run = tokio::runtime::Builder::new_current_thread()

@@ -66,6 +66,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .filter(|id| *id != ALL)
         .cloned()
         .collect();
+    args.flags.warn_deprecated_capabilities();
     let outcome = workflow_exec::resume(
         &args.id,
         ExecSettings {
@@ -75,7 +76,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             force: args.force,
             allow_dirty: args.allow_dirty,
             ..args.flags.settings(
-                args.flags.granted(),
+                std::collections::HashSet::new(),
                 create_registry_client(None)?,
                 &telemetry,
             )
