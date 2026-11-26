@@ -703,6 +703,18 @@ pub(crate) fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumabl
                 style("Rejected:").red().bold(),
             );
         }
+        Ending::Paused if run.question.is_some() => {
+            let question = run.question.as_deref().unwrap_or_default();
+            eprintln!(
+                "\n{} {}{}",
+                style("The run was paused at an approval:").yellow().bold(),
+                run.awaiting.as_deref().unwrap_or(question),
+                hint(format!(
+                    "Approve it and go on with: codemod workflow resume --id {} --approve {question}",
+                    run.id
+                ))
+            );
+        }
         Ending::Paused => {
             eprintln!(
                 "\n{}{}",

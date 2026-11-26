@@ -19,6 +19,12 @@ To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha wor
 
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
 
+<Update label="2.0.0-alpha.10" description="Unreleased">
+**Fixes**
+
+- **A run paused at an approval keeps its question.** Before, closing a control channel's stdin or sending `stop` while an approval was open left a `paused` run with `question: null`, and the approval step `canceled`. Now `run_finished` and `workflow status` keep `question` (`approval:1`) and `awaiting`, the step stays `awaiting-approval`, and `workflow resume --approve approval:1` gives it.
+</Update>
+
 <Update label="2.0.0-alpha.9" description="November 25, 2026">
 ```bash
 npx codemod@2.0.0-alpha.9 --version   # codemod 2.0.0-alpha.9

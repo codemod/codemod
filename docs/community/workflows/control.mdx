@@ -75,9 +75,11 @@ Questions come one at a time. When one is answered, or closed because the run st
 | `succeeded` | | nothing left to run |
 | `failed` | a step failed, or the workflow called `fail()` | `workflow resume` |
 | `awaiting-approval` | answered `later` (or no control channel and nobody to ask) | `workflow resume --approve <id>` |
-| `paused` | `stop` with `"pause"`, stdin closed, Ctrl-C | `workflow resume` |
+| `paused` | `stop` with `"pause"`, stdin closed, Ctrl-C | `workflow resume` (paused at a question: `workflow resume --approve <id>`) |
 | `canceled` | `stop` with `"cancel"`, `workflow cancel` | over: `--force` only |
 | `rejected` | an approval was rejected | over: `--force` only |
+
+**A run paused at a question still waits for it.** When you `stop` or close stdin while a `question` is open, the run is `paused`, and `run_finished` (and `workflow status --format json`) keep that question's `question` id and `awaiting` message. The approval step is `awaiting-approval`, not `canceled`. Resume it with `workflow resume --id <ID> --approve <question id>` to give that approval, or without `--approve` to be asked again.
 
 **A rejected approval ends the run.** Nothing after it runs, steps running alongside stop, and what earlier steps changed stays changed. The process exits with `1`, as it does for `paused` and `canceled`; `run_finished` has the status.
 

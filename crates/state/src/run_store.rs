@@ -112,10 +112,11 @@ pub struct RunRecord {
     #[serde(default)]
     pub ended_at: Option<DateTime<Utc>>,
     /// Set while the run waits for a manual approval: what is being approved.
+    /// Also kept when the run was paused while the approval waited.
     #[serde(default)]
     pub awaiting: Option<String>,
     /// With `awaiting`: the id of the question waiting (`approval:3`), which
-    /// `workflow resume --approve <id>` gives.
+    /// `workflow resume --approve <id>` gives. Kept on a run paused at it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question: Option<String>,
     #[serde(default)]

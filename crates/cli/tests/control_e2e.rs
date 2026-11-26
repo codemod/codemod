@@ -300,9 +300,44 @@ fn stopping_over_control_pauses_the_run_and_resume_continues_it() {
     assert_eq!(closed["by"], "stop", "{closed}");
     let finished = run.event("run_finished");
     assert_eq!(finished["status"], "paused", "{finished}");
-    let (code, _, stderr) = run.finish();
+    // Paused at the question: the run still waits for it.
+    assert_eq!(finished["question"], "approval:1", "{finished}");
+    assert_eq!(finished["awaiting"], "Go on to b?", "{finished}");
+    let (code, events, stderr) = run.finish();
     assert_eq!(code, Some(1), "{stderr}");
-    assert_eq!(fixture.status(&id)["status"], "paused");
+    // The approval step waits; it was not canceled.
+    let step = named(&events, "step_finished")
+        .into_iter()
+        .find(|event| event["step"] == "1")
+        .unwrap_or_else(|| panic!("{events:#?}"));
+    assert_eq!(step["status"], "awaiting-approval", "{step}");
+    let status = fixture.status(&id);
+    assert_eq!(status["status"], "paused", "{status}");
+    assert_eq!(status["question"], "approval:1", "{status}");
+    assert_eq!(status["awaiting"], "Go on to b?", "{status}");
+    assert_eq!(
+        status["steps"][1]["status"], "awaiting-approval",
+        "{status}"
+    );
+
+    // `--approve <id>` gives the question the paused run waits for.
+    let output = fixture.codemod(&[
+        "workflow",
+        "resume",
+        "--id",
+        &id,
+        "--approve",
+        "approval:1",
+        "--no-interactive",
+    ]);
+    assert_eq!(
+        fixture.read("src/b.ts"),
+        "let b = 2;\n",
+        "{}",
+        text(&output)
+    );
+    let status = fixture.status(&id);
+    assert_eq!(status["question"], "approval:3", "{status}");
 
     let output = fixture.codemod(&[
         "workflow",
@@ -313,7 +348,6 @@ fn stopping_over_control_pauses_the_run_and_resume_continues_it() {
         "--no-interactive",
     ]);
     assert!(output.status.success(), "{}", text(&output));
-    assert_eq!(fixture.read("src/b.ts"), "let b = 2;\n");
     assert_eq!(fixture.status(&id)["status"], "succeeded");
 }
 
@@ -340,7 +374,9 @@ fn closing_stdin_pauses_the_run() {
     drop(run.stdin.take());
     let closed = run.event("question_closed");
     assert_eq!(closed["by"], "eof", "{closed}");
-    assert_eq!(run.event("run_finished")["status"], "paused");
+    let finished = run.event("run_finished");
+    assert_eq!(finished["status"], "paused", "{finished}");
+    assert_eq!(finished["question"], "approval:1", "{finished}");
 }
 
 #[test]

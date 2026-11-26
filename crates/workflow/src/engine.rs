@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use butterflow_state::run_store::{
-    MemoryStore, RunLease, RunRecord, RunSettings, RunStatus, RunStore, StepRecord, StoreError,
+    MemoryStore, RunLease, RunRecord, RunSettings, RunStatus, RunStore, StepRecord, StepStatus,
+    StoreError,
 };
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -158,7 +159,9 @@ impl RunReport {
             Ending::FailedWithOutput { error, output, .. } => {
                 (output.clone(), Some(error), None, None)
             }
-            Ending::Canceled | Ending::Paused => (Value::Null, None, None, None),
+            Ending::Canceled => (Value::Null, None, None, None),
+            // Paused at a question: the run still waits for it.
+            Ending::Paused => (Value::Null, None, self.run.awaiting.as_ref(), None),
             Ending::Rejected(message) => (Value::Null, Some(message), None, None),
             Ending::AwaitingApproval(message) => (Value::Null, None, Some(message), None),
             Ending::Stopped(label) => (Value::Null, None, None, Some(label)),
@@ -295,8 +298,25 @@ impl Execution {
         let context = &self.context;
         let mut record = self.record.clone();
         record.conclude(ending.outcome());
-        if matches!(ending, Ending::AwaitingApproval(_)) {
-            record.question = context.halt.question();
+        match ending {
+            Ending::AwaitingApproval(_) => record.question = context.halt.question(),
+            // Paused while a question was open: the run still waits for it,
+            // and `workflow resume --approve <id>` gives it.
+            Ending::Paused => {
+                if let Some(question) = context.halt.question() {
+                    record.awaiting = context.awaiting().or_else(|| {
+                        context
+                            .store
+                            .load_steps(&record.id)
+                            .ok()?
+                            .into_iter()
+                            .find(|step| step.status == StepStatus::AwaitingApproval)
+                            .and_then(|step| step.error)
+                    });
+                    record.question = Some(question);
+                }
+            }
+            _ => {}
         }
         // Still to check when the run never got past the check.
         record.settings.check_uncommitted = context

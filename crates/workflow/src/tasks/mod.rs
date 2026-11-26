@@ -233,8 +233,15 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         "pullRequest" => git::pull_request(task, parse(content)?),
         other => Err(TaskError::Failed(format!("unknown task kind '{other}'"))),
     };
+    // A step stopped mid-way was canceled. An approval left unanswered
+    // because the run was paused still waits: the paused run keeps its
+    // question, and resuming it asks again (or `--approve` gives it).
+    let still_waiting = |error: &TaskError| {
+        matches!(error, TaskError::AwaitingApproval(_))
+            && task.run.halt.reason() <= crate::run::StopReason::Pause
+    };
     if task.canceled()
-        && matches!(result, Err(ref error) if !matches!(error, TaskError::Rejected(_)))
+        && matches!(result, Err(ref error) if !matches!(error, TaskError::Rejected(_)) && !still_waiting(error))
     {
         return Err(TaskError::Canceled);
     }
