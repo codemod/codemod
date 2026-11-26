@@ -829,7 +829,19 @@ impl<'s, 'a> Builder<'s, 'a> {
 
             let function = self.enclosing_fn(declaration);
             let name = scoping.symbol_name(symbol).to_string();
-            let binding = self.describe(scoping.symbol_span(symbol), kind, Some(name), function);
+            // A binding's span can take in its type annotation (`x: string`):
+            // keep only the name, so the node lands on the identifier and a
+            // query on it finds a value.
+            let mut span = scoping.symbol_span(symbol);
+            let text = self
+                .semantic
+                .source_text()
+                .get(span.start as usize..span.end as usize)
+                .unwrap_or("");
+            if text.len() > name.len() && text.starts_with(name.as_str()) {
+                span = Span::new(span.start, span.start + name.len() as u32);
+            }
+            let binding = self.describe(span, kind, Some(name), function);
             self.flow.nodes[binding as usize].kind = kind;
             self.flow.nodes[binding as usize].index = index;
             self.flow.nodes[binding as usize].binding = true;

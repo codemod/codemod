@@ -367,3 +367,11 @@ jssg_test! {
     target: "bus.ts",
     scope: workspace,
 }
+
+jssg_test! {
+    name: test_uses_land_on_a_type_annotated_name,
+    language: CodemodLang::Static(SupportLang::TypeScript),
+    codemod: "ts_uses_typed_binding.js",
+    fixture_dir: "typescript/typed_bindings",
+    target: "input.ts",
+}

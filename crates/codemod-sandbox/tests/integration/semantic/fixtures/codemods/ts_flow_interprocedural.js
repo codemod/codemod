@@ -126,7 +126,7 @@ export default async function transform(root) {
   const other = describe(await sourcesAcross(argOf("log($A)")));
   expectHas(other, 'app.ts:call:normalize("literal")', "log(other)");
   expectHas(other, "lib.ts:return:value.trim()", "log(other)");
-  expectHas(other, "lib.ts:parameter:value: string", "log(other)");
+  expectHas(other, "lib.ts:parameter:value", "log(other)");
   expectHas(other, 'app.ts:literal:"literal"', "log(other)");
   expectLacks(other, "app.ts:member:req.body.name", "log(other)");
   // The sources lookup alone stays in the function: the call is a boundary
@@ -140,7 +140,7 @@ export default async function transform(root) {
   // A parameter with callers is not a boundary: its sources are the
   // arguments at every call site.
   const x = describe(await sourcesAcross(find("return x").child(1)));
-  expectHas(x, "app.ts:parameter:x: unknown", "x");
+  expectHas(x, "app.ts:parameter:x", "x");
   expectHas(x, "app.ts:literal:5", "x");
   expectHas(x, "app.ts:member:req.body.name", "x");
 
@@ -153,16 +153,17 @@ export default async function transform(root) {
       named(site.field("arguments")).forEach((argument, i) => {
         const parameter = parameters[i];
         if (!parameter) return;
-        const name = parameter.field("pattern")?.text() ?? parameter.text();
-        intoParameters.push([argument, parameter, { kind: "parameter", via: "parameter", name, index: i }]);
+        const binding = parameter.field("pattern") ?? parameter;
+        const name = binding.text();
+        intoParameters.push([argument, binding, { kind: "parameter", via: "parameter", name, index: i }]);
       });
     }
   }
   const reached = await crawl([uses, lookup(intoParameters)], find("req.body.name"));
   const body = [...reached.values()].filter((edge) => edge);
   const to = describe(body);
-  expectHas(to, "lib.ts:parameter:value: string", "req.body.name");
-  expectHas(to, "lib.ts:parameter:sql: string", "req.body.name");
+  expectHas(to, "lib.ts:parameter:value", "req.body.name");
+  expectHas(to, "lib.ts:parameter:sql", "req.body.name");
   expectHas(to, "app.ts:variable:name", "req.body.name");
   expectLacks(to, "app.ts:variable:other", "req.body.name");
   // edge.from crosses files: lib.ts's sql was reached from the argument
