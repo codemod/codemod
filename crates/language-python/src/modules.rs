@@ -10,7 +10,7 @@
 
 use crate::flow_host::PyFlow;
 use language_core::{
-    ByteRange, DefinitionKind, DefinitionResult, ImportKind, Importer, ImportersFile,
+    ByteRange, DefinitionKind, DefinitionResult, Import, ImportKind, Importer, ImportersFile,
     ImportersResult, SemanticError, SemanticResult, SpecifierOptions, SpecifierStyle, SymbolKind,
     SymbolLocation, UnparsedFile,
 };
@@ -42,6 +42,8 @@ const MONKEYPATCH_CALLS: &[&str] = &["monkeypatch.setattr", "monkeypatch.delattr
 #[derive(Default)]
 struct ImportersIndex {
     by_target: HashMap<PathBuf, Vec<(PathBuf, Importer)>>,
+    /// The same references by the file that makes them, with their targets.
+    by_file: HashMap<PathBuf, Vec<(PathBuf, Importer)>>,
     contents: HashMap<PathBuf, Arc<str>>,
     unparsed: Vec<UnparsedFile>,
 }
@@ -359,6 +361,26 @@ where
         }
     }
 
+    /// The workspace modules `file` refers to, from the importers table:
+    /// installed packages (virtual environments, `site-packages`) are left
+    /// out.
+    pub(crate) fn imports(&self, file: &Path) -> Vec<Import> {
+        let file = self.flow.canonical(file);
+        self.index()
+            .by_file
+            .get(&file)
+            .into_iter()
+            .flatten()
+            .filter(|(target, _)| self.flow.in_workspace(target))
+            .map(|(target, importer)| Import {
+                range: importer.range,
+                kind: importer.kind,
+                specifier: importer.specifier.clone(),
+                target: target.clone(),
+            })
+            .collect()
+    }
+
     fn index(&self) -> Arc<ImportersIndex> {
         if let Some(index) = self.flow.modules.importers.read().as_ref() {
             return Arc::clone(index);
@@ -397,13 +419,14 @@ where
             if refs.is_empty() {
                 continue;
             }
-            for (target, importer) in refs {
+            for (target, importer) in &refs {
                 index
                     .by_target
-                    .entry(target)
+                    .entry(target.clone())
                     .or_default()
-                    .push((file.clone(), importer));
+                    .push((file.clone(), importer.clone()));
             }
+            index.by_file.insert(file.clone(), refs);
             index.contents.insert(file, content);
         }
         index

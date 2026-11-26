@@ -373,6 +373,10 @@ impl SemanticProvider for RuffSemanticProvider {
         Ok(self.modules("importers")?.importers(target))
     }
 
+    fn imports(&self, file: &Path) -> SemanticResult<Vec<language_core::Import>> {
+        Ok(self.modules("imports")?.imports(file))
+    }
+
     fn public_specifiers(&self, file: &Path) -> SemanticResult<Vec<String>> {
         Ok(self.modules("publicSpecifiers")?.public_specifiers(file))
     }

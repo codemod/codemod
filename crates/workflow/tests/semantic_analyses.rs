@@ -319,3 +319,46 @@ export default async function main() {
     assert_eq!(output(&report).unwrap(), json!(["function run() {"]));
     assert!(h.read("src/a.ts").starts_with("import"));
 }
+
+#[test]
+fn crawling_importers_finds_every_file_that_depends_on_a_module() {
+    let h = harness();
+    h.write("src/b.ts", "import { run } from \"./a\";\nrun();\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, symbols, crawl } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "src/lib.ts" }, async (file) => {
+    const reached = await crawl(symbols("typescript").importers, [parse(file).root()]);
+    return [...reached.keys()].map((root) => root.getRoot().filename().split("/").pop()).sort();
+  }));
+  return found.outputs.flat();
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(["a.ts", "b.ts", "lib.ts"]));
+}
+
+#[test]
+fn imports_land_on_the_modules_a_file_names_with_the_statement_as_site() {
+    let report = harness().start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, symbols } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "src/a.ts" }, (file) => {
+    const edges = symbols("typescript").imports.get(parse(file).root()) ?? [];
+    return edges.map((e) => `${e.site.text()} -> ${e.node.getRoot().filename().split("/").pop()}`);
+  }));
+  return found.outputs.flat();
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!(["import { helper } from \"./lib\"; -> lib.ts"])
+    );
+}

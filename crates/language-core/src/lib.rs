@@ -25,7 +25,7 @@ pub use entry_points::{
 };
 pub use error::{SemanticError, SemanticResult};
 pub use modules::{
-    ImportKind, Importer, ImportersFile, ImportersResult, SpecifierOptions, SpecifierStyle,
+    Import, ImportKind, Importer, ImportersFile, ImportersResult, SpecifierOptions, SpecifierStyle,
 };
 pub use noop::NoopSemanticProvider;
 pub use provider::{ProviderMode, SemanticProvider};

@@ -67,3 +67,60 @@ fn without_types_a_call_only_the_type_explains_is_left_out() {
     let report = shop().start(&SAVE_CALLEES.replace("TYPES", ""), Value::Null);
     assert_eq!(output(&report).unwrap(), json!([]));
 }
+
+fn layers() -> Harness {
+    let h = Harness::new();
+    h.write("app/__init__.py", "");
+    h.write("app/db.py", "def connect():\n    pass\n");
+    h.write("app/orders.py", "from app.db import connect\n");
+    h.write("app/views.py", "from . import orders\n");
+    h.write("app/settings.py", "DEBUG = True\n");
+    h
+}
+
+#[test]
+fn crawling_importers_finds_every_file_that_depends_on_a_module() {
+    let report = layers().start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, symbols, crawl } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "app/db.py" }, async (file) => {
+    const reached = await crawl(symbols("python").importers, [parse(file).root()]);
+    return [...reached.keys()].map((root) => root.getRoot().filename().split("/").pop()).sort();
+  }));
+  return found.outputs.flat();
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!(["db.py", "orders.py", "views.py"])
+    );
+}
+
+#[test]
+fn imports_land_on_the_modules_a_file_names_with_the_statement_as_site() {
+    let report = layers().start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, symbols } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "app/views.py" }, (file) => {
+    const edges = symbols("python").imports.get(parse(file).root()) ?? [];
+    return edges.map((e) => `${e.site.text()} -> ${e.node.getRoot().filename().split("/").pop()}`);
+  }));
+  return found.outputs.flat();
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!([
+            "from . import orders -> __init__.py",
+            "from . import orders -> orders.py"
+        ])
+    );
+}

@@ -2,8 +2,9 @@
 
 use crate::{
     ByteRange, CallGraphOptions, CallGraphResult, DefinitionOptions, DefinitionResult, EntryPoint,
-    EntryPointRule, FlowOptions, FlowResult, FunctionEntryPoints, ImportersResult, MutationOptions,
-    MutationsResult, ReferencesResult, SemanticError, SemanticResult, SpecifierOptions,
+    EntryPointRule, FlowOptions, FlowResult, FunctionEntryPoints, Import, ImportersResult,
+    MutationOptions, MutationsResult, ReferencesResult, SemanticError, SemanticResult,
+    SpecifierOptions,
 };
 use std::path::{Path, PathBuf};
 
@@ -187,6 +188,16 @@ pub trait SemanticProvider: Send + Sync {
     /// The default is an `Unsupported` error.
     fn importers(&self, _target: &Path) -> SemanticResult<ImportersResult> {
         Err(unsupported("importers"))
+    }
+
+    /// The workspace modules `file` refers to, the same references
+    /// `importers` finds from the other end: one per statement or call and
+    /// module, in source order. Modules outside the workspace (installed
+    /// packages) are left out.
+    ///
+    /// The default is an `Unsupported` error.
+    fn imports(&self, _file: &Path) -> SemanticResult<Vec<Import>> {
+        Err(unsupported("imports"))
     }
 
     /// The specifiers other packages can import `file` with: its package's

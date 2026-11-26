@@ -322,6 +322,13 @@ impl SemanticProvider for LazySemanticProvider {
         }
     }
 
+    fn imports(&self, file: &Path) -> SemanticResult<Vec<language_core::Import>> {
+        match self.get_or_init(Self::detect_language(file)) {
+            Some(provider) => provider.imports(file),
+            None => Err(unsupported_language("imports", file)),
+        }
+    }
+
     fn public_specifiers(&self, file: &Path) -> SemanticResult<Vec<String>> {
         match self.get_or_init(Self::detect_language(file)) {
             Some(provider) => provider.public_specifiers(file),

@@ -1181,6 +1181,33 @@ impl AccurateAnalyzer {
         }
     }
 
+    /// The workspace modules `file` refers to, from the importers table:
+    /// installed packages (anything under `node_modules`) are left out.
+    pub fn imports(&self, file: &Path) -> Vec<language_core::Import> {
+        let file = self.canonical_path(file);
+        let root = self.canonical_path(&self.workspace_root);
+        let index = self.importers_index();
+        index
+            .by_file
+            .get(&file)
+            .into_iter()
+            .flatten()
+            .filter(|(target, _)| {
+                target.strip_prefix(&root).is_ok_and(|relative| {
+                    !relative
+                        .components()
+                        .any(|part| part.as_os_str() == "node_modules")
+                })
+            })
+            .map(|(target, importer)| language_core::Import {
+                range: importer.range,
+                kind: importer.kind,
+                specifier: importer.specifier.clone(),
+                target: target.clone(),
+            })
+            .collect()
+    }
+
     /// The importers table, built on first use.
     fn importers_index(&self) -> Arc<ImportersIndex> {
         self.importers_index
@@ -1307,13 +1334,14 @@ impl AccurateAnalyzer {
             if refs.is_empty() {
                 continue;
             }
-            for (target, importer) in refs {
+            for (target, importer) in &refs {
                 index
                     .by_target
-                    .entry(target)
+                    .entry(target.clone())
                     .or_default()
-                    .push((file.clone(), importer));
+                    .push((file.clone(), importer.clone()));
             }
+            index.by_file.insert(file.clone(), refs);
             index.contents.insert(file, content);
         }
         index.unparsed = FlowHost::parse_failures(self);
@@ -2425,6 +2453,8 @@ type FileRefs = (PathBuf, Arc<str>, Vec<(PathBuf, language_core::Importer)>);
 #[derive(Default)]
 struct ImportersIndex {
     by_target: HashMap<PathBuf, Vec<(PathBuf, language_core::Importer)>>,
+    /// The same references by the file that makes them, with their targets.
+    by_file: HashMap<PathBuf, Vec<(PathBuf, language_core::Importer)>>,
     contents: HashMap<PathBuf, Arc<str>>,
     unparsed: Vec<UnparsedFile>,
 }
