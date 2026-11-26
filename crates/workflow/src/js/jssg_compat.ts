@@ -4,9 +4,9 @@
 //
 // The YAML translation uses it: workflow.yaml runs, and what
 // `codemod workflow upgrade` writes for a transform a plain callback cannot
-// call (one that uses `root.rename()` or `jssgTransform`); the `codemod`
-// package ships its types (types/modules/jssg-compat.d.ts). Upgraded
-// workflows call other transforms from plain callbacks.
+// call (one that uses `root.rename()` or `jssgTransform`). This is an internal
+// adapter, not a public TypeScript API. Upgraded workflows call other
+// transforms from plain callbacks.
 // What it reproduces: the root the transform gets (with the step's semantic
 // analysis), `options.params`, `options.matrixValues`, `options.language`,
 // `options.targetDir` and `options.matches` (from `getSelector`, whose files
@@ -166,6 +166,7 @@ async function apply(
  * Run the transform on the callback's file and apply what it did; returns
  * its `data`, which the step collects into its outputs.
  */
+/** @internal */
 export async function jssgFile(
   module: JssgModule,
   callbackFile: CallbackFile,
@@ -193,6 +194,7 @@ export async function jssgFile(
  * `"matched"` when its selector matched but it would not (such files are
  * kept only when no file would change), nothing otherwise. Changes nothing.
  */
+/** @internal */
 export async function jssgWouldChange(
   module: JssgModule,
   file: CallbackFile,

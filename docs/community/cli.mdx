@@ -4,6 +4,8 @@ sidebarTitle: 'CLI'
 description: "Scaffold, publish, and run codemod projects, recipes, or packages from your terminal using Codemod's open-source CLI."
 ---
 
+import Experimental from "/snippets/experimental.mdx";
+
 <Card title="Quickstart" icon="rocket" href="/community/oss-quickstart">
   New to Codemod? Follow the step-by-step guide to scaffold, test, and publish your first codemod.
 </Card>
@@ -75,6 +77,8 @@ More detail: [Telemetry compliance](https://codemod.com/telemetry-compliance).
 Codemod CLI is accessible using the `npx codemod` command. The following commands and options are available:
 
 ### `codemod ai`
+
+<Experimental />
 
 <Info>
   In an interactive terminal, bare `npx codemod` opens a launcher. In npm-based usage, that launcher refreshes to the latest published CLI before prompting you to create a package or run one from the registry. In non-interactive contexts, the CLI prints next steps and exits with status `1`.
@@ -306,6 +310,8 @@ npx codemod ai resource <uri-or-name> [--json]
 
 ### Package skill install (prompted from package run)
 
+<Experimental />
+
 Install a package skill from registry metadata into harness skill paths.
 The installer copies the authored skill directory recursively from the package (`agents/skill/<skill-name>/`), including any additional files you add (for example extra `.md` references).
 This flow also updates managed Codemod discovery hints in harness discovery guides (`CLAUDE.md` for Claude, `AGENTS.md` and `.goosehints` for Goose, `AGENTS.md` for Cursor/OpenCode/Codex) without duplication, then prompts you to restart/reload the harness session.
@@ -403,22 +409,34 @@ Package runs use the 2.0 engine by default. `codemod run --v1 <package>` (or `CO
 </ResponseField>
 
 <ResponseField name="--allow-ai" type="boolean">
+  <Experimental />
+
   Let `assess()` from [`codemod/assess`](/community/workflows/reference#assessing-files-with-codemod%2Fassess) send files to the decision model (System One unless configured otherwise). Without it, an interactive run asks before any step runs, and an unattended run that imports `codemod/assess` fails at once. The provider's key comes from the environment (`TYPESAFE_API_KEY`, `OPENAI_API_KEY`); an interactive run without one asks for a key to use for that run only. `workflow resume` checks both again.
 </ResponseField>
 
 <ResponseField name="--agent <ID>" type="string">
+  <Experimental />
+
   The coding agent `agent(...)` steps use (`claude-code`, `codex`, ...). Defaults to the one saved in the launcher; without either, an interactive run asks when a step needs one.
 </ResponseField>
 
 <ResponseField name="--model <PROVIDER/MODEL>" type="string">
+  <Experimental />
+
   The decision model `assess()` uses, e.g. `openai/gpt-6-luna`; a bare model name is System One's (`systemone/jev-latest`). It comes before the model saved in the launcher (`"decisionModel"` in the CLI's `config.json`) and the `DECISION_PROVIDER` / `DECISION_MODEL` variables; a `decision_model` in the package's `codemod.yaml`, or a model named in the `assess()` call, still comes first.
 </ResponseField>
 
-**The launcher (experimental, opt-in).** By default a run in a terminal prints plain lines and asks with plain prompts. With `CODEMOD_LAUNCHER=1`, `workflow run`, `codemod <package>` and `workflow resume` open a full-screen terminal UI instead. A new run starts on a setup screen (target, dry run, params, coding agent, decision model; your agent and model are saved for next time); then the screen shows the run's steps, logs and diffs, with approvals answered in place (`y` approves, `n` rejects, which ends the run, and `l` stops it there to resume later). After a dry run, `a` runs it for real. Even with `CODEMOD_LAUNCHER=1` it does not open with `--no-interactive`, `--format jsonl`, in CI, or when input or output is piped; those runs print the plain output.
+**The launcher (opt-in)**
+
+<Experimental />
+
+By default a run in a terminal prints plain lines and asks with plain prompts. With `CODEMOD_LAUNCHER=1`, `workflow run`, `codemod <package>` and `workflow resume` open a full-screen terminal UI instead. A new run starts on a setup screen (target, dry run, params, coding agent, decision model; your agent and model are saved for next time); then the screen shows the run's steps, logs and diffs, with approvals answered in place (`y` approves, `n` rejects, which ends the run, and `l` stops it there to resume later). After a dry run, `a` runs it for real. Even with `CODEMOD_LAUNCHER=1` it does not open with `--no-interactive`, `--format jsonl`, in CI, or when input or output is piped; those runs print the plain output.
 
 A run is unattended when you pass `--no-interactive`, when there is no terminal to ask on (input piped in), and when the `CI` environment variable is set (to anything but empty, `0` or `false`). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something. See [Running in CI and from agents](/community/workflows/ci-and-agents).
 
 <ResponseField name="--managed-git" type="boolean">
+  <Experimental />
+
   Let `branch`, `commit` and `pullRequest` steps (or `branch_name`, `commit` and `pull_request` in `workflow.yaml`) change the repository. Without it, those steps are recorded as skipped.
 </ResponseField>
 
@@ -436,10 +454,12 @@ A run is unattended when you pass `--no-interactive`, when there is no terminal 
   Every event has `seq`, which counts up through the whole run, also across `workflow resume`, and `ts`. Step events carry `step`, the step's key (its position, or `"3/0"` for step 0 of the codemod that step 3 runs), and `parent` (`"3"` there, else `null`); `step_started` and `step_finished` also carry the step's `kind` (`forEachFile`, `approval`, `shell`, ...). `run_started` echoes the run's `target`, `params`, `dry_run` and `settings`. `run_log` (the workflow body's `console` output) has the `step` of the nested codemod it came from, or `null`. A real run reports each file a step changes as a `step_diff` event (`path`, `diff`, `additions`, `deletions`; a diff over 256 KiB is left out, with `diff_omitted`); a dry run reports `run_diff` at the end instead. The TypeScript types are in `codemod/protocol`; see [Drive codemod from a program](/community/workflows/control).
 
   In text format, a run that returned something ends with `Output: <JSON>`, cut at 200 characters.
+
+  Experimental API notices go to stderr in text mode and appear as `experimental` events with an `api` field in JSONL mode. They are not part of `output`.
 </ResponseField>
 
 <ResponseField name="--control stdio" type="string">
-  Let another program drive the run: it reads the events on stdout and writes commands on stdin (`approve`, `reject`, `answer`, `stop`), one JSON object per line. The first line is a `hello` with the run's id. At an approval or an agent question the run waits for an answer instead of exiting, and a dry run waits too. Closing stdin pauses the run. Needs `--format jsonl`. Experimental: see [Drive codemod from a program](/community/workflows/control).
+  Let another program drive the run: it reads the events on stdout and writes commands on stdin (`approve`, `reject`, `answer`, `stop`), one JSON object per line. The first line is a `hello` with the run's id. At an approval or an agent question the run waits for an answer instead of exiting, and a dry run waits too. Closing stdin pauses the run. Needs `--format jsonl`. See [Drive codemod from a program](/community/workflows/control).
 
   ```bash
   npx codemod workflow run -w workflow.ts --format jsonl --control stdio
@@ -473,7 +493,7 @@ A run is unattended when you pass `--no-interactive`, when there is no terminal 
 </ResponseField>
 
 <ResponseField name="--install-skill" type="boolean">
-  In non-interactive runs, execute `installSkill` steps instead of failing them.
+  **Experimental.** In non-interactive runs, execute `installSkill` steps instead of failing them.
 
   ```bash
   npx codemod workflow run -w workflow.ts --no-interactive --install-skill
@@ -559,7 +579,7 @@ npx codemod workflow resume --id <ID> [--approve [<QUESTION_ID>]] [--force]
 </ResponseField>
 
 <ResponseField name="--install-skill" type="boolean">
-  In non-interactive resumes, execute pending `installSkill` steps.
+  **Experimental.** In non-interactive resumes, execute pending `installSkill` steps.
 
   ```bash
   npx codemod workflow resume --id <ID> --approve --no-interactive --install-skill
@@ -702,6 +722,8 @@ npx codemod workflow cancel -i <ID>
 
 **`workflow attach`**
 
+<Experimental />
+
 Print a run's events as `--format jsonl` does: a `hello` line, every event the run has had so far, then, while the run is executing (in another terminal or process), its events as they come. It ends when the run stops executing. Every run keeps its events in the run store (dry runs excepted), so this works for runs started in any format, finished ones included. It only watches: answering a run's questions takes its control channel, or `workflow resume`.
 
 ```bash
@@ -718,6 +740,8 @@ npx codemod workflow attach -i <ID> [--from-seq <SEQ>]
 
 **`workflow inspect`**
 
+<Experimental />
+
 Describe a workflow without running it: what a setup form needs.
 
 ```bash
@@ -727,6 +751,8 @@ npx codemod workflow inspect -w <workflow.ts|workflow.yaml|directory> [--format 
 `json` prints `workflow`, `language`, `params` (each declared param's `name`, `type` as written, `optional`, `description` from its doc comment, and `default` from an `@default` tag), `modules` (what it imports), `capabilities` (always empty: callbacks get none), `requestedCapabilities` (what its `codemod.yaml` asks for, which is ignored), `uses` (whether it has `http`, `approval`, `agent`, `shell`, `git`, `codemod`, `install_skill`, `wait` and `assess` calls) and `steps`: each `step(...)` call in the source, with its `label` when it is a string and its `kind`. A step in a loop is listed once.
 
 **`workflow send`**
+
+<Experimental />
 
 Send an event to a workflow run. A [`waitForEvent`](/community/workflows/reference#waiting) step waiting for it continues with the event's data. If no step waits for it yet, or the run is not running, the event is kept until a step takes it, and `send` says so. A run that has succeeded, or was canceled or rejected, takes no more events.
 
@@ -995,7 +1021,7 @@ Both workflows use [trusted publishers](/community/publishing#trusted-publishers
 </ResponseField>
 
 <ResponseField name="--skill" type="boolean">
-  Scaffold a skill-only package with a workflow-first template (`workflow.ts` contains `installSkill`) and authored files under `agents/skill/<skill-name>/`.
+  **Experimental.** Scaffold a skill-only package with a workflow-first template (`workflow.ts` contains `installSkill`) and authored files under `agents/skill/<skill-name>/`.
 
   The generated `SKILL.md` uses the authored package skill markers:
   - `codemod-compatibility: skill-package-v1`

@@ -2,6 +2,8 @@
 title: "API Reference"
 ---
 
+import Experimental from "/snippets/experimental.mdx";
+
 ## Quick Reference
 
 ### Core Types
@@ -146,6 +148,8 @@ order mark (BOM). An empty edits array returns the original source unchanged. Ca
 `commitEdits` on a non-root node returns only that node's updated text.
 
 ### Semantic Analysis Methods
+
+<Experimental />
 
 <Info>
 Semantic analysis is only supported for **JavaScript/TypeScript** (using oxc) and **Python** (using ruff). For other languages, these methods return null or empty arrays. See [Semantic Analysis](/community/jssg/semantic-analysis) for details.
@@ -937,6 +941,8 @@ Language kinds and editor IntelliSense are available via [codemod/ast-grep/langs
 </Info>
 
 ## LLM Generation
+
+<Experimental />
 
 ```ts
 import generate, { type LlmRequest, type LlmResponse } from "codemod/llm";

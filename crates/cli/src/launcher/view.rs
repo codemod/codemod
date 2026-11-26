@@ -120,6 +120,7 @@ pub struct RunView {
     pub steps: Vec<StepView>,
     /// Everything the run printed: its own output and every step's.
     pub output: Vec<String>,
+    pub experimental_notices: Vec<String>,
     pub diffs: Vec<DiffView>,
     /// 0 is the whole run; `i + 1` is `steps[i]`.
     pub selected: usize,
@@ -147,6 +148,7 @@ impl RunView {
             phase: Phase::Starting,
             steps: Vec::new(),
             output: Vec::new(),
+            experimental_notices: Vec::new(),
             diffs: Vec::new(),
             selected: 0,
             pane: Pane::Logs,
@@ -216,6 +218,11 @@ impl RunView {
             return;
         };
         match event {
+            Event::Experimental { api } => {
+                let notice = crate::experimental_notice(&api);
+                self.log(None, notice.clone());
+                self.experimental_notices.push(notice);
+            }
             Event::RunStarted {
                 run_id, resumed, ..
             } => {

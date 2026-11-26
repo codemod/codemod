@@ -205,6 +205,11 @@ impl Run {
     }
 
     #[napi]
+    pub fn experimental(&self, api: String) {
+        self.inner.run.experimental(&api);
+    }
+
+    #[napi]
     pub fn log(&self, position: Option<u32>, line: String) {
         self.inner.run.log(position.map(u64::from), line);
     }

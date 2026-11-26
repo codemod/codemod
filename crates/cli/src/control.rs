@@ -666,6 +666,9 @@ mod protocol_samples {
                     host: Some("quickjs".into()),
                 },
             },
+            Event::Experimental {
+                api: "http()".into(),
+            },
             Event::StepStarted {
                 at: StepAt::top(0),
                 label: "Replace".into(),
@@ -813,7 +816,8 @@ mod protocol_samples {
         ];
         for event in &events {
             match event {
-                Event::RunStarted { .. }
+                Event::Experimental { .. }
+                | Event::RunStarted { .. }
                 | Event::StepStarted { .. }
                 | Event::StepReplayed { .. }
                 | Event::StepProgress { .. }

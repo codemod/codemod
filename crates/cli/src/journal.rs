@@ -4,6 +4,7 @@
 //! events are numbered the same everywhere, and keep counting up when the
 //! run is resumed.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use butterflow_state::run_store::RunStore;
@@ -30,35 +31,38 @@ pub(crate) struct Recorder {
     out: Arc<dyn Stamped>,
 }
 
+#[derive(Default)]
 struct State {
     /// The next event's number.
     seq: u64,
     /// How big the journal is.
     bytes: u64,
+    /// API notices already reported in this run, including before a resume.
+    experimental: HashSet<String>,
 }
 
 impl Recorder {
     /// Numbering continues from the run's journal, when it has one.
     pub fn new(store: Arc<dyn RunStore>, run_id: Option<String>, out: Arc<dyn Stamped>) -> Self {
-        let (seq, bytes) = run_id
+        let state = run_id
             .as_deref()
             .map(|id| resume_point(store.as_ref(), id))
-            .unwrap_or((0, 0));
+            .unwrap_or_default();
         Self {
             store,
             run_id,
-            state: Mutex::new(State { seq, bytes }),
+            state: Mutex::new(state),
             out,
         }
     }
 }
 
-/// The number after the journal's last event, and the journal's size.
-fn resume_point(store: &dyn RunStore, run_id: &str) -> (u64, u64) {
-    let Ok((lines, size)) = store.read_journal(run_id, 0) else {
-        return (0, 0);
+/// The journal's numbering, size, and notices already sent.
+fn resume_point(store: &dyn RunStore, run_id: &str) -> State {
+    let Ok((lines, bytes)) = store.read_journal(run_id, 0) else {
+        return State::default();
     };
-    let next = lines
+    let seq = lines
         .iter()
         .rev()
         .find_map(|line| {
@@ -68,7 +72,22 @@ fn resume_point(store: &dyn RunStore, run_id: &str) -> (u64, u64) {
                 .as_u64()
         })
         .map_or(0, |seq| seq + 1);
-    (next, size)
+    let experimental = lines
+        .iter()
+        .filter(|line| line.contains("\"event\":\"experimental\""))
+        .filter_map(|line| {
+            let event = serde_json::from_str::<Value>(line).ok()?;
+            if event.get("event")?.as_str()? != "experimental" {
+                return None;
+            }
+            Some(event.get("api")?.as_str()?.to_owned())
+        })
+        .collect();
+    State {
+        seq,
+        bytes,
+        experimental,
+    }
 }
 
 /// Events a full journal leaves out.
@@ -89,6 +108,11 @@ impl EventSink for Recorder {
         // Held while passing the event on, so events come out in `seq`
         // order even when several worker threads report at once.
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Event::Experimental { api } = &event {
+            if !state.experimental.insert(api.clone()) {
+                return;
+            }
+        }
         let mut record = serde_json::to_value(&event).unwrap_or(Value::Null);
         if let Value::Object(map) = &mut record {
             map.insert("seq".into(), state.seq.into());
@@ -175,6 +199,25 @@ mod tests {
         let last: Value = serde_json::from_str(&journal[2]).unwrap();
         assert_eq!(last["line"], "three");
         assert_eq!(last["seq"], 2);
+    }
+
+    #[test]
+    fn experimental_notices_are_once_per_api_even_across_resume() {
+        let store: Arc<dyn RunStore> = Arc::new(MemoryStore::default());
+        run(store.as_ref(), "a");
+        let kept = Arc::new(Kept::default());
+        let notice = |api: &str| Event::Experimental { api: api.into() };
+        let first = Recorder::new(Arc::clone(&store), Some("a".into()), kept.clone());
+        first.emit(notice("http()"));
+        first.emit(notice("http()"));
+        let second = Recorder::new(store, Some("a".into()), kept.clone());
+        second.emit(notice("http()"));
+        second.emit(notice("sleep()"));
+        let events = kept.0.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["api"], "http()");
+        assert_eq!(events[1]["api"], "sleep()");
+        assert_eq!(events[1]["seq"], 1);
     }
 
     #[test]

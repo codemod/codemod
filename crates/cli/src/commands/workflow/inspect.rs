@@ -16,7 +16,7 @@ pub struct Command {
     #[arg(long = "workflow-name", value_name = "NAME")]
     workflow_name: Option<String>,
 
-    /// Output format: "text" (default), or "json" for programs (a setup form)
+    /// Output format: "text" (default), or "json" for programs (experimental)
     #[arg(long, value_enum, default_value_t = ListFormat::Text)]
     format: ListFormat,
 }
@@ -27,6 +27,7 @@ pub struct Command {
 /// asks for are listed as `requestedCapabilities`: callbacks no longer get
 /// them, so `capabilities` is always empty.
 pub async fn handler(args: &Command) -> Result<()> {
+    eprintln!("{}", crate::experimental_notice("workflow inspect"));
     let (path, dir) =
         resolve_workflow_source_with_name(&args.workflow, args.workflow_name.as_deref())?;
     let typescript = codemod_workflow::is_typescript(&path);

@@ -17,7 +17,10 @@ const MODULES: Readonly<Record<string, string>> = {
 
 export const CODEMOD_MODULES: readonly string[] = Object.keys(MODULES);
 
-/** The URL an older `codemod:*` specifier resolves to, or undefined. */
+/**
+ * The URL an older `codemod:*` specifier resolves to, or undefined.
+ * @experimental
+ */
 export function resolveCodemodModule(specifier: string): string | undefined {
   const path = MODULES[specifier];
   return path ? new URL(path, import.meta.url).href : undefined;

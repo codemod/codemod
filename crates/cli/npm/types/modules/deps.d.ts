@@ -4,16 +4,23 @@
 declare module "codemod:deps" {
   import type { Globs, Task } from "codemod:workflow";
 
+  /** @experimental */
   export type Ecosystem = "npm" | "cargo" | "pypi";
+  /** @experimental */
   export type DependencyKind = "prod" | "dev" | "peer" | "optional" | "build";
+  /** @experimental */
   export type KindsOption = { kinds?: DependencyKind | readonly DependencyKind[] };
   /**
    * Options of the methods that list dependents. They list the repository's
    * own packages only, unless `includeThirdParty` is true.
+   * @experimental
    */
   export type DependentsOptions = KindsOption & { includeThirdParty?: boolean };
 
-  /** A `name@version` the lockfiles install, or one of the repository's own packages. */
+  /**
+   * A `name@version` the lockfiles install, or one of the repository's own packages.
+   * @experimental
+   */
   export interface PackageNode {
     readonly ecosystem: Ecosystem;
     readonly name: string;
@@ -44,7 +51,10 @@ declare module "codemod:deps" {
     toString(): string;
   }
 
-  /** One declared dependency. */
+  /**
+   * One declared dependency.
+   * @experimental
+   */
   export interface DependencyEdge {
     readonly from: PackageNode;
     /** The installed node; null when the lockfile does not resolve it, as for most peer edges. */
@@ -57,7 +67,10 @@ declare module "codemod:deps" {
     accepts(version: string): boolean | null;
   }
 
-  /** What an edge becomes in a step's result. */
+  /**
+   * What an edge becomes in a step's result.
+   * @experimental
+   */
   export interface RecordedEdge {
     from: string;
     /** `name@version`, or the bare name when the edge does not resolve. */
@@ -66,7 +79,10 @@ declare module "codemod:deps" {
     range: string | null;
   }
 
-  /** A `dependencyGraph` result as recorded: nodes become `name@version`, edges `RecordedEdge`. */
+  /**
+   * A `dependencyGraph` result as recorded: nodes become `name@version`, edges `RecordedEdge`.
+   * @experimental
+   */
   export type Recorded<T> = T extends PackageNode
     ? string
     : T extends DependencyEdge
@@ -82,6 +98,7 @@ declare module "codemod:deps" {
   /**
    * The repository's lockfiles as a live graph. It is only valid inside the
    * `dependencyGraph` callback; only what the callback returns is recorded.
+   * @experimental
    */
   export interface DependencyGraph {
     /**
@@ -139,15 +156,18 @@ declare module "codemod:deps" {
    *   g.dependents("@material-ui/core", { kinds: "prod" }).map((edge) => edge.from.dir),
    * ));
    * ```
+   * @experimental
    */
   export function dependencyGraph<Output>(
     callback: (graph: DependencyGraph) => Output | PromiseLike<Output>,
   ): Task<Recorded<Awaited<Output>>>;
+  /** @experimental */
   export function dependencyGraph<Output>(
     options: { lockfiles?: Globs },
     callback: (graph: DependencyGraph) => Output | PromiseLike<Output>,
   ): Task<Recorded<Awaited<Output>>>;
 
+  /** @experimental */
   export interface Release {
     version: string;
     yanked: boolean;
@@ -161,6 +181,7 @@ declare module "codemod:deps" {
     devDependencies?: Record<string, string>;
   }
 
+  /** @experimental */
   export interface PackageReleases {
     ecosystem: Ecosystem;
     name: string;
@@ -173,6 +194,7 @@ declare module "codemod:deps" {
    * a `forEachFile` / `dependencyGraph` callback, so the answer is recorded
    * with the step; in the workflow body it rejects. Lookups are cached for the
    * run and asked once per package.
+   * @experimental
    */
   export const registry: {
     npm(name: string): Promise<PackageReleases>;
@@ -182,7 +204,10 @@ declare module "codemod:deps" {
   };
 
   type EcosystemOption = { ecosystem?: Ecosystem };
-  /** Version comparison with npm rules, Cargo's with `{ ecosystem: "cargo" }`, or PEP 440 with `{ ecosystem: "pypi" }`. */
+  /**
+   * Version comparison with npm rules, Cargo's with `{ ecosystem: "cargo" }`, or PEP 440 with `{ ecosystem: "pypi" }`.
+   * @experimental
+   */
   export const semver: {
     /** true, false, or null when the range cannot be read (`workspace:`, `git:` ...). */
     satisfies(version: string, range: string, options?: EcosystemOption): boolean | null;

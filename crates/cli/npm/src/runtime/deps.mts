@@ -3,24 +3,29 @@
 // are exported here so a workflow that imports them still loads, and fail
 // with a clear message when used.
 
+import { experimental } from "./context.mts";
+
 const QUICKJS_ONLY =
   'is not available on the Node.js host yet: run the workflow with the codemod CLI, or test it with { host: "quickjs" }';
 
-function unavailable(what: string): never {
+function unavailable(what: string, api = "codemod/deps.semver"): never {
+  experimental(api);
   throw new Error(`${what} ${QUICKJS_ONLY}`);
 }
 
 export function dependencyGraph(..._args: unknown[]): never {
-  return unavailable("dependencyGraph()");
+  return unavailable("dependencyGraph()", "codemod/deps.dependencyGraph");
+}
+
+function registryLookup(ecosystem: string): Promise<never> {
+  experimental("codemod/deps.registry");
+  return Promise.reject(new Error(`registry.${ecosystem}() ${QUICKJS_ONLY}`));
 }
 
 export const registry = Object.freeze({
-  npm: (_name: string): Promise<never> =>
-    Promise.reject(new Error(`registry.npm() ${QUICKJS_ONLY}`)),
-  cargo: (_name: string): Promise<never> =>
-    Promise.reject(new Error(`registry.cargo() ${QUICKJS_ONLY}`)),
-  pypi: (_name: string): Promise<never> =>
-    Promise.reject(new Error(`registry.pypi() ${QUICKJS_ONLY}`)),
+  npm: (_name: string): Promise<never> => registryLookup("npm"),
+  cargo: (_name: string): Promise<never> => registryLookup("cargo"),
+  pypi: (_name: string): Promise<never> => registryLookup("pypi"),
 });
 
 export const semver = Object.freeze({

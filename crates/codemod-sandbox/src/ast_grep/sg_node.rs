@@ -966,6 +966,7 @@ impl<'js> SgNodeRjs<'js> {
         ctx: Ctx<'js>,
         options: Opt<rquickjs::Object<'js>>,
     ) -> Result<Value<'js>> {
+        crate::sandbox::runtime_module::experimental(&ctx, "SgNode.definition()");
         #[cfg(not(feature = "native"))]
         {
             let _ = options;
@@ -1101,6 +1102,7 @@ impl<'js> SgNodeRjs<'js> {
     /// In accurate mode, this searches the entire workspace.
     #[qjs(rename = "references")]
     pub fn references(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        crate::sandbox::runtime_module::experimental(&ctx, "SgNode.references()");
         #[cfg(not(feature = "native"))]
         {
             return rquickjs::Array::new(ctx.clone())?.into_js(&ctx);

@@ -94,6 +94,9 @@ pub enum ClosedBy {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
+    Experimental {
+        api: String,
+    },
     RunStarted {
         run_id: String,
         workflow: PathBuf,
@@ -131,7 +134,10 @@ pub enum Event {
     },
     /// `console` output from a workflow body: the run's own (`step` is
     /// `null`), or a nested codemod's (`step` is the step running it).
-    RunLog { line: String, step: Option<String> },
+    RunLog {
+        line: String,
+        step: Option<String>,
+    },
     /// What the coding agent running an `agent(...)` step did.
     StepAgent {
         #[serde(flatten)]
@@ -203,7 +209,10 @@ pub enum Event {
         by: ClosedBy,
     },
     /// A command on the control channel could not be followed.
-    ControlError { message: String, line: String },
+    ControlError {
+        message: String,
+        line: String,
+    },
     /// What a dry run would have changed in one file, all its steps
     /// together, as a unified diff: reported when the run ends, before
     /// `RunFinished`, one event per file. A renamed file is its old path

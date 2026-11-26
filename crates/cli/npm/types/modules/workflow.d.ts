@@ -19,6 +19,7 @@ declare module "codemod:workflow" {
    *
    * The engine handles all file discovery (globbing + optional codemod dry-run)
    * before calling the shard function. The function only needs to handle grouping.
+   * @experimental
    */
   export interface ShardInput {
     /** Relative paths of eligible files (pre-filtered by the engine) */
@@ -37,6 +38,7 @@ declare module "codemod:workflow" {
    *
    * Fields prefixed with `_meta_` are excluded from the matrix hash,
    * so re-indexing shards won't invalidate existing task identity.
+   * @experimental
    */
   export interface ShardResult {
     /** Shard identifier (used in PR titles, branch names) */
@@ -227,6 +229,7 @@ declare module "codemod:workflow" {
    * ```ts
    * await sleep("30s");
    * ```
+   * @experimental
    */
   export function sleep(duration: Duration): Promise<null>;
 
@@ -243,6 +246,7 @@ declare module "codemod:workflow" {
    * ```ts
    * const ci = await waitForEvent<{ passed: boolean }>("ci-finished", { timeout: "1h" });
    * ```
+   * @experimental
    */
   export function waitForEvent<Data = JsonValue>(
     name: string,
@@ -291,6 +295,7 @@ declare module "codemod:workflow" {
      * find: `"file"` (the default) looks within each file, `"workspace"`
      * across the selected files of the target (or under `root`), and
      * `"none"` turns it off. Analysis runs only when they are called.
+     * @experimental
      */
     semanticAnalysis?: SemanticAnalysis;
     /**
@@ -304,6 +309,7 @@ declare module "codemod:workflow" {
 
   export type Capability = "fs" | "fetch" | "child_process";
 
+  /** @experimental */
   export type SemanticAnalysis =
     | "file"
     | "workspace"
@@ -356,7 +362,10 @@ declare module "codemod:workflow" {
     error: string;
   }
 
-  /** What a step's `assess()` calls (from `codemod/assess`) used. */
+  /**
+   * What a step's `assess()` calls (from `codemod/assess`) used.
+   * @experimental
+   */
   export interface AssessedUsage {
     /** Calls that were answered. */
     assessments: number;
@@ -375,7 +384,10 @@ declare module "codemod:workflow" {
      * callback throws on every file, the step fails instead.
      */
     failures: FileFailure[];
-    /** Present when the callback called `assess()`: what it used. */
+    /**
+     * Present when the callback called `assess()`: what it used.
+     * @experimental
+     */
     assessed?: AssessedUsage;
   }
 
@@ -393,7 +405,10 @@ declare module "codemod:workflow" {
      * fails instead.
      */
     failures: FileFailure[];
-    /** Present when the callback called `assess()`: what it used. */
+    /**
+     * Present when the callback called `assess()`: what it used.
+     * @experimental
+     */
     assessed?: AssessedUsage;
   }
 
@@ -652,9 +667,11 @@ declare module "codemod:workflow" {
    * A header value for `http()`: the text, or `{ env: "NAME" }` to read it
    * from the environment when the request is sent. The run records the
    * name, never the value, so tokens stay out of the run's records.
+   * @experimental
    */
   export type HttpHeaderValue = string | { env: string };
 
+  /** @experimental */
   export interface HttpOptions {
     /** `"GET"` (the default), `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, ... */
     method?: string;
@@ -678,12 +695,16 @@ declare module "codemod:workflow" {
     dryRun?: "skip" | "perform";
   }
 
+  /** @experimental */
   export interface HttpRequest extends HttpOptions {
     /** An `http://` or `https://` URL. */
     url: string;
   }
 
-  /** The response, as the run records it. */
+  /**
+   * The response, as the run records it.
+   * @experimental
+   */
   export interface HttpResponse {
     status: number;
     statusText: string;
@@ -701,6 +722,7 @@ declare module "codemod:workflow" {
     json?: JsonValue;
   }
 
+  /** @experimental */
   export type HttpTask = Task<Skippable<HttpResponse>>;
 
   /**
@@ -717,8 +739,10 @@ declare module "codemod:workflow" {
    * if (!release.skipped) console.log(release.json);
    *
    * await step("Notify", http({ url: hook, method: "POST", json: { done: true } }));
+   * @experimental
    */
   export function http(url: string, options?: HttpOptions): HttpTask;
+  /** @experimental */
   export function http(request: HttpRequest): HttpTask;
 
   /** What `forEachFile(selector, astGrep(rules))` gives. */
@@ -882,6 +906,7 @@ declare module "codemod:workflow" {
     repeat?: boolean | number;
   }
 
+  /** @experimental */
   export type ShardMethod =
     | {
         type: "directory" | "codeowner";
@@ -900,11 +925,15 @@ declare module "codemod:workflow" {
         function: ShardFunction;
       };
 
-  /** A shard function, written inline or as a file's default export. */
+  /**
+   * A shard function, written inline or as a file's default export.
+   * @experimental
+   */
   export type ShardFunction = (
     input: ShardInput,
   ) => readonly ShardResult[] | PromiseLike<readonly ShardResult[]>;
 
+  /** @experimental */
   export interface ShardOptions {
     method: ShardMethod;
     /** Directory to scan, relative to the target. */
@@ -930,6 +959,8 @@ declare module "codemod:workflow" {
    * Splits files into groups ("shards"), for example one per directory or
    * code owner.
    *
+   * @experimental
+   *
    * @example
    * ```ts
    * import wouldChange from "./scripts/would-change.ts";
@@ -950,7 +981,10 @@ declare module "codemod:workflow" {
     options?: { params?: Readonly<Record<string, unknown>> },
   ): Task<{ output: JsonValue }>;
 
-  /** Coding agents `agent(...)` can run, by id. Aliases such as `"claude"` work too. */
+  /**
+   * Coding agents `agent(...)` can run, by id. Aliases such as `"claude"` work too.
+   * @experimental
+   */
   export type CodingAgent =
     | "claude-code"
     | "codex"
@@ -971,6 +1005,7 @@ declare module "codemod:workflow" {
     | "auggie"
     | "cline";
 
+  /** @experimental */
   export interface AgentOptions {
     /**
      * The coding agent to run, which must be installed. Without one: the run's
@@ -1004,12 +1039,14 @@ declare module "codemod:workflow" {
     llmProtocol?: string;
   }
 
+  /** @experimental */
   export interface AgentUsage {
     inputTokens?: number;
     outputTokens?: number;
     costUsd?: number;
   }
 
+  /** @experimental */
   export interface AgentResult {
     skipped?: true;
     /** The prompt went back to the coding agent this workflow runs inside (`true`), or nowhere (`false`). */
@@ -1027,9 +1064,13 @@ declare module "codemod:workflow" {
     data?: JsonValue;
   }
 
-  /** Hands a prompt to a coding agent. */
+  /**
+   * Hands a prompt to a coding agent.
+   * @experimental
+   */
   export function agent(prompt: string, options?: AgentOptions): Task<AgentResult>;
 
+  /** @experimental */
   export interface InstallSkillOptions {
     /** Package to install, for example `@codemod/jest-to-vitest`. */
     package: string;
@@ -1040,7 +1081,10 @@ declare module "codemod:workflow" {
     force?: boolean;
   }
 
-  /** Installs a package's agent skill into a coding-agent harness. */
+  /**
+   * Installs a package's agent skill into a coding-agent harness.
+   * @experimental
+   */
   export function installSkill(options: InstallSkillOptions): Task<Skippable<{ output: string }>>;
 
   /**
@@ -1094,16 +1138,6 @@ declare module "codemod:workflow" {
 
   /** The run is paused at an approval. */
   export class AwaitingApprovalError extends Error {}
-
-  /**
-   * Evaluates a workflow.yaml `${{ }}` expression.
-   * @internal Emitted by `codemod workflow upgrade`; not for hand-written workflows.
-   */
-  export function __evaluate(
-    kind: "condition" | "string" | "list",
-    expression: string,
-    scope: Readonly<Record<string, unknown>>,
-  ): any;
 }
 
 /**

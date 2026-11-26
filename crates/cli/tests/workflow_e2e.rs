@@ -88,6 +88,71 @@ fn write(dir: &Path, path: &str, text: &str) {
     fs::write(full, text).unwrap();
 }
 
+#[test]
+fn experimental_apis_are_noticed_once_and_do_not_pollute_data() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { parse } from "codemod/ast-grep";
+import { semver } from "codemod/deps";
+import { step, sleep, http } from "codemod/workflow";
+export default async function workflow() {
+  if (false) await step(http("https://example.invalid"));
+  await sleep(1);
+  await sleep(1);
+  if (!semver.lt("1.0.0", "2.0.0")) throw new Error("unexpected comparison");
+  await step("Look up symbols", () => {
+    if (!semver.lt("1.0.0", "2.0.0")) throw new Error("unexpected comparison");
+    const root = parse("typescript", "const x = 1").root();
+    root.definition();
+    root.definition();
+    root.references();
+  });
+  return { finished: true };
+}
+"#,
+    );
+    let text = fixture.run(&[]);
+    assert!(
+        text.status.success(),
+        "{}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let stdout = String::from_utf8(text.stdout).unwrap();
+    let stderr = String::from_utf8(text.stderr).unwrap();
+    assert!(!stdout.contains("Experimental:"));
+    assert!(!stderr.contains("Experimental: http"));
+
+    let structured = fixture.run(&["--format", "jsonl"]);
+    assert!(
+        structured.status.success(),
+        "{}",
+        String::from_utf8_lossy(&structured.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&structured.stderr).contains("Experimental:"));
+    let events: Vec<serde_json::Value> = String::from_utf8(structured.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let notices: Vec<_> = events
+        .iter()
+        .filter(|event| event["event"] == "experimental")
+        .map(|event| event["api"].as_str().unwrap())
+        .collect();
+    let expected = [
+        "sleep()",
+        "codemod/deps.semver",
+        "SgNode.definition()",
+        "SgNode.references()",
+    ];
+    assert_eq!(notices, expected);
+    for api in expected {
+        assert_eq!(stderr.matches(&format!("Experimental: {api} ")).count(), 1);
+    }
+}
+
 fn text(output: &Output) -> String {
     format!(
         "{}{}",

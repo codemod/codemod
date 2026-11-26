@@ -39,8 +39,12 @@ use codemod_telemetry::{
 
 pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub(crate) fn experimental_notice(api: &str) -> String {
+    format!("Experimental: {api} may change in a minor release.")
+}
+
 #[derive(Parser)]
-#[command(name = "codemod")]
+#[command(name = "codemod", after_help = crate::launcher::HELP)]
 #[command(
     about = "A self-hostable workflow engine for code transformations",
     long_about = "\x1b[32m      __                  __                                    __         \x1b[0m\n\x1b[32m     / /                 /\\ \\                                  /\\ \\        \x1b[0m\n\x1b[32m    / /   ___     ___    \\_\\ \\      __     ___ ___      ___    \\_\\ \\       \x1b[0m\n\x1b[32m   / /   /'___\\  / __`\\  /'_` \\   /'__`\\ /' __` __`\\   / __`\\  /'_` \\      \x1b[0m\n\x1b[32m  / /   /\\ \\__/ /\\ \\L\\ \\/\\ \\L\\ \\ /\\  __/ /\\ \\/\\ \\/\\ \\ /\\ \\L\\ \\/\\ \\L\\ \\  __ \x1b[0m\n\x1b[32m /_/    \\ \\____\\\\ \\____/\\ \\___,_\\\\ \\____\\\\ \\_\\ \\_\\ \\_\\\\ \\____/\\ \\___,_\\/\\_\\\x1b[0m\n\x1b[32m/_/      \\/____/ \\/___/  \\/__,_ / \\/____/ \\/_/\\/_/\\/_/ \\/___/  \\/__,_ /\\/_/\x1b[0m\n\x1b[32m                                                                           \x1b[0m\n\x1b[32m                                                                           \x1b[0m\n\nA self-hostable workflow engine for code transformations",
@@ -100,10 +104,10 @@ enum Commands {
     /// Manage package cache
     Cache(commands::cache::Command),
 
-    /// Install and manage Codemod AI integrations
+    /// Install and manage Codemod AI integrations (experimental)
     Ai(commands::ai::Command),
 
-    /// Start MCP (Model Context Protocol) server
+    /// Start MCP (Model Context Protocol) server (experimental)
     Mcp(commands::mcp::Command),
 }
 
@@ -139,13 +143,13 @@ enum WorkflowCommands {
     /// Cancel a workflow run
     Cancel(commands::workflow::cancel::Command),
 
-    /// Send an event to a workflow run that waits for it
+    /// Send an event to a workflow run that waits for it (experimental)
     Send(commands::workflow::send::Command),
 
-    /// Print a run's events, then follow it while it runs elsewhere
+    /// Print a run's events, then follow it while it runs elsewhere (experimental)
     Attach(commands::workflow::attach::Command),
 
-    /// Describe a workflow without running it: params, imports, capabilities, steps
+    /// Describe a workflow without running it: params, imports, capabilities, steps (experimental)
     Inspect(commands::workflow::inspect::Command),
 
     /// Convert workflow.yaml files to workflow.ts

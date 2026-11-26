@@ -187,6 +187,11 @@ impl HostedRun {
         self.context.host_event(event)
     }
 
+    /// Report the first use of an experimental API in this run.
+    pub fn experimental(&self, api: &str) {
+        self.context.experimental(api);
+    }
+
     /// A line the body or a step wrote; `position` is the step's.
     pub fn log(&self, position: Option<u64>, line: String) {
         self.context.events.emit(match position {

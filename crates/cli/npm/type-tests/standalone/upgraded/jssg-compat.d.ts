@@ -1,5 +1,4 @@
-// oxlint-disable triple-slash-reference
-/// <reference path="workflow.d.ts" />
+// Fixture declarations for private helpers emitted by the 1.x upgrade translator.
 
 /**
  * Runs a jssg transform module (its default export `transform(root,

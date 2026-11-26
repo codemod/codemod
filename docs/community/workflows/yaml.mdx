@@ -4,6 +4,8 @@ sidebarTitle: "workflow.yaml (legacy)"
 description: "The workflow.yaml format, which still runs through a compatibility layer."
 ---
 
+import Experimental from "/snippets/experimental.mdx";
+
 <Warning>
 `workflow.yaml` is the legacy workflow format. It still runs: the CLI translates it into the equivalent [`workflow.ts`](/community/workflows/reference) before running it. New workflows should use TypeScript. Convert an existing package with:
 
@@ -394,6 +396,8 @@ steps:
 </ParamField>
 
 ### Install Skill Step
+
+<Experimental />
 
 Installs package skill behavior into a supported harness via the Codemod CLI. Use this in skill-only or workflow + skill packages when you want authored skill files from the package to be installable for coding-agent workflows.
 

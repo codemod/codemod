@@ -35,6 +35,7 @@ export interface OpenOptions {
 }
 
 /** `DecisionModelOptions` in crates/node/src/run.rs. */
+/** @experimental */
 export interface DecisionModelOptions {
   /** `"systemone"` or `"openai"`. */
   provider?: string;
@@ -99,6 +100,7 @@ export interface NativeRun {
   record(entry: string, durationMs: number): void;
   /** Report a step started, replayed or retrying (a `StepEvent` as JSON). */
   event(event: string): void;
+  experimental(api: string): void;
   /** A line the body (`null`) or the step at `position` wrote. */
   log(position: number | null, line: string): void;
   progress(position: number, processed: number, total: number): void;

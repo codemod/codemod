@@ -44,7 +44,7 @@ pub struct RunFlags {
     pub allow_child_process: bool,
 
     /// Allow codemod/assess to send files to the decision model (System One
-    /// by default): asked for interactively, required without a terminal
+    /// by default): asked for interactively, required without a terminal (experimental)
     #[arg(long)]
     pub allow_ai: bool,
 
@@ -53,16 +53,16 @@ pub struct RunFlags {
     pub no_interactive: bool,
 
     /// Coding agent to use for AI steps (e.g. claude, codex, aider); defaults to the one saved
-    /// in the launcher
+    /// in the launcher (experimental)
     #[arg(long)]
     pub agent: Option<String>,
 
     /// Decision model for decision and assessment calls, as <provider>/<model> (default:
-    /// the one saved in the launcher, else systemone/jev-latest)
+    /// the one saved in the launcher, else systemone/jev-latest) (experimental)
     #[arg(long, value_name = "PROVIDER/MODEL", value_parser = parse_decision_model)]
     pub model: Option<DecisionModel>,
 
-    /// Execute install-skill steps when running in non-interactive mode
+    /// Execute install-skill steps when running in non-interactive mode (experimental)
     #[arg(long)]
     pub install_skill: bool,
 
@@ -88,7 +88,7 @@ pub struct StartFlags {
     #[arg(long)]
     pub approve: bool,
 
-    /// Let branch, commit and pull request steps change the git repository
+    /// Let branch, commit and pull request steps change the git repository (experimental)
     #[arg(long)]
     pub managed_git: bool,
 }
@@ -975,6 +975,7 @@ impl crate::journal::Stamped for Renderer {
             return;
         };
         match event {
+            Event::Experimental { api } => self.line(crate::experimental_notice(&api)),
             // A dry run is not saved, so its id names nothing to look up.
             Event::RunStarted { dry_run: true, .. } => self.line(format!(
                 "{} {}",

@@ -238,7 +238,10 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
             let unit = Mutex::new(relative.clone());
             let relative = relative.clone();
             let callback: RuntimeEventCallback = Arc::new(move |event: RuntimeEvent| {
-                if event.kind == RuntimeEventKind::SetCurrentUnit {
+                if matches!(
+                    event.kind,
+                    RuntimeEventKind::SetCurrentUnit | RuntimeEventKind::Experimental(_)
+                ) {
                     *unit.lock().unwrap() = format!("{relative} :: {}", event.message);
                     return;
                 }

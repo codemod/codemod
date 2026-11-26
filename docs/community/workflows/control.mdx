@@ -2,14 +2,9 @@
 title: "Drive codemod from a program"
 sidebarTitle: "Control protocol"
 description: "Run a workflow from a TUI, an agent or a script: read its events as JSON lines, answer its approvals on stdin, attach to runs started elsewhere."
-tag: "Experimental"
 ---
 
 import Experimental from "/snippets/experimental.mdx";
-
-<Experimental />
-
-The messages can still change; `hello.protocol` goes up when a change would break a client.
 
 A program that runs codemod for someone (a terminal UI, a coding agent, a CI wrapper) starts it as a child process with `--format jsonl --control stdio`. The run prints one JSON object per line on stdout, and reads commands, one JSON object per line, on stdin. When the workflow asks something (an `approval(...)` step, a shell command, a coding agent to pick), the run waits for the answer instead of exiting.
 
@@ -37,6 +32,8 @@ The first line is `hello`. It names the run before anything happens, so a client
 ```
 
 Then come the run's events, the same as `--format jsonl` prints without a control channel (see [`--format`](/community/cli#codemod-workflow)). Each has `seq`, which counts up through the whole run, also across resumes, and `ts`. Step events name their step with `step`, a key that stays the same across resumes (`"3"`; `"3/0"` for step 0 of the codemod that step 3 runs, whose `parent` is `"3"`).
+
+When a workflow first uses an experimental API, an `experimental` event names it in `api`. A run emits at most one notice per API, even if it resumes. This event is part of the event stream, not the workflow result.
 
 A question looks like this:
 
@@ -90,6 +87,8 @@ A dry run with a control channel waits at its questions like a real run, and `ap
 
 ## Attach to a run
 
+<Experimental />
+
 Every saved run keeps its events in the run store. `workflow attach` prints them, after a `hello` (with `"mode":"attach"` and no commands), and follows the run while another process executes it:
 
 ```bash
@@ -101,4 +100,4 @@ It ends when the run stops executing. It only watches: the questions are answere
 ## Read runs and workflows
 
 - `workflow list --format json` and `workflow status --id <ID> --format json` print runs; `status` has `question`, the approval a waiting run needs. If the run pauses while a question is open (for example, `stop` or closed stdin), it keeps that question.
-- `workflow inspect -w <file|dir> --format json` describes a workflow for a setup form: declared params with their types, doc comments and `@default`s, imports, which declared steps reach outside the target (`http`, `shell`, `agent`, ...), and its `step(...)` calls. See [`workflow inspect`](/community/cli#codemod-workflow).
+- **Experimental:** `workflow inspect -w <file|dir> --format json` describes a workflow for a setup form: declared params with their types, doc comments and `@default`s, imports, which declared steps reach outside the target (`http`, `shell`, `agent`, ...), and its `step(...)` calls. See [`workflow inspect`](/community/cli#codemod-workflow).

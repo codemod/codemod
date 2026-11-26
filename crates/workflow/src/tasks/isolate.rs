@@ -84,7 +84,7 @@ impl StepIsolates {
         default_language: Option<String>,
     ) -> WorkerOptions<OxcResolver> {
         let run = task.run;
-        let events = Arc::clone(&run.events);
+        let notices = Arc::clone(run);
         let at = task.at();
         WorkerOptions {
             // Callbacks get no unsafe LLRT module, whatever the run grants.
@@ -93,13 +93,13 @@ impl StepIsolates {
             modules: isolate_modules(),
             codemod_modules: isolate_codemod_modules(self.v1),
             llm_request_handler: None,
-            runtime_event_callback: Some(Arc::new(move |event: RuntimeEvent| {
-                if event.kind != RuntimeEventKind::SetCurrentUnit {
-                    events.emit(Event::StepLog {
-                        at: at.clone(),
-                        line: butterflow_core::jssg_runner::format_runtime_event(&event),
-                    });
-                }
+            runtime_event_callback: Some(Arc::new(move |event: RuntimeEvent| match event.kind {
+                RuntimeEventKind::Experimental(api) => notices.experimental(api),
+                RuntimeEventKind::SetCurrentUnit => {}
+                _ => notices.events.emit(Event::StepLog {
+                    at: at.clone(),
+                    line: butterflow_core::jssg_runner::format_runtime_event(&event),
+                }),
             })),
             cancel: Arc::clone(&task.cancel),
             dry_run: run.dry_run,
@@ -277,6 +277,7 @@ pub(crate) async fn start(
         .map_err(|e| format!("could not start the step's runtime: {e}"))?;
     async_with!(worker.context => |ctx| {
         deps_host::install(&ctx, registry, cancel).map_err(|e| e.to_string())?;
+        crate::assess::install_notice(&ctx).map_err(|e| e.to_string())?;
         if let Some(handle) = assess {
             crate::assess::install(&ctx, handle.run, handle.position, handle.cancel)
                 .map_err(|e| e.to_string())?;

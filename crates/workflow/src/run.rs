@@ -9,7 +9,7 @@
 //! promises, so steps started together run at the same time. Every step's
 //! outcome goes to the run store as soon as it is known.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -150,6 +150,7 @@ pub(crate) struct RunContext {
     pub callbacks: BTreeMap<String, String>,
     pub store: Arc<dyn RunStore>,
     pub events: Arc<dyn EventSink>,
+    pub experimental: Arc<Mutex<HashSet<String>>>,
     pub interaction: Arc<dyn Interaction>,
     pub services: Arc<Services>,
     /// Set to stop the run: by the engine's stop handle (Ctrl-C), or by a
@@ -323,6 +324,16 @@ pub struct TestPlan {
 }
 
 impl RunContext {
+    pub(crate) fn experimental(&self, api: &str) {
+        let mut seen = self.experimental.lock().unwrap_or_else(|e| e.into_inner());
+        if seen.contains(api) {
+            return;
+        }
+        seen.insert(api.into());
+        drop(seen);
+        self.events.emit(Event::Experimental { api: api.into() });
+    }
+
     /// The workflow is a workflow.yaml, so the package is a codemod 1.x
     /// package: its transforms get the 1.x APIs 2.0 removed (see
     /// `js/v1.ts`). Nested codemods decide for their own workflow.
@@ -362,6 +373,7 @@ impl RunContext {
             callbacks,
             store: Arc::clone(&self.store),
             events,
+            experimental: Arc::clone(&self.experimental),
             interaction: Arc::clone(&self.interaction),
             services: Arc::clone(&self.services),
             cancel,
@@ -759,7 +771,21 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
 
     let ending = context.with(|ctx| {
         let started = (|| -> rquickjs::Result<Value<'_>> {
+            use codemod_sandbox::sandbox::runtime_module::{RuntimeEventKind, RuntimeHooksContext};
             llrt_globals.attach(&ctx)?;
+            let notices = Arc::clone(&run);
+            ctx.store_userdata(RuntimeHooksContext::new(
+                Some(Arc::new(move |event| {
+                    if let RuntimeEventKind::Experimental(api) = event.kind {
+                        notices.experimental(api);
+                    }
+                })),
+                Some(Arc::clone(&run.cancel)),
+            ))
+            .map_err(|_| {
+                rquickjs::Exception::throw_message(&ctx, "cannot install workflow runtime hooks")
+            })?;
+            crate::assess::install_notice(&ctx)?;
             install_host(&ctx, &run, &recorded, &in_flight, &sender)?;
             ctx.eval::<(), _>(crate::js::body_globals())?;
             // Load the runtime even when the workflow never imports it.
@@ -907,9 +933,16 @@ fn install_host<'js>(
         )?,
     )?;
 
+    let deps = Arc::clone(run);
     object.set(
         "semver",
-        Function::new(ctx.clone(), crate::deps_host::semver)?,
+        Function::new(
+            ctx.clone(),
+            move |op: String, ecosystem: String, a: String, b: String| {
+                deps.experimental("codemod/deps.semver");
+                crate::deps_host::semver(op, ecosystem, a, b)
+            },
+        )?,
     )?;
 
     let starter = Arc::clone(run);

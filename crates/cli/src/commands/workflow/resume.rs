@@ -37,7 +37,7 @@ pub struct Command {
     #[arg(long)]
     force: bool,
 
-    /// Let branch, commit and pull request steps change the git repository
+    /// Let branch, commit and pull request steps change the git repository (experimental)
     #[arg(long)]
     managed_git: bool,
 

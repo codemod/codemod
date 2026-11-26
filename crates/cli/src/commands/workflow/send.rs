@@ -23,6 +23,7 @@ pub struct Command {
 /// step waits yet, the event is kept until one does. Events are for
 /// `waitForEvent` steps: approvals are given with `workflow resume --approve`.
 pub async fn handler(args: &Command) -> Result<()> {
+    eprintln!("{}", crate::experimental_notice("workflow send"));
     let data = match &args.data {
         Some(text) => serde_json::from_str(text).context("--data must be JSON")?,
         None => serde_json::Value::Null,
