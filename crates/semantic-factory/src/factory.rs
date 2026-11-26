@@ -83,7 +83,7 @@ impl SemanticFactory {
                     RuffSemanticProvider::file_scope_with_fs(fs_root)
                 }
                 (SemanticScope::WorkspaceScope { root }, None) => {
-                    RuffSemanticProvider::workspace_scope(root.clone())
+                    RuffSemanticProvider::workspace_scope(root.clone()).with_types(types)
                 }
                 (SemanticScope::WorkspaceScope { root }, Some(fs_root)) => {
                     RuffSemanticProvider::workspace_scope_with_fs(root.clone(), fs_root)

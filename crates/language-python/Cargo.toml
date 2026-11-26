@@ -18,7 +18,8 @@ anyhow.workspace = true
 ty_ide.workspace = true
 ty_project.workspace = true
 ty_python_semantic.workspace = true
-ruff_db.workspace = true
+ruff_db = { workspace = true, features = ["os"] }
+ruff_notebook = { git = "https://github.com/astral-sh/ruff.git", tag = "0.14.0" }
 ruff_text_size.workspace = true
 ruff_python_ast.workspace = true
 ruff_python_parser.workspace = true
