@@ -9,185 +9,206 @@ description: "Ask where a value comes from, where it goes, who calls a function,
   and Python with less precision (see [Python](#python)).
 </Warning>
 
-[`definition()` and `references()`](/community/jssg/semantic-analysis) answer questions about
-names. These methods answer questions about **values and calls**, so a codemod can decide whether
-a rewrite is safe before it makes it:
+These analyses answer questions about **values and calls**, so a codemod can decide whether a
+rewrite is safe before it makes it. Most are **lookups**, imported from `codemod/ast-grep`: a
+read-only map from a node to the edges that leave it.
 
-| Question | Call |
+| Question | Ask |
 | --- | --- |
-| What is this value computed from? | `node.flowsFrom()` |
-| Where does this value go? | `node.flowsTo()` |
-| What does this function call? | `node.callees()` |
-| Who calls this function? | `node.callers()` |
-| Is it called from outside the workspace? | `node.entryPoints()` |
+| What is this value computed from? | `dataflow(lang).sources`, one hop; [`crawl()`](#follow-edges-crawl) follows it |
+| Where does this value go? | `dataflow(lang).uses`, one hop; [`crawl()`](#follow-edges-crawl) follows it |
+| What does this function call? | `callGraph(lang).callees` |
+| Who calls this function? | `callGraph(lang).callers` |
+| Is it called from outside the workspace? | `entryPoints(lang)` |
+| What type is this expression? | `types(lang).typeOf` |
+| Where is this name declared, and used? | `symbols(lang).definition`, `symbols(lang).references` |
 | Is this variable, or the object it holds, changed? | `node.mutations()` |
-| What can this reach, through calls and framework edges? | [`crawl()`](#walk-the-workspace-lookups-join-and-crawl) |
+| What can this reach, through calls and framework edges? | [`crawl()`](#follow-edges-crawl) over lookups, with [`join()`](#edges-between-two-patterns-join) for framework edges |
 
-Each answer is an array of objects that carry `node` and `root`, so you can go straight from an
-answer to an edit. On top of them: `dependsOn()` / `reaches()` booleans, `key()` / `equals()` to
-compare nodes across answers, and module resolution on the root (`resolveModule()`,
-`resolveExport()`, `specifierFor()`) for codemods that rewrite imports.
+Every edge carries `node`, so you can go straight from an answer to an edit. On top of them:
+`key()` / `equals()` to compare nodes across answers, and module resolution
+(`symbols(lang).resolveModule()`, `symbols(lang).specifierFor()`, `root.resolveExport()`) for
+codemods that rewrite imports.
 
 ## Turn it on
 
-The methods use the step's semantic analysis. Set `semanticAnalysis: "file"` (the default) for
-`flowsFrom`, `flowsTo` and `mutations`, which stay inside one file, and `"workspace"` for the call
-graph across files and for module resolution:
+Importing `callGraph`, `types`, `entryPoints` or `join` turns workspace analysis on for the code
+that imports it, in `forEachFile` callbacks and in plain `step(() => ...)` functions:
 
 ```ts workflow.ts
 import { step, forEachFile } from "codemod/workflow";
-import { parse } from "codemod/ast-grep";
-import transform from "./scripts/sql.ts";
+import { callGraph, parse } from "codemod/ast-grep";
 
 export default async function main() {
+  const { callers } = callGraph("typescript");
   await step(
-    "Parameterize queries",
-    forEachFile(
-      { include: "src/**/*.ts", language: "typescript", semanticAnalysis: "workspace" },
-      (file) => {
-        const out = transform(parse(file));
-        if (typeof out === "string") file.write(out);
-      },
-    ),
+    "Await loadConfig",
+    forEachFile({ include: "src/**/*.ts", language: "typescript" }, (file) => {
+      const fn = parse(file).root().find("function loadConfig() { $$$ }");
+      for (const caller of (fn && callers.get(fn)) ?? []) {
+        // caller.site is the call, caller.node the function that makes it
+      }
+    }),
   );
 }
 ```
 
-Roots that the callback parses with `parse(file)` get the selector's analysis. In `workflow.yaml`,
-use `semantic_analysis: workspace` on the `js-ast-grep` step; with `codemod jssg run`, pass
-`--semantic-workspace <dir>`.
+`dataflow(lang)`, `symbols(lang)` and `node.mutations()` follow the step's scope: one file with the
+default `semanticAnalysis: "file"`, the whole workspace with `semanticAnalysis: "workspace"` (so
+`symbols(lang).references` finds uses in other files only then). Roots that the callback parses
+with `parse(file)` get the step's analysis. In `workflow.yaml`, use `semantic_analysis: workspace` on the `js-ast-grep` step; with
+`codemod jssg run`, pass `--semantic-workspace <dir>`.
 
 <Note>
-  The queries **throw** instead of answering `[]` when they cannot run: semantic analysis is off,
-  the file is not JavaScript or TypeScript, the root was parsed from a string, or the codemod runs
-  on the Node.js host (`codemod/host`, `codemod/testing`'s default) or in WebAssembly. An empty
+  The queries **throw** instead of answering "nothing" when they cannot run: semantic analysis is
+  off, the file is not one the analysis covers, the root was parsed from a string, or the codemod
+  runs on the Node.js host (`codemod/host`, `codemod/testing`'s default) or in WebAssembly. An empty
   answer would read as "no callers" or "no sources", and a codemod might act on it. Unknown options
   throw too, so a typo cannot silently change an answer. On the Node.js host, test with
   `{ host: "quickjs" }`.
 
   A query on a node it does not apply to throws a `TypeError` that names the node's kind and what
-  to ask instead: `flowsFrom()` / `flowsTo()` on a statement or declaration, `mutations()` on
-  anything but a variable or a use of one (for `a.b`, ask about `a`), `callers()` on code outside
-  any function. A part of a value (the `limit` in `req.query.limit`) answers for that value. An
+  to ask instead: `dataflow(lang)` on a statement or declaration, `mutations()` on
+  anything but a variable or a use of one (for `a.b`, ask about `a`), `callers` on code outside any
+  function. A part of a value (the `limit` in `req.query.limit`) answers for that value. An
   expression the analysis does not track, such as `typeof import("./x")` in a type position, answers
-  `[]`, so a loop over pattern matches does not stop on one.
+  nothing, so a loop over pattern matches does not stop on one.
 </Note>
 
 ### Answers describe the workspace when the step started
 
-Every answer, from `flowsFrom()` to `callers()` and `typeInfo()`, describes the files as they were
-when the step started. A step sees the edits of the steps before it, the same in a real run and in
-a dry run, and never its own: a callback that writes a file does not change what the next callback
-in the same step is told about it. To ask about an edit, ask in the next step.
+Every answer, from `sources` to `callers` and `typeOf`, describes the files as they were when
+the step started. A step sees the edits of the steps before it, the same in a real run and in a dry
+run, and never its own: a callback that writes a file does not change what the next callback in the
+same step is told about it. To ask about an edit, ask in the next step.
 
 A root parsed from text the step produced (`parse({ path, text: edited })` after an edit) does not
 match what the answers describe, so a query on it throws `… changed in this step`, instead of
 pointing at the wrong code.
 
-## Where does a value come from: `flowsFrom()`
+## Where does a value come from: `dataflow(lang).sources`
+
+`sources.get(node)` is one hop back: the values this one is computed from. `crawl()` follows the
+hops to where they start:
 
 ```ts
+import { crawl, dataflow } from "codemod/ast-grep";
+
+const { sources } = dataflow("typescript");
 // db.query("select ... " + id) where the text depends on the request:
 // rewrite to a parameterized query.
 for (const call of root.root().findAll({ rule: { pattern: "$DB.query($SQL)" } })) {
   const sql = call.getMatch("SQL")!;
-  if (!sql.dependsOn((step) => step.kind === "parameter" && step.name === "req")) continue;
+  const origins = await crawl(sources, sql);
+  if (![...origins.values()].some((e) => e?.kind === "parameter" && e.name === "req")) continue;
   // ...
 }
 ```
 
-Steps come nearest first. Each has:
+Each edge has:
 
 | Field | Meaning |
 | --- | --- |
-| `node`, `root` | The syntax node of the step, and its root |
+| `node` | The syntax node the edge reaches |
 | `kind` | `variable`, `parameter`, `import`, `reference`, `call`, `member`, `literal`, `global`, `this`, `function`, `class`, `object`, `array`, `jsx`, `jsx-attribute`, `expression` |
-| `via` | The edge that reached it: `assign`, `read`, `alias`, `property`, `element`, `argument`, `receiver`, `derive`, `capture`, `store`, `jsx-attribute`, `jsx-child`, `return` |
+| `via` | Why the edge exists: `assign`, `read`, `alias`, `property`, `element`, `argument`, `receiver`, `derive`, `capture`, `store`, `jsx-attribute`, `jsx-child`, `return` |
 | `name` | Always set for parameters, variables, imports, references, globals and calls (a call's name is the callee text, `"db.query"`); `null` when there is none |
 | `index` | The parameter's position; for `via: "argument"`, the argument's position |
-| `depth` | Edges from the queried node; `1` is a direct source |
-| `from` | The step this one was reached from (`null` at depth 1). Walk it to print a path |
-| `boundary` | The trail ends here because the value comes from outside the analyzed code: a parameter, an import, a global, `this`, or a call result |
+| `boundary` | The value comes from outside the analyzed code here: a parameter, an import, a global, `this`, or a call result |
 
-Options: `throughCalls` (default `true`: a call's result counts as derived from its arguments and
-receiver, and the walk continues into them), `maxDepth`, `stopAt` (edge kinds to report but not
-walk past), and `interprocedural` (default `false`: cross function boundaries inside the workspace;
-a parameter continues at its callers' arguments, a call's result at the callee's returns, and the
-answer can span files, so `step.root` and `step.from` may be in another file).
+A call's result counts as derived from its arguments and receiver, so a crawl goes on into them.
+The hops stay inside one function: a parameter is where they stop (`boundary: true`); to go on at
+the callers' arguments, crawl `callGraph(lang).callers` from the function as well.
+
+In a crawl's result, each edge also has `from`, the node it was reached from, so the path back is
+a walk over `from`:
 
 ```ts
-// The value a variable was initialized with: the step after the variable.
-const init = sql.flowsFrom().find((s) => s.via === "assign" && s.from?.kind === "variable");
+// The value a variable was initialized with: an `assign` edge from the variable.
+const init = [...origins].find(([, e]) => e?.via === "assign" && origins.get(e.from)?.kind === "variable")?.[0];
 ```
 
-## Where does a value go: `flowsTo()`
+## Where does a value go: `dataflow(lang).uses`
 
-The same steps, forward. A step with `via: "argument"` is a call that receives the value; a
-`return` or `store` (`o.p = x`) step is reported and not followed further.
+`uses.get(node)` is one hop forward, with the same `kind`, `via`, `name`, `index` and `boundary`
+fields. An edge with `via: "argument"` is a call that receives the value; a `return` or `store`
+(`o.p = x`) edge is where the value leaves the function or goes into the heap. `crawl()` follows
+the hops:
 
 ```ts
+import { crawl, dataflow } from "codemod/ast-grep";
+
+const { uses } = dataflow("typescript");
 // Every call that receives a value derived from req.body
-const calls = root.root().findAll({ rule: { pattern: "req.body" } })
-  .flatMap((body) => body.flowsTo())
-  .filter((step) => step.via === "argument")
-  .map((step) => step.node);
+const calls = [];
+for (const body of root.root().findAll({ rule: { pattern: "req.body" } })) {
+  for (const edge of (await crawl(uses, body)).values()) {
+    if (edge?.via === "argument") calls.push(edge.node);
+  }
+}
 
-// Where is this string first used? Stop at the first JSX sink.
-const sinks = literal.flowsTo({ stopAt: ["jsx-attribute", "jsx-child", "return"] });
+// Where is this string used first? One hop: a JSX attribute or child.
+const sinks = (uses.get(literal) ?? []).filter((e) => e.via === "jsx-attribute" || e.via === "jsx-child");
 ```
 
-`node.reaches(target)` is `true` when a step is `target` (a node) or matches a predicate:
-`body.reaches((s) => s.via === "argument" && s.name === "db.query")`.
+A crawl goes on past `return` and `store` edges. A `return` edge's node is the function that
+returns the value, so from there the crawl follows where the function itself goes, which is not the
+value. To stop there, crawl once, then crawl again with the nodes the first crawl reached through
+`return` or `store` edges as `stopAt`.
 
-## Who calls this: `callers()`
+Does the value reach a node? Crawl and ask the result: `(await crawl(uses, body)).has(target)`.
 
-One entry per call. `node` is the calling function (or the call, for module top-level code,
-`name: "<module>"`), `callSite.node` is the call to edit, and `callee` is the function that call
-reaches. Needs workspace scope to see other files.
+## Who calls this: `callGraph(lang).callers`
+
+One edge per call. `node` is the calling function (or the call, for module top-level code), `site`
+is the call to edit, and `via` says why the edge exists. Callers in other files need workspace
+analysis, which importing `callGraph` turns on.
 
 ```ts
 // loadConfig() becomes async: await every call and make every caller async, across files.
 // A function handed to unknown code (names.map(getSetting)) gets a TODO and is not followed.
-const callers = loadConfig.callers({ transitive: true, stopAt: ["callback"] });
-if (callers.truncated || callers.unparsed.length > 0) {
-  throw new Error("call graph incomplete: not propagating async");
-}
-const seen = new Set<string>();
-for (const caller of callers) {
-  if (seen.has(caller.callSite.node.key())) continue;
-  seen.add(caller.callSite.node.key());
-  if (caller.via === "callback") {
-    // TODO: `${caller.callee?.name}` is async now
+const { callers } = callGraph("typescript");
+const reached = await crawl(callers, loadConfig);
+for (const [fn, edge] of reached) {
+  if (!edge) continue; // loadConfig itself
+  if (edge.via === "callback") {
+    // TODO: the function passed at edge.site is async now
     continue;
   }
-  // await caller.callSite.node; make caller.node async (once per function: key())
+  // await edge.site; make fn async (crawl reaches each function once)
 }
 ```
 
 <Warning>
-  **No callers does not mean unused.** `callers()` lists call sites in the workspace, nothing
-  else. A function its package exports, or a route handler, is called from outside: ask
-  [`entryPoints()`](#called-from-outside-entrypoints). Getters and setters run
-  on property reads and writes (`obj.value`), which are not calls, so they have no callers either.
-  A function stored as a value (`{ round: fn }`, `export default fn`) or called dynamically has no
-  callers the graph can see. Before deleting, also check that `references()` finds nothing but the
-  declaration, and that the answer is complete (`!truncated && unparsed.length === 0`).
+  **No callers does not mean unused.** `callers` holds call sites in the workspace, nothing else.
+  A function its package exports, or a route handler, is called from outside: see
+  [`entryPoints(lang)`](#called-from-outside-entrypoints). Getters and setters run on property
+  reads and writes (`obj.value`), which are not calls, so they have no callers either. A function
+  stored as a value (`{ round: fn }`, `export default fn`) or called dynamically has no callers the
+  graph can see. Before deleting, also check that `symbols(lang).references` finds nothing but
+  the declaration.
 </Warning>
 
-## Called from outside: `entryPoints()`
+## Called from outside: `entryPoints(lang)`
 
-`fn.entryPoints()` says why something outside the workspace's code calls the function: its package
-exports it, or a rule you declare matches it. `[]` when neither does.
+`entryPoints("typescript")` maps every function in the workspace that something outside its code
+calls to why: its package exports it, or a rule you declare matches it.
 
 ```ts
-fn.entryPoints();
+const outside = entryPoints("typescript");
+outside.get(button);
 // [{ kind: "export", label: "@acme/ui#Button" }]
-// [{ kind: "http", label: "GET app/api/users/[id]/route.ts" }]
+for (const [fn, reasons] of outside) {
+  // reasons: [{ kind: "http", label: "GET app/api/users/[id]/route.ts" }], ...
+}
 ```
 
+`kind` is `"export"` for a package export, else the declaring rule's `kind`. Unlike the other
+lookups, it lists its entries (`size`, `keys()`, `for...of`), and it is not something to crawl
+through: pass it as `crawl()`'s start to walk from every entry point.
+
 A package export counts when the function is exported, directly or re-exported, from a module
-the package's `exports` points at (without `exports`: `main`, `module`, `types` or `source`). The
-label is the specifier other packages import it with, then `#` and the export name.
+the package's `exports` points at (without `exports`: `main`, `module`, `types` or `source`).
 
 Route handlers, tasks and other functions a framework calls are entry points only when you
 declare them, on the selector:
@@ -213,32 +234,31 @@ forEachFile(
 | `files` | A glob over the path from the workspace root. `**` crosses directories; brackets are literal, so `[id]` matches a Next.js segment |
 | `exports` | Functions exported from a matching file under one of these names (`"default"` for the default export) |
 | `decorators` | Functions with a decorator of this name, without its arguments (`app.route` for `@app.route("/x")`); `*` matches any run of characters. Python only for now |
-| `kind` | Copied to the answer, so you can tell routes from tasks |
+| `kind` | A name for what the rule matches, so you can tell routes from tasks |
 
-A rule names `exports`, `decorators` or both (then a function must match both). `entryPoints()`
-needs `semanticAnalysis: "workspace"`; `entryPoints` rules are only accepted there.
+A rule names `exports`, `decorators` or both (then a function must match both). `entryPoints` rules
+are only accepted with `semanticAnalysis: "workspace"`.
 
 A function that has callers can still be dead: when no caller is an entry point or reached from
 one, nothing runs it. To check, [crawl](#follow-edges-crawl) from `entryPoints("typescript")`.
 
-## What does this call: `callees()`
+## What does this call: `callGraph(lang).callees`
 
 The answer depends on the node you ask:
 
-| Node | `callees()` answers |
+| Node | `callees.get(node)` answers |
 | --- | --- |
 | The program, `root.root()` | Calls made while the module is evaluated (top-level code) |
 | A call or a JSX element | What that call calls: for `<Modal />`, the `Modal` component |
 | A function or its name | The calls written in its body |
 | Any other code (a statement, a block) | The calls written inside it |
 
-Each entry is a resolved function (`resolved: true`, `node` is the
-function, possibly in another file, `callSite` is the call) or a call the analysis could not
-resolve (`resolved: false`, `name` is the callee text: `"Number"`, `"res.json"`).
+Each edge is a function the call graph resolved (`node`, possibly in another file), with the call
+that reaches it (`site`). Calls it could not resolve (a library, a builtin, a dynamic call) have no
+edge.
 
 ```ts
-const component = element.callees().find((c) => c.resolved && c.via === "jsx");
-const sideEffects = root.root().callees(); // does importing this module run code?
+const component = callees.get(element)?.find((e) => e.via === "jsx")?.node;
 ```
 
 `via` says why the edge exists: `direct`, `method`, `constructor`, `jsx`, `callback` (the
@@ -250,14 +270,11 @@ or `type` (resolved by the receiver's type, see [Types](#types-the-typescript-7-
 Values alone can't resolve `repo.save()` when `repo` is a parameter, a context object or a call
 result. With types on, the TypeScript 7 checker answers instead (experimental):
 
-- `callees()` and `callers()` follow `x.m()` by the type of `x`, marked `via: "type"`. For an
+- `callees` and `callers` follow `x.m()` by the type of `x`, marked `via: "type"`. For an
   interface or property-signature member, the edge goes to every class member or object property
   that implements it (up to 16; past that the call stays unresolved).
-- An unresolved call gets a `declaration` (`{ node, root, name }`) when the checker knows where the
-  member is declared but it is not workspace code: `list.push()` in `lib.es5.d.ts`, a Solid
-  `isOpen: Accessor<boolean>`.
-- `node.typeInfo()` returns the type as the checker prints it: `"UserRepo"`,
-  `"{ id: string; }"`. It is `null` with types off.
+- `types(lang).typeOf.get(node)` is the type as the checker prints it: `"UserRepo"`,
+  `"{ id: string; }"`. It is `undefined` with types off.
 
 Turn them on by importing `types` in the code that uses them. That also turns on workspace analysis:
 
@@ -266,7 +283,7 @@ import { types } from "codemod/ast-grep";
 
 const { typeOf } = types("typescript");
 forEachFile({ include: "src/**/*.{ts,tsx}" }, (file) => {
-  // typeOf.get(node), node.typeInfo() and via: "type" call edges all answer here
+  // typeOf.get(node) and via: "type" call edges answer here
 });
 ```
 
@@ -317,14 +334,14 @@ never finds a node that came from another query.
 
 ## Rewrite imports: module resolution
 
-On the root, in workspace scope:
+In workspace scope. `file` is a path (absolute, or relative to the target), a workflow file, an
+SgRoot, or a node in one:
 
 | Call | Answer |
 | --- | --- |
-| `root.resolveModule("@/ui")` | The file an import in this file resolves to (tsconfig `paths` with `extends`, workspace packages, index files), or `null` |
-| `root.resolveExport("@/ui", "Modal")` | What the export lands on through barrels and `export *`: a `definition()` result with `exportName` (`"default"` or the name) and `nameNode` |
-| `root.specifierFor(modal.root, { like: "@/ui" })` | A specifier that reaches the file, in the style of `like` (relative or alias, `.js` or not), checked by resolving it: `"@/ui/modal"` |
-| `root.importers(target?)` | Every place that refers to a module (this file by default): `import` (side-effect imports too, and `import` lines in `.mdx` / `.md`), `export … from`, `require()`, `import()` and test mocks (`jest.mock`, `vi.importActual`, ...), with `kind`, `specifier` and `unparsed`. As of the step's start, like every answer |
+| `symbols(lang).resolveModule(file, "@/ui")` | The file an import in `file` resolves to (tsconfig `paths` with `extends`, workspace packages, index files), or `null` |
+| `root.resolveExport("@/ui", "Modal")` | What the export lands on through barrels and `export *`: `{ node, root, kind, exportName, nameNode }`, with `exportName` `"default"` or the name |
+| `symbols(lang).specifierFor(file, modal.root, { like: "@/ui" })` | A specifier `file` can import the target with, in the style of `like` (relative or alias, `.js` or not), checked by resolving it: `"@/ui/modal"` |
 | `root.publicSpecifiers()` | The specifiers other packages import this file with: its package name when it is the entry (`main`, or `exports["."]`), and `exports` subpaths. Empty for private files |
 | `root.hasTopLevelEffects()` | Whether importing the module runs code: a top-level call, an `import "./x"` side-effect import, or a top-level write to an object member |
 
@@ -334,38 +351,38 @@ relative path or alias into its files. When none reaches the file, it answers `n
 debarrel rewrite keeps the original import.
 
 ```ts
-// Delete a barrel only when nothing imports it any more and skipping it skips no side effects.
-const left = barrel.importers();
-const deletable = left.length === 0 && left.unparsed.length === 0 && !barrel.hasTopLevelEffects();
+// A barrel can go only when skipping it skips no side effects and no other package imports it.
+const keep = barrel.hasTopLevelEffects() || barrel.publicSpecifiers().length > 0;
 ```
 
-`definition({ follow: true })` goes from a use of an imported name to its declaration in one call.
+`symbols(lang).definition` goes from a use of an imported name to its declaration in one call.
 `@jssg/utils` builds a debarrel rewrite on these:
 [`importFromDeclarations`](/community/jssg/utils/javascript#importfromdeclarations).
 
 ## Walk the workspace: lookups, `join()` and `crawl()`
 
-The methods above answer one node at a time. To follow calls and values across the workspace,
-import the analyses as values. Each is a **lookup**: a read-only map from a node to the edges that
-leave it, `{ node, ...meta }`.
+Every analysis above is a **lookup**: a read-only map from a node to the edges that leave it,
+`{ node, ...meta }`. Lookups combine: `crawl()` follows them, `join()` and `lookup()` add edges the
+analysis can't see.
 
 ```ts
 import { callGraph, crawl, dataflow, entryPoints, join, lookup, symbols, types } from "codemod/ast-grep";
 
 const { callers, callees } = callGraph("typescript"); // meta: { site, via }
-const { sources, uses } = dataflow("typescript");     // one hop of flowsFrom / flowsTo
-const { definition, references } = symbols("typescript"); // definition goes through imports
+const { sources, uses } = dataflow("typescript");     // one hop back, one hop forward
+const { definition, references } = symbols("typescript"); // meta: { nameNode, kind, exportName }; through imports
 const { typeOf } = types("typescript");               // the TypeScript 7 checker
-entryPoints("typescript");                            // every function called from outside
+entryPoints("typescript");                            // function -> why it is called from outside
 
 callees.get(handler);
 // [{ node: <function loadUser>, site: <loadUser(id)>, via: "direct" }]
 callers.get(unused); // undefined, like a Map
 ```
 
-Code that imports one of these gets workspace analysis without `semanticAnalysis` on the selector,
-in `forEachFile` callbacks and in plain `step(() => ...)` functions; importing `types` turns on the
-checker too. Nodes match by syntax node (`key()`), so a node from another query finds its edges.
+Code that imports `callGraph`, `types`, `entryPoints` or `join` gets workspace analysis without
+`semanticAnalysis` on the selector, in `forEachFile` callbacks and in plain `step(() => ...)`
+functions; importing `types` turns on the checker too. `dataflow` and `symbols` follow the step's
+scope. Nodes match by syntax node (`key()`), so a node from another query finds its edges.
 Built-in lookups are answered node by node and can't be listed: `size`, `keys()` and `for...of`
 throw. Like every answer, they describe the workspace when the step started.
 
@@ -470,10 +487,11 @@ is complete, and flags the rest.
 // db.query("select ... " + id) -> db.query("select ... ?", [id])
 for (const call of root.root().findAll({ rule: { pattern: "$DB.query($SQL)" } })) {
   const sql = call.getMatch("SQL")!;
-  if (!sql.dependsOn((s) => s.kind === "parameter" && s.name === "req")) continue;
+  const origins = await crawl(dataflow("typescript").sources, sql);
+  if (![...origins.values()].some((e) => e?.kind === "parameter" && e.name === "req")) continue;
   // The text is built in the argument, or in the variable passed: its initializer.
-  const init = sql.flowsFrom().find((s) => s.via === "assign" && s.from?.kind === "variable");
-  const built = sql.is("identifier") ? init?.node : sql;
+  const init = [...origins].find(([, e]) => e?.via === "assign" && origins.get(e.from)?.kind === "variable");
+  const built = sql.is("identifier") ? init?.[0] : sql;
   // ...split `built` into text and parameters, then edit `built` and the call's arguments
 }
 ```
@@ -481,15 +499,17 @@ for (const call of root.root().findAll({ rule: { pattern: "$DB.query($SQL)" } })
 ### Delete exported functions nobody uses
 
 ```ts
+const { callers } = callGraph("typescript");
+const { references } = symbols("typescript");
+const outside = entryPoints("typescript");
 for (const fn of root.root().findAll({ rule: { kind: "function_declaration", inside: { kind: "export_statement" } } })) {
   const name = fn.field("name")!;
   // Called from outside the workspace (a package export, a route handler): keep it.
-  if (name.entryPoints().length > 0) continue;
-  const callers = name.callers();
-  if (callers.length > 0 || callers.truncated || callers.unparsed.length > 0) continue;
+  if (outside.has(fn)) continue;
+  if (callers.get(fn)?.length) continue;
   // No callers is not enough: a function stored as a value is referenced, not called,
   // and a getter or setter runs on property reads and writes, which are not calls.
-  if (name.references().flatMap((f) => f.nodes).some((n) => !n.equals(name))) continue;
+  if ((references.get(name) ?? []).some((r) => !r.node.equals(name))) continue;
   // ...remove the export statement
 }
 ```
@@ -497,18 +517,14 @@ for (const fn of root.root().findAll({ rule: { kind: "function_declaration", ins
 ### Make a function async, and every caller
 
 ```ts
-const callers = loadConfig.callers({ transitive: true, stopAt: ["callback"] });
-if (callers.truncated || callers.unparsed.length > 0) throw new Error("incomplete call graph");
-const seen = new Set<string>();
-for (const caller of callers) {
-  const call = caller.callSite.node;
-  if (seen.has(call.key())) continue;
-  seen.add(call.key());
-  if (caller.via === "callback") {
-    // names.map(getSetting): add a TODO about caller.callee?.name instead
-    continue;
+const { callers } = callGraph("typescript");
+const reached = await crawl(callers, loadConfig);
+for (const fn of reached.keys()) {
+  for (const edge of callers.get(fn) ?? []) {
+    if (edge.via === "callback") continue; // names.map(getSetting): add a TODO at edge.site instead
+    // edit: `await ${edge.site.text()}` in edge.site.getRoot()
   }
-  // edit: `await ${call.text()}` in caller.callSite.root; make caller.node async once (key())
+  // make fn async (crawl reaches each function once); a callback edge's function is not followed
 }
 ```
 
@@ -525,9 +541,8 @@ const edits = statements.map((s) => importFromDeclarations(root, s)).filter(Bool
 ```
 
 Then, on the barrel itself, decide whether it can go: it has no code of its own, no
-`root.hasTopLevelEffects()`, no `root.publicSpecifiers()`, and every entry of `root.importers()`
-can be pointed at the declarations (no namespace import, no `require`, no dynamic import whose
-members are unknown). Run a type check after the codemod and restore any barrel named in a new error.
+`root.hasTopLevelEffects()`, no `root.publicSpecifiers()`, and every import of it can be pointed at
+the declarations (no namespace import, no `require`, no dynamic import whose members are unknown). Run a type check after the codemod and restore any barrel named in a new error.
 
 ### Follow the barrel in test mocks
 
@@ -537,27 +552,28 @@ import { declarationTargets, retargetImport, retargetMock } from "@jssg/utils/ja
 const targets = declarationTargets(root, statement);
 const edit = retargetImport(statement, (b) => targets.get(b.local) ?? null);
 const modules = [...new Set([...targets.values()].map((t) => t.from))];
-for (const mock of root.importers(root.resolveModule(source)!)) {
-  if (mock.kind !== "mock" || !mock.root.root().equals(root.root())) continue;
-  const mockEdit = retargetMock(mock.node, modules); // adds jest.mock("./components/Button"), or repoints a factory
+for (const mock of root.root().findAll("jest.mock($SOURCE, $$$)")) {
+  if (mock.getMatch("SOURCE")!.text().slice(1, -1) !== source) continue;
+  const mockEdit = retargetMock(mock, modules); // adds jest.mock("./components/Button"), or repoints a factory
 }
 ```
 
 ### Is this string shown to the user?
 
 ```ts
-// Where is the literal first used? Stop at the first JSX use or return.
-for (const step of literal.flowsTo({ stopAt: ["jsx-attribute", "jsx-child", "return"] })) {
-  if (step.via === "jsx-child") return "visible"; // text of an element
-  if (step.via === "argument" && step.kind === "call") {
-    if (/^(toast|alert)\b/.test(step.name)) return "visible";
-    if (/^(console|analytics)\./.test(step.name)) return "hidden";
+// Where is the literal used? One hop of uses at a time.
+const { uses } = dataflow("typescript");
+for (const edge of uses.get(literal) ?? []) {
+  if (edge.via === "jsx-child") return "visible"; // text of an element
+  if (edge.via === "argument" && edge.kind === "call") {
+    if (/^(toast|alert)\b/.test(edge.name)) return "visible";
+    if (/^(console|analytics)\./.test(edge.name)) return "hidden";
   }
-  if (step.via === "return") {
-    // follow the function's callers: step.node.callers().map((c) => c.callSite.node)
+  if (edge.via === "return") {
+    // follow the function's callers: callGraph("typescript").callers.get(fn)
   }
 }
-// A prop of a component: element.callees().find((c) => c.via === "jsx") is the component.
+// A prop of a component: callees.get(element)?.find((e) => e.via === "jsx") is the component.
 ```
 
 ### Type-check gate
@@ -606,19 +622,18 @@ step names say which barrels were restored.
 
 ## Python
 
-The same methods work on `.py` files. Python support is simpler than JavaScript's:
+The same methods and lookups work on `.py` files, with `"python"` as the language. Python support is simpler than JavaScript's:
 
 - Names are resolved with Python's scoping rules (module, function, class and comprehension
   scopes, `global`, `nonlocal`), not with a type checker.
 - Imports resolve to workspace files: `import a.b`, `from a import b`, relative imports
   (`from .services import f`, `from . import services`) and re-exports from a package's
-  `__init__.py`. Installed packages are not looked into, so calls into them come back with
-  `resolved: false`.
+  `__init__.py`. Installed packages are not looked into, so calls into them have no callee edge.
 - Types come from annotations only. A call on an annotated receiver resolves to the class's
   method: with `repo: OrderRepository`, `repo.find()` is `OrderRepository.find`. The same goes
   for return annotations (`def get_repo() -> OrderRepository`), annotated class attributes and
   `self.x = x` assigned in a method. `self.method()`, `super().method()` and `Class()` (its
-  `__init__`) resolve too. `typeInfo()` returns the annotation as written.
+  `__init__`) resolve too. `types("python").typeOf` answers the annotation as written.
 - f-strings, `%` and `.format()` derive from their parts, so a request value is followed into
   `cursor.execute(f"…")` or SQLAlchemy's `text(f"…")`.
 - A decorator is a call of the decorator with the function: `@app.get("/")` and `@shared_task`
@@ -630,7 +645,8 @@ The same methods work on `.py` files. Python support is simpler than JavaScript'
 // Request data reaching a raw SQL call in a Django view.
 for (const call of root.root().findAll({ rule: { pattern: "$C.execute($SQL)" } })) {
   const sql = call.getMatch("SQL");
-  if (sql.dependsOn((s) => s.kind === "parameter" && s.name === "request")) {
+  const origins = await crawl(dataflow("python").sources, sql);
+  if ([...origins.values()].some((e) => e?.kind === "parameter" && e.name === "request")) {
     // parameterize it
   }
 }
@@ -644,45 +660,44 @@ it models and says where it stops. Build automatic rewrites only on complete ans
 | What it gives up | How you see it |
 | --- | --- |
 | Values from outside the module: parameters, imports, globals, `this` | `boundary: true` on the step |
-| Calls it cannot resolve (libraries, builtins, dynamic calls) | `resolved: false` in `callees()`. Flow treats the result as derived from the arguments (`throughCalls`), so taint is not lost |
+| Calls it cannot resolve (libraries, builtins, dynamic calls) | No `callees` edge. Flow treats the result as derived from the arguments, so taint is not lost |
 | Order of execution | Flow-insensitive: both values of a `let` assigned twice are sources. `mutations({ after })` uses text order plus "same loop" |
-| Heap: `o.p = x`, then `o.p` read elsewhere | `flowsTo` reports the write (`via: "store"`) and stops |
+| Heap: `o.p = x`, then `o.p` read elsewhere | `uses` reports the write (`via: "store"`) and stops |
 | Closures: a callback that reads `x` | Not a flow edge. A mutation inside a nested function is `deferred` and always counts as "after" |
 | Control dependence: `c ? a : b` | `a` and `b` are sources, `c` is not |
 | Whether an unknown method mutates | `confidence: "maybe"` |
 | Callbacks handed to unknown code | Assumed called: `via: "callback"`. Can be a false edge |
-| Namespace members (`ns.fn` stored or passed as a value) | `references()` finds `ns.fn` uses through `import * as ns`; check it alongside `callers()` before deleting |
-| Files that do not parse | Listed in `unparsed` on call-graph answers; asking about one throws |
-| Result limits (50,000 steps or entries) | `truncated: true` on the array |
+| Namespace members (`ns.fn` stored or passed as a value) | `symbols(lang).references` finds `ns.fn` uses through `import * as ns`; check it alongside `callers` before deleting |
+| Files that do not parse | Their calls are not in the call graph; asking about one throws |
 | Edits during a run | Every answer describes the workspace when the step started: a step sees earlier steps' edits, never its own. A query on a root parsed from text the step produced throws |
-| Callers from outside the workspace | `callers()` lists call sites only. Package exports and declared rules are in `entryPoints()` |
+| Callers from outside the workspace | `callers` lists call sites only. Package exports and declared rules are in `entryPoints(lang)` |
 | Types (with `types` imported) | `via: "type"` edges trust the declared type: a value cast with `as` or typed `any` is followed as declared, or not at all |
 
 ### When the answer is "can't tell"
 
 - **Rewrite** when the answer is complete and has no boundary or `maybe` on the path that matters.
-- **Flag** (a TODO comment, a report entry, an agent step) when a `boundary`, `resolved: false`,
-  `maybe`, `callback`, `truncated` or `unparsed` touches the decision.
-- **Never delete on an empty answer alone.** Check completeness and `references()`.
+- **Flag** (a TODO comment, a report entry, an agent step) when a `boundary`, a call with no callee
+  edge, `maybe` or `callback` touches the decision.
+- **Never delete on an empty answer alone.** Check completeness and `symbols(lang).references`.
 
 ## Performance
 
-- `flowsFrom`, `flowsTo` and `mutations` touch one file: facts are built the first time a query
+- `mutations` and `dataflow(lang)` touch one file: facts are built the first time a query
   touches it and cached by content.
-- `callees({ transitive: true })` builds facts only for the files it reaches.
-- The first `callers()` query in a step (and `references()` in workspace scope) walks the whole
+- `callees` builds facts only for the files it reaches, and so does a `crawl()` over it.
+- The first `callers` query in a step (and `references` in workspace scope) walks the whole
   workspace once, in parallel, and keeps a table for the rest of the step. Each step that asks
-  builds its own, so a run that asks `callers()` in many steps pays this once per step. Measured on a 2,500-file, 13 MB
+  builds its own, so a run that asks `callers` in many steps pays this once per step. Measured on a 2,500-file, 13 MB
   workspace: about a second for that first query, then well under a millisecond per query. At
   24,000 files (132 MB of source) the first query takes about 13 seconds and the run peaks at about
   3.5 GB of memory: in very large repositories, prefer file-local queries or narrow the target.
-- Prefer `maxDepth` and `stopAt` to filtering a long answer.
+- Prefer `stopAt` to filtering a long crawl.
 
 ## Next steps
 
 <CardGroup cols={2}>
 <Card title="Semantic Analysis" icon="magnifying-glass" href="/community/jssg/semantic-analysis">
-  `definition()`, `references()`, and analysis modes.
+  `symbols(lang)` lookups, and analysis modes.
 </Card>
 <Card title="JavaScript utils" icon="wrench" href="/community/jssg/utils/javascript">
   Import helpers, including `importFromDeclarations`.

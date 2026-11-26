@@ -69,47 +69,85 @@ Workspace-wide analysis that resolves cross-file imports and finds references ac
 
 ## API Reference
 
-### `node.definition(options?)`
+### `symbols(lang).definition` and `symbols(lang).references`
 
-Get the definition location for the symbol at this node's position.
+Import `symbols` from `"codemod:ast-grep"` (`"codemod/ast-grep"` in `workflow.ts`) and call it with
+the language you work on. It returns lookups: read-only maps from a node to its edges. See
+[Data Flow and Call Graph](/community/jssg/dataflow) for
+lookups in general.
 
-<ParamField path="definition(options?)" type="DefinitionResult | null">
-  Returns an object containing the definition node, its root, and the kind of
-  definition, or null if not found.
+```ts
+import { symbols } from "codemod:ast-grep";
+
+const { definition, references } = symbols("typescript");
+
+const [def] = definition.get(node) ?? [];
+const refs = references.get(def?.nameNode ?? node) ?? [];
+```
+
+<ParamField path="lang" type='"typescript" | "tsx" | "javascript" | "jsx" | "python"'>
+  The language of the nodes you will ask about. A lookup throws a `TypeError` when the node's
+  language family doesn't match.
+</ParamField>
+
+<ParamField path="definition.get(node)" type="DefinitionEdge[] | undefined">
+  The declaration of the symbol at `node`, as an array with at most one edge. `undefined` when
+  there is no definition.
+</ParamField>
+
+<ParamField path="references.get(node)" type="ReferenceEdge[] | undefined">
+  Every reference to the symbol at `node`, one edge per reference. The edges are not grouped by
+  file.
 </ParamField>
 
 ```ts
-interface DefinitionOptions {
-  /** If false, stop at import statements without resolving. Default: true (in workspace scope mode) */
-  resolveExternal?: boolean;
-  /** Go from a use of an imported name through its import binding to the declaration. Default: false */
-  follow?: boolean;
-}
-
-interface DefinitionResult<M> {
-  /** The AST node at the definition location */
+interface DefinitionEdge<M> {
+  /** The AST node at the declaration */
   node: SgNode<M>;
-  /** The SgRoot for the file containing the definition */
-  root: SgRoot<M>;
-  /** The kind of definition: 'local', 'import', or 'external' */
-  kind: "local" | "import" | "external";
   /** The declared name inside `node`, or null for an anonymous declaration */
   nameNode: SgNode<M> | null;
+  /** 'local', 'import' or 'external' */
+  kind: "local" | "import" | "external";
   /** How the declaration is exported from its module ("default" or the name), or null */
   exportName: string | null;
 }
+
+interface ReferenceEdge<M> {
+  /** The AST node of one reference */
+  node: SgNode<M>;
+}
 ```
 
-A use of an imported name (`Modal` in `<Modal />`) resolves to its binding in the import
-statement first (`kind: 'local'`). Pass `{ follow: true }` to continue from there to the
-declaration in one call. `node` can be the name, a whole declarator (`LIMIT: number = 10`) or a
-whole `export default function Modal() {}` statement; `nameNode` is always the name, and
-`exportName` says how a codemod must import it:
+<ResponseField name="node" type="SgNode">
+  The node the edge lands on. Its file is `node.getRoot()`, an `SgRoot` with `filename()`,
+  `relativeFilename()` and `write(text)`.
+</ResponseField>
+
+<ResponseField name="nameNode" type="SgNode | null">
+  Definition edges only. The declared name, ready to pass to `references.get()`.
+</ResponseField>
+
+<ResponseField name="kind" type='"local" | "import" | "external"'>
+  Definition edges only. Where the declaration was found.
+</ResponseField>
+
+<ResponseField name="exportName" type="string | null">
+  Definition edges only. How a codemod must import the declaration.
+</ResponseField>
+
+**Ask on a name node.** Pass an identifier, such as a declarator's `field("name")` or a use of the
+name. Asking on a whole statement gives no edges.
+
+**Definition always follows imports.** A use of an imported name (`Modal` in `<Modal />`) resolves
+through its import binding to the declaration in one call. There is no option to stop at the
+import. The edge's `node` can be the name, a whole declarator (`LIMIT: number = 10`) or a whole
+`export default function Modal() {}` statement. `nameNode` is always the name, and `exportName`
+says how a codemod must import it:
 
 ```ts
 // import { Modal, formatValue } from "./components" (a barrel)
-const def = use.definition({ follow: true });
-def.root.filename(); // ".../modal.tsx"
+const [def] = definition.get(use) ?? [];
+def.node.getRoot().filename(); // ".../modal.tsx"
 def.exportName; // "default": import Modal from "./modal"
 def.nameNode?.text(); // "Modal"
 // For `function format() {}; export { format as formatValue }`:
@@ -118,66 +156,103 @@ def.nameNode?.text(); // "Modal"
 
 **Definition kinds:**
 
-- `'local'` — Definition is in the same file (local variable, function, class, etc.)
-- `'import'` — Definition traced to an import statement, but module couldn't be resolved (e.g., external package)
-- `'external'` — Definition resolved to a different file in the workspace
+- `'local'`: the declaration is in the same file (local variable, function, class, etc.).
+- `'import'`: the import couldn't be followed (for example, an installed package). The edge lands
+  on the import binding in this file (the import specifier, or the default or namespace name). Asking on the imported name itself
+  gives the same edge. In file scope, imports are not followed into other files, so an import of
+  another workspace file also gives `kind: 'import'`.
+- `'external'`: the declaration is in a different file in the workspace.
 
-**Returns null when:**
+**`definition.get()` and `references.get()` return `undefined` when:**
 
-- No semantic provider is configured
-- No symbol is found at this position
+- Semantic analysis is off for the step
+- No symbol is found at this node (for example, you asked on a whole statement)
 
-In workspace scope, JS/TS definitions follow re-exports to the original declaration. An imported
-name, and the name inside a named re-export (`export { a } from "./a"`,
+**Scope.** `symbols(lang)` follows the step's scope. In file scope (the default), lookups answer
+inside the one file. In workspace scope (`semanticAnalysis: "workspace"`, `semantic_analysis:
+workspace` in `workflow.yaml`, or `--semantic-workspace <dir>` for `codemod jssg run`), they find
+definitions and references across files.
+
+**Re-exports.** In workspace scope, JS/TS definitions follow re-exports to the original
+declaration. An imported name, and the name inside a named re-export (`export { a } from "./a"`,
 `export { a as b } from "./a"`, `import { a } from "./a"; export { a }`), resolve to the
-declaration, passing through any `export *` on the way. A name used in the file (for example a
-call site) resolves to its local binding in the import statement first (`kind: 'local'`); call
-`definition()` on that node to reach the declaration. Module specifiers resolve as the root
-tsconfig says (its `paths`), and through workspace packages linked in `node_modules`; a bare
-specifier that doesn't resolve that way is tried again with the tsconfig nearest the importing file.
+declaration, passing through any `export *` on the way. Module specifiers resolve as the root
+tsconfig says (its `paths`), and through workspace packages linked in `node_modules`. A bare
+specifier that doesn't resolve that way is tried again with the tsconfig nearest the importing
+file. To resolve a specifier yourself, use `symbols(lang).resolveModule()` and
+`symbols(lang).specifierFor()` (see
+[Data Flow and Call Graph](/community/jssg/dataflow)).
+
+In workspace scope, `references.get()` on an exported declaration also finds uses in files that
+import it through barrels, plus the source-side name of each named re-export (`a` in
+`export { a as b } from "./a"`). An `export *` is followed but has no edge of its own. On a name
+inside a re-export, it answers for the declaration being re-exported.
 
 <Note>
-  When a symbol comes from an unresolved import
-  (e.g., `import x from "some-external-module"`), `definition()` now returns the import statement 
-  with `kind: 'import'` instead of returning `null`. This allows you to at least
-  trace the symbol back to where it was imported.
+  When a symbol comes from an import that can't be followed (for example,
+  `import x from "some-external-module"`), `definition.get()` returns one edge with
+  `kind: 'import'` that points at the import binding in this file. You can still trace the
+  symbol back to where it was imported.
 </Note>
 
-### `node.references()`
+**Python.** Use `symbols("python")`. Definitions and references work the same way, with the
+same edge shape. In workspace scope they resolve across modules.
 
-Find all references to the symbol at this node's position.
-
-<ParamField path="references()" type="Array<FileReferences>">
-  Returns an array of file references, grouped by file.
-</ParamField>
+**Grouping by file.** References come as one flat list. To group them, key on the file:
 
 ```ts
-interface FileReferences<M> {
-  /** The SgRoot for the file containing references */
-  root: SgRoot<M>;
-  /** Array of SgNode objects for each reference in this file */
-  nodes: Array<SgNode<M>>;
+const byFile = new Map(); // filename -> { file, nodes }
+for (const edge of refs) {
+  const file = edge.node.getRoot();
+  const entry = byFile.get(file.filename()) ?? { file, nodes: [] };
+  entry.nodes.push(edge.node);
+  byFile.set(file.filename(), entry);
 }
 ```
 
-**Returns empty array when:**
+**Listing.** Lookups are answered node by node. `size`, `keys()` and `for...of` throw on a
+built-in lookup. Ask `get(node)` instead.
 
-- No semantic provider is configured
-- No symbol is found at this position
+### Migrating from `definition()` and `references()`
 
-<Note>
-  In file scope mode, `references()` only searches the current file. In
-  workspace scope mode, it searches all indexed files in the workspace.
-</Note>
+The SgNode methods `definition(options?)` and `references()` are removed. Use the lookups from
+`symbols(lang)` instead.
 
-In workspace scope, `references()` on an exported declaration also finds files that import it
-through barrels, plus the source-side name of each named re-export (`a` in
-`export { a as b } from "./a"`). An `export *` is followed but has no node of its own in the
-result. On a name inside a re-export it answers for the declaration being re-exported.
+- `def.root` is gone. Use `def.node.getRoot()`.
+- `{ follow: true }` is now the only behavior. `resolveExternal` is gone.
+- `def === null` becomes `!def`.
+- References are flat edges, not `{ root, nodes }` groups. Use `edge.node.getRoot()` for the file.
+
+<CodeGroup>
+```ts Before
+const def = use.definition({ follow: true });
+def?.root.write(newText);
+
+for (const file of name.references()) {
+  for (const n of file.nodes) {
+    edits.push(n.replace("newName"));
+  }
+}
+```
+
+```ts After
+import { symbols } from "codemod:ast-grep";
+
+const { definition, references } = symbols("typescript");
+
+const [def] = definition.get(use) ?? [];
+def?.node.getRoot().write(newText);
+
+for (const { node: n } of references.get(name) ?? []) {
+  edits.push(n.replace("newName"));
+}
+```
+</CodeGroup>
 
 ### `root.write(content)`
 
-Write content to a file obtained via `definition()` or `references()`. This method allows cross-file editing within a single codemod execution.
+Write content to another file. Use it on an `SgRoot` from `def.node.getRoot()` or from a reference's
+`edge.node.getRoot()`. This method allows cross-file editing within a single codemod execution.
 
 <ParamField path="write(content)" type="void">
   Writes the provided content to the file and updates the semantic provider's
@@ -185,12 +260,14 @@ Write content to a file obtained via `definition()` or `references()`. This meth
 </ParamField>
 
 ```ts
-// Write to a file obtained from definition() or references()
-const def = node.definition();
-if (def && def.root.filename() !== root.filename()) {
-  const edits = [def.node.replace("newName")];
-  const newContent = def.root.root().commitEdits(edits);
-  def.root.write(newContent);
+// Rename a declaration in the file that holds it
+const { definition } = symbols("typescript");
+const [def] = definition.get(node) ?? [];
+const defFile = def?.node.getRoot();
+if (def?.nameNode && defFile.filename() !== root.filename()) {
+  const edits = [def.nameNode.replace("newName")];
+  const newContent = defFile.root().commitEdits(edits);
+  defFile.write(newContent);
 }
 ```
 
@@ -267,7 +344,7 @@ npx codemod workflow run -w /path/to/codemod/workflow.yaml -t /path/to/target
 </ParamField>
 
 <Info>
-When semantic analysis returns an `SgRoot` for another file, you can use `root.relativeFilename()` to get that file's path relative to the active target directory.
+When a lookup edge points into another file, `edge.node.getRoot().relativeFilename()` gives that file's path relative to the active target directory.
 </Info>
 
 ### Via CLI Commands
@@ -370,9 +447,12 @@ export function Dashboard({ events }) {
 
 <CodeGroup>
 ```typescript scripts/rename-format-date.ts
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root) {
   const rootNode = root.root();
   const currentFile = root.filename();
+  const { references } = symbols("typescript");
 
   // Find the function declaration we want to rename
   const funcDeclName = rootNode.find({
@@ -389,23 +469,22 @@ export default function transform(root) {
 
   if (!funcDeclName) return null;
 
-  // Find all references across the workspace
-  const refs = funcDeclName.references();
-  const currentFileEdits = [];
-
-  for (const fileRef of refs) {
-    const edits = fileRef.nodes.map((node) => node.replace("formatDateTime"));
-
-    if (fileRef.root.filename() === currentFile) {
-      currentFileEdits.push(...edits);
-    } else {
-      // Write changes to other files
-      const newContent = fileRef.root.root().commitEdits(edits);
-      fileRef.root.write(newContent);
-    }
+  // Find all references across the workspace, grouped by file
+  const editsByFile = new Map(); // filename -> { file, edits }
+  for (const { node } of references.get(funcDeclName) ?? []) {
+    const file = node.getRoot();
+    const entry = editsByFile.get(file.filename()) ?? { file, edits: [] };
+    entry.edits.push(node.replace("formatDateTime"));
+    editsByFile.set(file.filename(), entry);
   }
 
-  return rootNode.commitEdits(currentFileEdits);
+  // Write changes to other files
+  for (const [filename, { file, edits }] of editsByFile) {
+    if (filename === currentFile) continue;
+    file.write(file.root().commitEdits(edits));
+  }
+
+  return rootNode.commitEdits(editsByFile.get(currentFile)?.edits ?? []);
 }
 
 ```
@@ -524,8 +603,11 @@ def get_current_user(request) -> User:
 
 <CodeGroup>
 ```typescript scripts/analyze-user-class.ts
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root) {
   const rootNode = root.root();
+  const { references } = symbols("python");
 
   // Find the User class definition
   const classDefName = rootNode.find({
@@ -534,25 +616,29 @@ export default function transform(root) {
 
   if (!classDefName) return null;
 
-  const refs = classDefName.references();
+  const refs = references.get(classDefName) ?? [];
+
+  // Group the flat list of edges by file
+  const nodesByFile = new Map(); // filename -> nodes
+  for (const { node } of refs) {
+    const filename = node.getRoot().filename();
+    nodesByFile.set(filename, [...(nodesByFile.get(filename) ?? []), node]);
+  }
 
   // Log usage analysis
   console.log("=== User class usage analysis ===\n");
 
-  let totalUsages = 0;
-  for (const fileRef of refs) {
-    const filename = fileRef.root.filename();
+  for (const [filename, nodes] of nodesByFile) {
     console.log(`📄 ${filename}:`);
-    for (const node of fileRef.nodes) {
+    for (const node of nodes) {
       const line = node.range().start.line + 1;
       const context = node.parent()?.text().slice(0, 50) || node.text();
       console.log(`   Line ${line}: ${context}...`);
-      totalUsages++;
     }
     console.log("");
   }
 
-  console.log(`Total: ${totalUsages} usages across ${refs.length} files`);
+  console.log(`Total: ${refs.length} usages across ${nodesByFile.size} files`);
 
   return null; // Analysis only, no changes
 }
@@ -636,36 +722,36 @@ export function useUser(userId: string) {
 
 <CodeGroup>
 ```typescript scripts/trace-external-imports.ts
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root) {
   const rootNode = root.root();
+  const { definition } = symbols("typescript");
 
-  // Find all identifiers that might be external imports
+  // Identifiers that might be external imports
   const identifiers = ["axios", "z", "useQuery"];
 
   for (const name of identifiers) {
-    const node = rootNode.find({ rule: { pattern: name } });
-    for (const node of nodes) {
-      const def = node.definition();
+    // The first identifier with this name (the one in the import, if any)
+    const node = rootNode.find({ rule: { kind: "identifier", regex: `^${name}$` } });
+    if (!node) continue;
 
-      if (def) {
-        if (def.kind === "import") {
-          // External module - couldn't resolve, but we have the import
-          console.log(`${name}: External import`);
-          console.log(`  Import statement: ${def.node.text()}`);
-        } else if (def.kind === "local") {
-          console.log(
-            `${name}: Defined locally at line ${
-              def.node.range().start.line + 1
-            }`
-          );
-        } else if (def.kind === "external") {
-          console.log(`${name}: Defined in ${def.root.filename()}`);
-        }
-      }
+    const [def] = definition.get(node) ?? [];
+    if (!def) continue;
+
+    if (def.kind === "import") {
+      // External module: couldn't follow it, so the edge is the import binding
+      const statement = def.node.ancestors().find((a) => a.kind() === "import_statement");
+      console.log(`${name}: External import`);
+      console.log(`  Import statement: ${statement?.text() ?? def.node.text()}`);
+    } else if (def.kind === "local") {
+      console.log(`${name}: Defined locally at line ${def.node.range().start.line + 1}`);
+    } else if (def.kind === "external") {
+      console.log(`${name}: Defined in ${def.node.getRoot().filename()}`);
     }
   }
 
-return null;
+  return null;
 }
 
 ```
@@ -699,10 +785,10 @@ useQuery: External import
 ```
 
 <Note>
-  When a symbol comes from an unresolved import (e.g., `import x from "some-external-module"`),
-  `definition()` returns the import statement with `kind: 'import'`. This allows you to trace
-  symbols back to their import source even when the module can't be resolved or the semantic
-  mode is set to file scope.
+  When a symbol comes from an import that can't be followed (e.g., `import x from "some-external-module"`),
+  `definition.get()` returns one edge with `kind: 'import'` on the import binding in this file.
+  Walk up from `def.node` to the import statement to see the module it came from. This also
+  works in file scope, where imports are not followed into other files.
 </Note>
 
 ### Cross-File Editing with Definition Lookup
@@ -742,9 +828,12 @@ export const config = {
 
 <CodeGroup>
 ```typescript scripts/rename-constant.ts
+import { symbols } from "codemod:ast-grep";
+
 export default function transform(root) {
   const rootNode = root.root();
   const currentFile = root.filename();
+  const { references } = symbols("typescript");
 
   // Find the constant declaration
   const constDeclName = rootNode.find({
@@ -761,22 +850,21 @@ export default function transform(root) {
 
   if (!constDeclName) return null;
 
-  // Find all references to API_BASE_URL
-  const refs = constDeclName.references();
-  const currentFileEdits = [];
-
-  for (const fileRef of refs) {
-    const edits = fileRef.nodes.map((node) => node.replace("API_ENDPOINT"));
-
-    if (fileRef.root.filename() === currentFile) {
-      currentFileEdits.push(...edits);
-    } else {
-      const newContent = fileRef.root.root().commitEdits(edits);
-      fileRef.root.write(newContent);
-    }
+  // Find all references to API_BASE_URL, grouped by file
+  const editsByFile = new Map(); // filename -> { file, edits }
+  for (const { node } of references.get(constDeclName) ?? []) {
+    const file = node.getRoot();
+    const entry = editsByFile.get(file.filename()) ?? { file, edits: [] };
+    entry.edits.push(node.replace("API_ENDPOINT"));
+    editsByFile.set(file.filename(), entry);
   }
 
-  return rootNode.commitEdits(currentFileEdits);
+  for (const [filename, { file, edits }] of editsByFile) {
+    if (filename === currentFile) continue;
+    file.write(file.root().commitEdits(edits));
+  }
+
+  return rootNode.commitEdits(editsByFile.get(currentFile)?.edits ?? []);
 }
 
 ```
@@ -834,8 +922,8 @@ export const config = {
 </Warning>
 
 <Note>
-  When you call `write()` on an `SgRoot` obtained from `definition()` or
-  `references()`, the semantic provider's cache is automatically updated. This
+  When you call `write()` on an `SgRoot` from `def.node.getRoot()` or a reference's
+  `edge.node.getRoot()`, the semantic provider's cache is automatically updated. This
   ensures subsequent semantic queries reflect the changes.
 </Note>
 
@@ -856,17 +944,19 @@ nodes:
 
 </Accordion>
 
-<Accordion title="Handle null/empty results gracefully">
-Semantic analysis may return null or empty results for various reasons. Always check return values:
+<Accordion title="Handle undefined/empty results gracefully">
+Lookups may return `undefined` or an empty list for various reasons. Always check return values:
 
 ```ts
-const def = node.definition();
+const { definition, references } = symbols("typescript");
+
+const [def] = definition.get(node) ?? [];
 if (!def) {
-  // Definition not found - could be external, unresolved, or no provider
+  // No definition: not a name node, unresolved, or semantic analysis is off
   return null;
 }
 
-const refs = node.references();
+const refs = references.get(def.nameNode ?? node) ?? [];
 if (refs.length === 0) {
   // No references found
   return null;
@@ -879,12 +969,10 @@ if (refs.length === 0) {
 When processing references across files, verify you're editing the correct file:
 
 ```ts
-for (const fileRef of refs) {
+for (const { node } of refs) {
   // Only edit the current file
-  if (fileRef.root.filename() === root.filename()) {
-    for (const node of fileRef.nodes) {
-      edits.push(node.replace("newText"));
-    }
+  if (node.getRoot().filename() === root.filename()) {
+    edits.push(node.replace("newText"));
   }
 }
 ```
@@ -895,8 +983,9 @@ for (const fileRef of refs) {
 ## Troubleshooting
 
 <AccordionGroup>
-<Accordion title="Semantic methods return null/empty">
+<Accordion title="Lookups return undefined/empty">
 **Possible causes:**
+- The node is not a name. Ask on an identifier (for example a declarator's `field("name")`), not on a whole statement
 - Semantic analysis is turned off for the step (`semanticAnalysis: "none"`), or the symbol is in another file and the step uses the default file scope (use `semanticAnalysis: "workspace"`, or `semantic_analysis: workspace` in `workflow.yaml`)
 - The language isn't supported (only JavaScript/TypeScript and Python)
 - The symbol couldn't be resolved (external library, syntax error)
@@ -904,11 +993,15 @@ for (const fileRef of refs) {
 **Debug steps:**
 
 ```ts
-const def = node.definition();
+const { definition } = symbols("typescript");
+const [def] = definition.get(node) ?? [];
 console.log("Definition:", def);
 console.log("Node text:", node.text());
-console.log("Node kind:", node.kind());
+console.log("Node kind:", node.kind()); // expect "identifier" or another name kind
 ```
+
+If a lookup throws a `TypeError`, the node's language family doesn't match the language you passed
+to `symbols()`.
 
 </Accordion>
 

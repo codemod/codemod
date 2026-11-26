@@ -442,14 +442,14 @@ import { importBindingOf } from "@jssg/utils/javascript/bindings";
 
 The lookup stops at the import in the file that contains the use. `import { server } from "./browser"` reports source `"./browser"`, not the package `./browser` imported from. `ns.graphql` after `import * as ns` is not resolved; call this on `ns` and read the property text yourself.
 
-Returns `null` when semantic analysis is unavailable. `definition()` can throw in that case; this function does not.
+Returns `null` when semantic analysis is unavailable; this function does not throw.
 
 ## `resolveDefinition`
 
-The node that defines this use, following one import into another project file.
+The node that defines this use, following imports into other project files.
 
 - A local declaration returns that node.
-- An import the workspace can resolve returns that file's definition. In the semantic API this kind is `"external"`, which means another project file, not a package on npm.
+- An import the workspace can resolve returns the declaration it leads to, through re-exports.
 - An unresolved package import returns the import specifier.
 - `const a = setup(); const b = a` resolves `b` to `b`, not to `setup()`. A second hop is out of scope.
 
@@ -480,9 +480,9 @@ These stay false:
 
 Edits that rename references of one binding in `currentFile`. Pass `root.filename()`.
 
-Shadowed names stay. `references()` only returns this binding, so a parameter spelled the same as the import is not renamed. Comments, string literals, and property names such as `record.cleanUrl` are not references and stay. A shorthand property is an identifier, so `{ cleanUrl }` becomes `{ getCleanUrlString }` and the key changes. The import clause is not renamed; use `updateImport` for that.
+Shadowed names stay. `symbols(lang).references` only returns this binding, so a parameter spelled the same as the import is not renamed. Comments, string literals, and property names such as `record.cleanUrl` are not references and stay. A shorthand property is an identifier, so `{ cleanUrl }` becomes `{ getCleanUrlString }` and the key changes. The import clause is not renamed; use `updateImport` for that.
 
-Workspace `references()` also returns other files. Those edits are omitted. Writing them onto the file currently being committed targets the wrong tree. Cross-file renames stay with the caller, via `root.write` on the other file.
+In workspace scope the references include other files. Those edits are omitted. Writing them onto the file currently being committed targets the wrong tree. Cross-file renames stay with the caller, via `root.write` on the other file.
 
 Returns `[]` when semantic analysis is unavailable.
 
@@ -523,7 +523,7 @@ Bindings that stay come first. Bindings moved to one module share a statement; a
 
 ## `importFromDeclarations`
 
-Import (or re-export) every binding of an `import` or `export { … } from` statement straight from the module that declares it instead of through a barrel. Needs `semanticAnalysis: "workspace"`. It uses `root.resolveExport()` to follow the re-exports and `root.specifierFor()` to write a specifier in the original's style (relative or alias, with or without `.js`). A binding stays when it does not resolve, is declared in the barrel itself, or no specifier reaches its file. Imports of installed packages (in `node_modules`) are never rewritten.
+Import (or re-export) every binding of an `import` or `export { … } from` statement straight from the module that declares it instead of through a barrel. Needs `semanticAnalysis: "workspace"`. It uses `root.resolveExport()` to follow the re-exports and `symbols(lang).specifierFor()` to write a specifier in the original's style (relative or alias, with or without `.js`). A binding stays when it does not resolve, is declared in the barrel itself, or no specifier reaches its file. Imports of installed packages (in `node_modules`) are never rewritten.
 
 ```typescript
 export default function transform(root) {
@@ -567,10 +567,10 @@ Point a test-framework mock at the modules a barrel's bindings moved to. `call` 
 - A factory mock or `requireActual`: with one module, its specifier is replaced; with several it is left alone (`null`), because the factory's object would have to be split. Flag it for review.
 
 ```typescript
-// Mocks of the barrel in this file, found with root.importers()
-for (const mock of root.importers(barrel)) {
-  if (mock.kind !== "mock" || !mock.root.root().equals(root.root())) continue;
-  const edit = retargetMock(mock.node, modules);
+// Mocks of the barrel in this file
+for (const mock of root.root().findAll("jest.mock($SOURCE, $$$)")) {
+  if (mock.getMatch("SOURCE")!.text().slice(1, -1) !== barrel) continue;
+  const edit = retargetMock(mock, modules);
   if (edit) edits.push(edit);
 }
 // jest.mock("./components");

@@ -20,12 +20,30 @@ To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha wor
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
 
 <Update label="Unreleased" description="Not published yet">
+**Breaking changes**
+
+- **`node.definition()` and `node.references()` are now `symbols(lang).definition` and `.references`**, in `workflow.ts`, `codemod jssg run`, `workflow.yaml` transforms and `@jssg/utils`. `definition` always follows imports to the declaration (the old `{ follow: true }`; `resolveExternal` is gone), and `references` gives one edge per use instead of files with nodes. `symbols(lang)` follows the step's scope: one file by default, the workspace with `semanticAnalysis: "workspace"`. Without semantic analysis, `get(node)` answers `undefined`. `@jssg/utils`'s binding helpers use the lookups and keep working on older CLIs.
+
+  ```ts
+  // before
+  const def = use.definition({ follow: true });
+  def?.root.write(def.root.root().text() + "\n");
+  for (const file of name.references()) for (const ref of file.nodes) edits.push(ref.replace("next"));
+
+  // after
+  import { symbols } from "codemod:ast-grep";
+  const { definition, references } = symbols("typescript");
+  const [def] = definition.get(use) ?? [];
+  def?.node.getRoot().write(def.node.getRoot().root().text() + "\n");
+  for (const ref of references.get(name) ?? []) edits.push(ref.node.replace("next"));
+  ```
+
 **New**
 
-- **Data flow and call graph in JSSG (experimental, JavaScript and TypeScript)**: `node.flowsFrom()`, `flowsTo()`, `callees()`, `callers()` and `mutations()`, with `dependsOn()` / `reaches()`, `key()` / `equals()`, and module resolution on the root (`resolveModule()`, `resolveExport()`, `specifierFor()`). `definition()` results now carry `exportName` and `nameNode`, and `definition({ follow: true })` goes through imports. `@jssg/utils` adds `retargetImport` and `importFromDeclarations`. The new queries throw instead of answering `[]` when semantic analysis is off. See [Data Flow and Call Graph](/community/jssg/dataflow).
-- **Types from the TypeScript 7 checker (experimental, opt-in)**: importing `types` from `codemod/ast-grep` (or the shorthand `semanticAnalysis: { mode: "workspace", types: "ts7" }`, deprecated) makes `node.typeInfo()` answer and lets `callees()` / `callers()` follow `x.m()` by the type of `x` (`via: "type"`). Needs `typescript@7.0` and the target's dependencies installed. See [Types](/community/jssg/dataflow#types-the-typescript-7-checker).
-- **Called from outside: `entryPoints()` (experimental)**: `callers()` lists call sites only. `node.entryPoints()` says when a function is called from outside the workspace's code: its package exports it, or a rule in the selector's new `semanticAnalysis.entryPoints` declares it, such as Next.js route handlers or `@app.route` views. See [Called from outside](/community/jssg/dataflow#called-from-outside-entrypoints).
-- **Walk the workspace: lookups, `join()` and `crawl()` (experimental)**: `codemod/ast-grep` exports the analyses as values, `callGraph(lang)`, `dataflow(lang)`, `symbols(lang)`, `types(lang)` and `entryPoints(lang)`, each a read-only map from a node to its edges. `lookup(edges)` makes one from edges you know, `join({ from, to })` from two patterns joined on a captured name (tRPC procedures, event names, routes), and `crawl(lookups, start, { stopAt })` follows them. Across steps a node is its key: a step can return nodes, lookups and crawl results, and `lookup(result)` makes them lookups again in a later step. Code that imports an analysis gets workspace analysis without `semanticAnalysis`. See [Walk the workspace](/community/jssg/dataflow#walk-the-workspace-lookups-join-and-crawl).
+- **Data flow and call graph in JSSG (experimental: JavaScript, TypeScript and Python)**: `codemod/ast-grep` exports the analyses as lookups, read-only maps from a node to its edges: `callGraph(lang)` (`callers`, `callees`), `dataflow(lang)` (`sources`, `uses`, one hop each), `symbols(lang)` (`definition` with `exportName` and `nameNode`, `references`, and the functions `resolveModule(file, specifier)` and `specifierFor(file, target)`), `types(lang)` (`typeOf`) and `entryPoints(lang)`. On nodes: `mutations()` and `key()` / `equals()`; on roots: `resolveExport()`, `publicSpecifiers()` and `hasTopLevelEffects()`. `@jssg/utils` adds `retargetImport` and `importFromDeclarations`. Code that imports `callGraph`, `types`, `entryPoints` or `join` gets workspace analysis without `semanticAnalysis`; `dataflow` and `symbols` follow the step's scope. The queries throw instead of answering "nothing" when they cannot run. See [Data Flow and Call Graph](/community/jssg/dataflow).
+- **Types from the TypeScript 7 checker (experimental, opt-in)**: importing `types` from `codemod/ast-grep` (or the shorthand `semanticAnalysis: { mode: "workspace", types: "ts7" }`, deprecated) makes `types("typescript").typeOf` answer and lets `callees` / `callers` follow `x.m()` by the type of `x` (`via: "type"`). Needs `typescript@7.0` and the target's dependencies installed. For Python, `types("python").typeOf` answers the annotation as written. See [Types](/community/jssg/dataflow#types-the-typescript-7-checker).
+- **Called from outside: `entryPoints(lang)` (experimental)**: `callers` lists call sites only. `entryPoints(lang)` maps each function called from outside the workspace's code to why: its package exports it (`{ kind: "export", label: "@acme/ui#Button" }`), or a rule in the selector's new `semanticAnalysis.entryPoints` declares it, such as Next.js route handlers or `@app.route` views. Pass it as `crawl()`'s start to walk from all of them. See [Called from outside](/community/jssg/dataflow#called-from-outside-entrypoints).
+- **Walk the workspace: `lookup()`, `join()` and `crawl()` (experimental)**: `lookup(edges)` makes a lookup from edges you know, `join({ from, to })` from two patterns joined on a captured name (tRPC procedures, event names, routes), and `crawl(lookups, start, { stopAt })` follows them. Across steps a node is its key: a step can return nodes, lookups and crawl results, and `lookup(result)` makes them lookups again in a later step. See [Walk the workspace](/community/jssg/dataflow#walk-the-workspace-lookups-join-and-crawl).
 - **Semantic answers describe the workspace when the step started**: a step sees earlier steps' edits, the same in a dry run as in a real run (types included), and never its own. Querying a root parsed from text the step produced throws instead of answering about the wrong code. See [the rule](/community/jssg/dataflow#answers-describe-the-workspace-when-the-step-started).
 </Update>
 
