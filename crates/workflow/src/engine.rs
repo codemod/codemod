@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 
 use crate::build::{build, BuildError, Built};
 use crate::events::{bounded, Event, EventSink, PartialStep, StepResult, OUTPUT_LIMIT};
-use crate::interaction::Interaction;
+use crate::interaction::{Approval, Ask, Decision, Interaction};
 use crate::run::{
     execute, CancelWatch, Ending, RunContext, RunError, RunHalt, StopReason, TestPlan,
 };
@@ -65,6 +65,12 @@ pub enum EngineError {
         started: &'static str,
         resuming: &'static str,
     },
+    #[error("step {position} ({label}) may already have run before the interruption. Check its effects, then resume with --rerun-step {position} or --skip-step {position}")]
+    InterruptedStep { position: u64, label: String },
+    #[error("step {0} cannot be both rerun and skipped")]
+    ConflictingStepChoice(u64),
+    #[error("step {0} is not an interrupted side-effect step in this run")]
+    InvalidStepChoice(u64),
 }
 
 /// Why a run cannot start on a target another run holds.
@@ -180,7 +186,7 @@ pub struct StartRequest {
 }
 
 /// How to resume a run.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ResumeOptions {
     /// Skip the check for uncommitted changes that a run which has not
     /// written yet makes before its first write (`--allow-dirty`).
@@ -188,6 +194,9 @@ pub struct ResumeOptions {
     /// Continue a run that was canceled or rejected, or one another codemod
     /// version made whose finished function steps would run again (`--force`).
     pub force: bool,
+    /// Explicit choices for steps whose outcome was not recorded.
+    pub rerun_steps: Vec<u64>,
+    pub skip_steps: Vec<u64>,
 }
 
 /// What a run ended as.
@@ -381,7 +390,10 @@ impl Execution {
             .write_gate
             .as_ref()
             .is_some_and(|gate| !gate.passed());
-        context.store.put_run(&record)?;
+        {
+            let _state = context.store.lock_run_state(&record.id)?;
+            context.store.put_run(&record)?;
+        }
         self.record = record;
         self.stop.release(&context.halt);
         if let Some(overlay) = &context.overlay {
@@ -532,19 +544,22 @@ impl Engine {
         } else {
             Arc::clone(&self.store)
         };
-        if store.get_run(&record.id)?.is_some() {
-            return Err(EngineError::Exists(record.id));
-        }
         // Before the run is saved: a run refused here leaves nothing behind.
         let target_lease = if dry_run || test.is_some() {
             None
         } else {
             Some(lock_target(store.as_ref(), &record.target, &record.id)?)
         };
-        store.put_run(&record)?;
-        let lease = store
-            .acquire(&record.id)?
-            .ok_or_else(|| EngineError::Busy(record.id.clone()))?;
+        let lease = {
+            let _state = store.lock_run_state(&record.id)?;
+            if store.get_run(&record.id)?.is_some() {
+                return Err(EngineError::Exists(record.id));
+            }
+            store.put_run(&record)?;
+            store
+                .acquire(&record.id)?
+                .ok_or_else(|| EngineError::Busy(record.id.clone()))?
+        };
         let gate = check_uncommitted.then(|| {
             Arc::new(crate::write_gate::WriteGate::new(
                 &record.target,
@@ -565,6 +580,26 @@ impl Engine {
         host: &str,
         options: ResumeOptions,
     ) -> Result<Execution, EngineError> {
+        // Match the start lock order and read the current record under
+        // the run lease: cancel could have changed the original.
+        let target_lease =
+            lock_target(self.store.as_ref(), &record.target, &record.id).map_err(|error| {
+                match &error {
+                    EngineError::TargetBusy(holder) if holder.run_id == record.id => {
+                        EngineError::Busy(record.id.clone())
+                    }
+                    _ => error,
+                }
+            })?;
+        let state = self.store.lock_run_state(&record.id)?;
+        let lease = self
+            .store
+            .acquire(&record.id)?
+            .ok_or_else(|| EngineError::Busy(record.id.clone()))?;
+        record = self
+            .store
+            .get_run(&record.id)?
+            .ok_or_else(|| EngineError::NotFound(record.id.clone()))?;
         // Step keys identify callbacks the way the host that ran them does.
         if let Some(started) = record.settings.host.as_deref().filter(|h| *h != host) {
             return Err(EngineError::OtherHost {
@@ -600,13 +635,6 @@ impl Engine {
                 });
             }
         }
-        // The lease comes first: while another process executes the run, its
-        // record and cancel request are not ours to change.
-        let lease = self
-            .store
-            .acquire(&record.id)?
-            .ok_or_else(|| EngineError::Busy(record.id.clone()))?;
-        let target_lease = lock_target(self.store.as_ref(), &record.target, &record.id)?;
         record
             .reopen(options.force)
             .map_err(|refused| match refused {
@@ -617,6 +645,10 @@ impl Engine {
                 },
             })?;
         self.store.clear_cancel(&record.id)?;
+        // Don't hold the state lock across a prompt. A cancel request
+        // after this point belongs to this execution and won't be cleared.
+        drop(state);
+        self.resolve_interrupted_steps(&record.id, &options)?;
         // Steps recorded from here on are this version's.
         record.codemod_version = Some(CODEMOD_VERSION.to_string());
         // A run that already wrote is not checked again: it made the changes
@@ -624,7 +656,10 @@ impl Engine {
         if options.allow_dirty {
             record.settings.check_uncommitted = false;
         }
-        self.store.put_run(&record)?;
+        {
+            let _state = self.store.lock_run_state(&record.id)?;
+            self.store.put_run(&record)?;
+        }
         let store = Arc::clone(&self.store);
         let gate = record.settings.check_uncommitted.then(|| {
             Arc::new(crate::write_gate::WriteGate::new(
@@ -636,6 +671,81 @@ impl Engine {
         let mut execution = self.begin(store, record, lease, callbacks, false, None, true, gate);
         execution._target = Some(target_lease);
         Ok(execution)
+    }
+
+    /// Decide about every in-doubt step before the body can issue new work.
+    /// The original started marker stays for a rerun until its new outcome
+    /// is saved: if this resume crashes too, it will ask again.
+    fn resolve_interrupted_steps(
+        &self,
+        run_id: &str,
+        options: &ResumeOptions,
+    ) -> Result<(), EngineError> {
+        let history = self.store.load_steps(run_id)?;
+        let rerun: std::collections::BTreeSet<_> = options.rerun_steps.iter().copied().collect();
+        let skip: std::collections::BTreeSet<_> = options.skip_steps.iter().copied().collect();
+        if let Some(&position) = rerun.intersection(&skip).next() {
+            return Err(EngineError::ConflictingStepChoice(position));
+        }
+        for &position in rerun.union(&skip) {
+            if !history
+                .iter()
+                .any(|step| step.position == position && step.status == StepStatus::Started)
+            {
+                return Err(EngineError::InvalidStepChoice(position));
+            }
+        }
+        let mut next_seq = history
+            .iter()
+            .filter_map(|step| step.seq)
+            .max()
+            .map_or(0, |s| s + 1);
+        let mut skipped = Vec::new();
+        for mut step in history
+            .into_iter()
+            .filter(|step| step.status == StepStatus::Started)
+        {
+            let position = step.position;
+            let choice = if rerun.contains(&position) {
+                Decision::Approved
+            } else if skip.contains(&position) {
+                Decision::Denied
+            } else if self.interaction.is_interactive() {
+                let question = Approval::InterruptedStep {
+                    label: step.label.clone(),
+                    position,
+                };
+                self.interaction.ask(
+                    &Ask {
+                        id: question.question_id(None),
+                        step: Some(position.to_string()),
+                        ..Ask::default()
+                    },
+                    &question,
+                )
+            } else {
+                Decision::Deferred
+            };
+            match choice {
+                Decision::Approved => {}
+                Decision::Denied => {
+                    step.status = StepStatus::Skipped;
+                    step.seq = Some(next_seq);
+                    next_seq += 1;
+                    skipped.push(step);
+                }
+                Decision::Deferred => {
+                    return Err(EngineError::InterruptedStep {
+                        position,
+                        label: step.label,
+                    })
+                }
+            }
+        }
+        for step in skipped {
+            self.store.put_step(run_id, &step)?;
+        }
+        Ok(())
     }
 
     /// Announce a run and set up what its steps share.
@@ -741,10 +851,22 @@ pub enum Canceled {
 
 /// Ask a run to stop, whichever process executes it.
 pub fn cancel_run(store: &dyn RunStore, run_id: &str) -> Result<Canceled, EngineError> {
+    let record = store
+        .get_run(run_id)?
+        .ok_or_else(|| EngineError::NotFound(run_id.to_string()))?;
+    // Take the same repository lock as start/resume when it is idle. If
+    // an executor owns it, cancel remains available through the marker;
+    // the short state lock still serializes us with run transitions.
+    let _target = match lock_target(store, &record.target, run_id) {
+        Ok(lease) => Some(lease),
+        Err(EngineError::TargetBusy(_)) => None,
+        Err(error) => return Err(error),
+    };
+    let _state = store.lock_run_state(run_id)?;
     let mut record = store
         .get_run(run_id)?
         .ok_or_else(|| EngineError::NotFound(run_id.to_string()))?;
-    if store.is_held(run_id)? {
+    if record.status != RunStatus::Succeeded && store.is_held(run_id)? {
         store.request_cancel(run_id)?;
         return Ok(Canceled::Requested);
     }

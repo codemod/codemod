@@ -34,6 +34,8 @@ pub struct OpenOptions {
     pub store: Option<String>,
     /// Continue this run instead of starting one (`store: "local"`).
     pub resume: Option<String>,
+    pub rerun_steps: Option<Vec<u32>>,
+    pub skip_steps: Option<Vec<u32>>,
     /// The decision model `codemod/assess` asks, over what the workflow's
     /// codemod.yaml, the user config and the environment choose.
     pub decision_model: Option<DecisionModelOptions>,
@@ -126,7 +128,24 @@ impl Run {
             },
         );
         let run = match options.resume {
-            Some(run_id) => engine.open_resumed(&run_id),
+            Some(run_id) => engine.open_resumed_with(
+                &run_id,
+                codemod_workflow::ResumeOptions {
+                    rerun_steps: options
+                        .rerun_steps
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(u64::from)
+                        .collect(),
+                    skip_steps: options
+                        .skip_steps
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(u64::from)
+                        .collect(),
+                    ..Default::default()
+                },
+            ),
             None => engine.open(OpenRequest {
                 workflow,
                 target: PathBuf::from(&options.target),

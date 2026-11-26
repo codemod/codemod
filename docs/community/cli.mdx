@@ -539,12 +539,12 @@ A run is unattended when you pass `--no-interactive`, when there is no terminal 
 | `0` | The run finished. |
 | `1` | The run failed, was paused (Ctrl-C), canceled, or rejected at an approval. Also: a dry run reached an approval nobody could answer (a dry run is not saved, so it cannot wait; pass `--approve`, or drive it with `--control stdio`). |
 | `2` | The run finished, but some files failed. The other files' changes were written (in a dry run, nothing was), and the output ends with how many failed. A resumed run counts the files that failed in steps it reused. Also: the workflow called [`fail()`](/community/workflows/reference#failing-a-run-with-a-report) (the run is `failed`, and keeps its output). |
-| `3` | The run is waiting for input: it stopped at an approval nobody could answer (`--no-interactive`, CI, or answered "later"). It is saved; the last line names the command that continues it, `codemod workflow resume --id <ID> --approve <QUESTION_ID>`. |
+| `3` | The run needs input. It stopped at an unanswered approval (resume with `--approve <QUESTION_ID>`), or a resume needs a decision about a step that may already have run (use `--rerun-step <STEP_ID>` or `--skip-step <STEP_ID>`). |
 | other | The workflow called `fail(message, { exitCode })` with that code (1 to 125). A workflow that passes `3` exits like a waiting run: check `workflow status` to tell them apart. |
 
 See [Exit codes](/community/workflows/exit-codes) for how to read them in a script.
 
-**`workflow resume`**
+#### `workflow resume`
 
 Continue a run that failed, was paused (Ctrl-C) or interrupted, or is waiting for approval. A run that was canceled or rejected is over: resuming it takes `--force`. Steps that already finished are not run again: their recorded results are reused, in the order the steps finished the first time. If you changed the workflow, steps you left alone keep their results wherever they now are in the file; a step you added or changed runs, also when it had finished before.
 
@@ -553,8 +553,16 @@ The run continues with what it was started with: `--managed-git` and `--agent` c
 Each run records the codemod version that ran it (`codemodVersion` in `workflow status --format json`). Function and `forEachFile` steps are matched by a hash of the code the CLI builds from them, which another version may build differently. When you resume a run another version made and some finished steps no longer match, `workflow resume` refuses and names the version and the steps: resume it with that version (`npx codemod@<version> workflow resume --id <ID>`), or pass `--force` to run those steps again.
 
 ```bash
-npx codemod workflow resume --id <ID> [--approve [<QUESTION_ID>]] [--force]
+npx codemod workflow resume --id <ID> [--approve [<QUESTION_ID>]] [--force] [--rerun-step <STEP_ID>] [--skip-step <STEP_ID>]
 ```
+
+If the process stopped before saving the outcome of a shell, agent, git, pull request, HTTP, or nested codemod step, the step shows as `started`. Check what it already did before you resume. In a terminal, choose **Rerun** or **Skip**; in CI or with `--no-interactive`, the CLI exits `3` and prints the step's ID and the two flags. `--approve` and `--force` do not make this decision for you.
+
+- `--rerun-step <STEP_ID>` runs the step again. It can repeat changes or send the same request twice.
+- `--skip-step <STEP_ID>` does not run the step again or undo what it did. The step returns `null`, so the workflow must be able to continue without its result.
+
+Use the step's numeric position from `workflow status`. Repeat the flags to make a choice for each interrupted step.
+Runs interrupted before alpha.11 have no started markers, so check for side effects before resuming one.
 
 <ResponseField name="-i, --id <ID>" type="string" required>
   Run ID, from `workflow list` or the end of a failed run's output.
@@ -677,7 +685,7 @@ Show a run and each of its recorded steps.
 
 A run is `running`, `awaiting-approval`, `paused` (stopped with Ctrl-C or `stop`), `succeeded`, `failed`, `canceled` or `rejected`. `workflow resume` continues the first ones and a failed run; `canceled` and `rejected` are over (`--force` continues them anyway). A run shown as `interrupted` was still running when its process was killed: resume or cancel it.
 
-A step is `succeeded`, `partial`, `failed`, `canceled`, `awaiting-approval` or `rejected`; `canceled` and `awaiting-approval` steps run again when the run is resumed.
+A step is `started`, `skipped`, `succeeded`, `partial`, `failed`, `canceled`, `awaiting-approval`, `rejected` or `waiting`. A `started` step needs a rerun or skip decision before resume; `canceled` and `awaiting-approval` steps run again when the run is resumed.
 
 ```bash
 npx codemod workflow status -i <ID>

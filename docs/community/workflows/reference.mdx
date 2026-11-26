@@ -58,7 +58,7 @@ A workflow file contains three kinds of code, each with its own rules:
 
 - **Steps are durable.** Each step's result is saved as soon as the step finishes. If a run fails or is canceled, `codemod workflow resume` replays the finished steps from their saved results and continues from the step that failed.
 - **A step starts when you call `step()`.** `await` waits for it. `Promise.all([step(a), step(b)])` runs two steps at the same time. Git steps are the exception: see [Git steps](#git-steps).
-- **Each step is identified by its label and content.** On resume, a step is skipped and its saved result reused when a step with the same label and the same content (the task, its options and the outside values it uses) already finished in this run. Every other step runs: the one that failed, a step you added, and a finished step you changed. So you can fix a run by editing the workflow, and where you add or move steps does not matter. Steps with the same label and content take the saved results in the order they are called.
+- **Each step is identified by its label and content.** On resume, a step reuses its saved result when a step with the same label and the same content (the task, its options and the outside values it uses) already finished in this run. Other steps normally run again, but a side-effecting step whose outcome was not saved [needs a rerun or skip decision](/community/cli#workflow-resume). Steps with the same label and content take the saved results in the order they are called.
 
 ## `step(label?, task, options?)`
 
@@ -596,7 +596,7 @@ If a `codemod()` step resolves a preview-only registry package during an apply r
 
 <Experimental />
 
-Callbacks have no network. A workflow that needs one declares the request as a step with `http()`, from `codemod/workflow`. The response is the step's result: it is recorded with the run, so a resumed run gets it back without sending the request again.
+Callbacks have no network. A workflow that needs one declares the request as a step with `http()`, from `codemod/workflow`. The response is the step's result: once saved, a resumed run gets it back without sending the request again. If the process crashed before saving the response, the request may still have reached the server. Resume asks whether to rerun or skip the step.
 
 ```ts
 import { http, step } from "codemod/workflow";

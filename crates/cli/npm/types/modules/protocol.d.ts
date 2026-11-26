@@ -66,8 +66,9 @@ declare module "codemod/protocol" {
         command: "answer";
         question_id: string;
         /**
-         * An approval: `"approve"`, `"reject"`, or `"later"` (approval steps
-         * only: the run stops, waiting to be resumed); `true`/`false` too.
+         * An approval: `"approve"`, `"reject"`, or `"later"` (manual
+         * approvals and interrupted steps only); `true`/`false` too.
+         * For an interrupted step, approve to rerun or reject to skip.
          * An agent question: an available agent's id, or `null` for the
          * built-in one.
          */
@@ -120,6 +121,8 @@ declare module "codemod/protocol" {
     | "rejected";
 
   export type StepStatus =
+    | "started"
+    | "skipped"
     | "succeeded"
     | "partial"
     | "failed"
@@ -138,6 +141,7 @@ declare module "codemod/protocol" {
     | { kind: "shell-command"; command: string }
     | { kind: "capabilities"; modules: string[] }
     | { kind: "pull-request"; title: string; branch: string }
+    | { kind: "interrupted-step"; label: string; position: number }
     | { kind: "uncommitted-changes"; path: string; notARepository: boolean };
 
   export interface AgentChoice {
@@ -236,7 +240,7 @@ declare module "codemod/protocol" {
         /**
          * Stable across resumes: `approval:<step>`, `shell:<step>`,
          * `pull-request:<step>`, `capabilities:<step>`, `agent:<step>`, or
-         * `uncommitted-changes`.
+         * `interrupted-step:<step>`, or `uncommitted-changes`.
          */
         id: string;
         kind: "approval" | "agent";

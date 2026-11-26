@@ -15,6 +15,8 @@ pub enum Approval {
     Capabilities { modules: Vec<String> },
     /// A pull request is about to be opened.
     PullRequest { title: String, branch: String },
+    /// An interrupted step may already have had external effects.
+    InterruptedStep { label: String, position: u64 },
     /// The run is about to change the target for the first time, and the
     /// target has uncommitted changes (or is not in a git repository).
     #[serde(rename_all = "camelCase")]
@@ -35,6 +37,7 @@ impl Approval {
             Approval::ShellCommand { .. } => format!("shell:{step}"),
             Approval::Capabilities { .. } => format!("capabilities:{step}"),
             Approval::PullRequest { .. } => format!("pull-request:{step}"),
+            Approval::InterruptedStep { position, .. } => format!("interrupted-step:{position}"),
             Approval::UncommittedChanges { .. } => "uncommitted-changes".to_string(),
         }
     }
@@ -49,6 +52,9 @@ impl Approval {
             }
             Approval::PullRequest { title, branch } => {
                 format!("Push '{branch}' and open pull request '{title}'?")
+            }
+            Approval::InterruptedStep { label, position } => {
+                format!("Step {position} ({label}) may already have run. Rerun it or skip it?")
             }
             Approval::UncommittedChanges {
                 path,
@@ -67,7 +73,7 @@ impl Approval {
     /// resume, the rest are refused.
     pub fn unanswered(&self) -> Decision {
         match self {
-            Approval::Manual { .. } => Decision::Deferred,
+            Approval::Manual { .. } | Approval::InterruptedStep { .. } => Decision::Deferred,
             _ => Decision::Denied,
         }
     }
@@ -77,7 +83,9 @@ impl Approval {
     pub fn given_by_approve_all(&self) -> bool {
         !matches!(
             self,
-            Approval::Capabilities { .. } | Approval::UncommittedChanges { .. }
+            Approval::Capabilities { .. }
+                | Approval::UncommittedChanges { .. }
+                | Approval::InterruptedStep { .. }
         )
     }
 }
@@ -157,6 +165,7 @@ impl Interaction for NonInteractive {
 
     fn approve(&self, approval: &Approval) -> Decision {
         match approval {
+            Approval::InterruptedStep { .. } => Decision::Deferred,
             Approval::Capabilities { .. } | Approval::UncommittedChanges { .. } => Decision::Denied,
             Approval::Manual { .. } if !self.approve_all => Decision::Deferred,
             Approval::Manual { .. }

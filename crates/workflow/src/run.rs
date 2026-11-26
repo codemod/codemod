@@ -300,6 +300,9 @@ pub(crate) struct CancelWatch {
 
 impl CancelWatch {
     pub fn start(store: Arc<dyn RunStore>, run_id: String, halt: Arc<RunHalt>) -> Self {
+        if store.cancel_requested(&run_id).unwrap_or(false) {
+            halt.stop(StopReason::Cancel);
+        }
         let (stop, stopped) = mpsc::channel::<()>();
         std::thread::spawn(move || {
             while let Err(mpsc::RecvTimeoutError::Timeout) = stopped.recv_timeout(CANCEL_POLL) {
@@ -498,7 +501,7 @@ impl RunContext {
         let mut timed = step.clone();
         timed.duration_ms = Some(duration_ms);
         self.store.put_step(&self.run_id, &timed)?;
-        if step.status == StepStatus::Waiting {
+        if matches!(step.status, StepStatus::Waiting | StepStatus::Started) {
             return Ok(());
         }
         self.events.emit(Event::StepFinished {
@@ -533,6 +536,12 @@ impl RunContext {
                 #[serde(default)]
                 kind: Option<String>,
             },
+            #[serde(rename = "stepSkipped")]
+            Skipped {
+                position: u64,
+                label: String,
+                kind: Option<String>,
+            },
             #[serde(rename = "stepRetrying")]
             Retrying {
                 position: u64,
@@ -561,6 +570,18 @@ impl RunContext {
                 at: self.at(position),
                 label,
                 kind,
+            },
+            HostEvent::Skipped {
+                position,
+                label,
+                kind,
+            } => Event::StepFinished {
+                at: self.at(position),
+                label,
+                kind,
+                status: StepStatus::Skipped,
+                error: None,
+                duration_ms: 0,
             },
             HostEvent::Retrying {
                 position,

@@ -140,6 +140,10 @@ export interface HostRunOptions {
    * `codemod workflow resume`, nor one the CLI started here.
    */
   resume?: string;
+  /** On resume, repeat an interrupted side-effect step by its position. */
+  rerunSteps?: number[];
+  /** On resume, skip an interrupted side-effect step and give it a null result. */
+  skipSteps?: number[];
   /** The workflow file, when `workflow` is the module itself. */
   path?: string;
   /** Instead of `path`: the directory relative task paths resolve against. */
@@ -249,6 +253,8 @@ export async function runWorkflow(
     capabilities: options.capabilities ?? [],
     store: options.store,
     resume: options.resume,
+    rerunSteps: options.rerunSteps,
+    skipSteps: options.skipSteps,
     decisionModel: options.decisionModel,
   });
 

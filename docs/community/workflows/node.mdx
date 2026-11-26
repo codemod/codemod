@@ -63,6 +63,7 @@ The first argument is a workflow file or a package directory. In a package direc
 | `capabilities` | `[]` | Deprecated, does nothing: callbacks (and `shard`'s functions) no longer get capabilities |
 | `store` | `"memory"` | `"local"` records the run where `codemod workflow list` and `codemod workflow resume` find it |
 | `resume` | | Continue a recorded run by its id (with `store: "local"`) |
+| `rerunSteps` / `skipSteps` | | On resume, choose by numeric position what to do with each side-effect step that started but has no saved outcome. Skipped steps return `null`. |
 | `workflowName` | | Which workflow to run when `codemod.yaml` declares several |
 | `signal` | | An `AbortSignal` that cancels the run |
 
