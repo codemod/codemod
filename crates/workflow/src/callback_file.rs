@@ -84,7 +84,7 @@ pub async fn run_callback_file(request: CallbackFileRequest) -> Result<CallbackF
         capabilities: HashSet::new(),
         resolver,
         modules: isolate::isolate_modules(),
-        codemod_modules: isolate::isolate_codemod_modules(),
+        codemod_modules: isolate::isolate_codemod_modules(false),
         llm_request_handler: None,
         runtime_event_callback,
         cancel: Arc::new(AtomicBool::new(false)),

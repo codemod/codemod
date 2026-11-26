@@ -323,6 +323,13 @@ pub struct TestPlan {
 }
 
 impl RunContext {
+    /// The workflow is a workflow.yaml, so the package is a codemod 1.x
+    /// package: its transforms get the 1.x APIs 2.0 removed (see
+    /// `js/v1.ts`). Nested codemods decide for their own workflow.
+    pub(crate) fn v1_compat(&self) -> bool {
+        !crate::engine::is_typescript(&self.workflow_path)
+    }
+
     /// The context of a codemod nested in this run's step at `position`: its
     /// own workflow, params and step history, everything else shared. It
     /// stops when that step does (`cancel`). `alongside`: that step ran

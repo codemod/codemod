@@ -190,7 +190,7 @@ nodes:
     let output = fixture.run(&[]);
     assert_eq!(output.status.code(), Some(1), "{}", text(&output));
     assert!(
-        text(&output).contains("step 'Where' uses runtime: docker")
+        text(&output).contains("node 'where' runs its steps in a docker container")
             && text(&output).contains("npx codemod@1"),
         "{}",
         text(&output)

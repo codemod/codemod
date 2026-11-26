@@ -45,12 +45,23 @@ pub(crate) const READ_ONLY_FS: &str = "{name} is not available in workflow callb
 /// What the YAML translation's callbacks run jssg transforms with.
 pub(crate) const JSSG_COMPAT_MODULE: &str = "codemod-internal:jssg-compat";
 
+/// Codemod 1.x compatibility (js/v1.ts): `codemod:metrics` in runs of a
+/// workflow.yaml.
+const V1_MODULE: &str = "codemod-internal:v1";
+/// `codemod:workflow` in runs of a workflow.yaml: the isolates' module and
+/// 1.x's state functions.
+const V1_WORKFLOW_MODULE: &str = "codemod-internal:v1-workflow";
+const V1_WORKFLOW_SOURCE: &str = "export * from \"codemod-internal:isolate-workflow\";\nexport { getState, setState, unsetState, acquireLock, setStepOutput, getStepOutput, getOrSetStepOutput } from \"codemod-internal:v1\";\n";
+
 /// Shared by every worker of one step.
 pub(crate) struct StepIsolates {
     pub resolver: Arc<OxcResolver>,
     pub registry: Option<Arc<dyn Registry>>,
     /// Semantic analysis for roots `parse(file)` makes.
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
+    /// The run is of a workflow.yaml: its code gets the codemod 1.x
+    /// modules (see [`isolate_codemod_modules`]).
+    pub v1: bool,
 }
 
 impl StepIsolates {
@@ -61,6 +72,7 @@ impl StepIsolates {
             resolver: Arc::new(resolver),
             registry: task.run.services.package_registry.clone(),
             semantic_provider: None,
+            v1: task.run.v1_compat(),
         })
     }
 
@@ -79,7 +91,7 @@ impl StepIsolates {
             capabilities: HashSet::new(),
             resolver: Arc::clone(&self.resolver),
             modules: isolate_modules(),
-            codemod_modules: isolate_codemod_modules(),
+            codemod_modules: isolate_codemod_modules(self.v1),
             llm_request_handler: None,
             runtime_event_callback: Some(Arc::new(move |event: RuntimeEvent| {
                 if event.kind != RuntimeEventKind::SetCurrentUnit {
@@ -150,19 +162,36 @@ pub(crate) fn isolate_modules() -> Vec<(String, String)> {
             "node:child_process".to_string(),
             crate::js::child_process_module().to_string(),
         ),
+        (V1_MODULE.to_string(), crate::js::v1_module().to_string()),
+        (
+            V1_WORKFLOW_MODULE.to_string(),
+            V1_WORKFLOW_SOURCE.to_string(),
+        ),
     ]
 }
 
 /// Steps, callbacks and the files they import may import `codemod/deps`
 /// and `codemod/assess`, and `codemod/workflow` and `codemod/git` for
-/// helpers they share with the body.
-pub(crate) fn isolate_codemod_modules() -> Vec<(&'static str, String)> {
-    vec![
-        ("workflow", ISOLATE_WORKFLOW_MODULE.to_string()),
+/// helpers they share with the body. With `v1` (a run of a workflow.yaml,
+/// a codemod 1.x package), also what 1.x transforms imported that 2.0
+/// removed: `codemod:metrics`, and the state functions of
+/// `codemod:workflow`. TypeScript workflows never get them.
+pub(crate) fn isolate_codemod_modules(v1: bool) -> Vec<(&'static str, String)> {
+    let workflow = if v1 {
+        V1_WORKFLOW_MODULE
+    } else {
+        ISOLATE_WORKFLOW_MODULE
+    };
+    let mut modules = vec![
+        ("workflow", workflow.to_string()),
         ("git", ISOLATE_GIT_MODULE.to_string()),
         ("deps", DEPENDENCIES_MODULE.to_string()),
         ("assess", ASSESS_MODULE.to_string()),
-    ]
+    ];
+    if v1 {
+        modules.push(("metrics", V1_MODULE.to_string()));
+    }
+    modules
 }
 
 /// Capabilities a `forEachFile` selector (or a translated workflow.yaml

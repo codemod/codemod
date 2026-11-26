@@ -33,6 +33,7 @@
 pub mod expr;
 mod print;
 mod transform_module;
+mod v1;
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
@@ -62,7 +63,44 @@ pub struct Translated {
 /// adapter.
 pub fn translate_file(path: &Path) -> Result<Translated, String> {
     let workflow = parse_and_validate(path)?;
-    Ok(translate(&workflow))
+    let usage = v1::usage(path.parent().unwrap_or(Path::new(".")));
+    let mut generator = Generator {
+        v1_state: usage.state,
+        v1_metrics: usage.metrics,
+        ..Generator::default()
+    };
+    generator.workflow(&workflow);
+    Ok(generator.finish())
+}
+
+/// `runtime: docker` and `runtime: podman` ran a node's steps in a
+/// container in codemod 1.x. 2.0 runs no containers, and running those steps
+/// on this machine instead would drop the isolation the package asked for,
+/// so such a workflow does not run.
+fn refuse_containers(workflow: &Workflow) -> Result<(), String> {
+    let contained = |runtime: Option<&butterflow_models::Runtime>| {
+        runtime
+            .filter(|r| r.r#type != butterflow_models::RuntimeType::Direct)
+            .map(|r| r.r#type.to_string())
+    };
+    let found = workflow
+        .nodes
+        .iter()
+        .find_map(|node| {
+            contained(node.runtime.as_ref()).map(|kind| (format!("node '{}'", node.id), kind))
+        })
+        .or_else(|| {
+            workflow.templates.iter().find_map(|template| {
+                contained(template.runtime.as_ref())
+                    .map(|kind| (format!("template '{}'", template.id), kind))
+            })
+        });
+    match found {
+        Some((what, kind)) => Err(format!(
+            "{what} runs its steps in a {kind} container (`runtime: {kind}`), which codemod 2.0 does not support. Run this package with codemod 1.x (`npx codemod@1 …`)."
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Translate a workflow.yaml (or JSON) file into the workflow.ts
@@ -86,25 +124,8 @@ fn parse_and_validate(path: &Path) -> Result<Workflow, String> {
     let bundle = path.parent().unwrap_or(Path::new("."));
     butterflow_core::utils::validate_workflow(&workflow, bundle)
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    unsupported_runtime(&workflow).map_err(|e| format!("{}: {e}", path.display()))?;
+    refuse_containers(&workflow).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(workflow)
-}
-
-/// Steps that ran in a container (`runtime: docker` or `podman`) on 1.x
-/// are refused rather than run on this machine.
-fn unsupported_runtime(workflow: &Workflow) -> Result<(), String> {
-    match workflow.nodes.iter().find_map(|node| {
-        node.runtime
-            .as_ref()
-            .filter(|r| r.r#type != butterflow_models::RuntimeType::Direct)
-            .map(|r| (node, r.r#type))
-    }) {
-        Some((node, runtime)) => Err(format!(
-            "step '{}' uses runtime: {runtime}, which codemod 2.0 doesn't support yet. Run it with `npx codemod@1 …` (the same command on codemod 1.x).",
-            node.name
-        )),
-        None => Ok(()),
-    }
 }
 
 /// Translate an already-parsed workflow.
@@ -166,6 +187,13 @@ struct Generator {
     /// `forEachFile` selectors, in the order used, with how often: each is
     /// written at its place or, when shared, as a const.
     selectors: Vec<(String, usize)>,
+    /// Codemod 1.x compatibility (`workflow run` only): the package's
+    /// transforms use `codemod:workflow`'s state functions, so jssg steps get
+    /// the workflow's state and their result's state goes back into it.
+    v1_state: bool,
+    /// The package's transforms count with `codemod:metrics`: the counts
+    /// are added up and returned from the run.
+    v1_metrics: bool,
 }
 
 /// Object fields: (key, TypeScript value).
@@ -705,7 +733,8 @@ impl Generator {
 
         let has_defaults = defaults.as_object().is_some_and(|d| !d.is_empty());
         self.pass_params = has_defaults || !workflow.templates.is_empty();
-        self.plumb_state = plumbs_state(workflow);
+        // 1.x transforms and shell steps shared one state.
+        self.plumb_state = plumbs_state(workflow) || self.v1_state;
         self.string_defaults = defaults
             .as_object()
             .is_none_or(|d| d.values().all(Value::is_string));
@@ -864,6 +893,10 @@ impl Generator {
                 started.push(variable);
             }
             let _ = writeln!(main, "  await Promise.all([{}]);", started.join(", "));
+        }
+        if self.v1_metrics {
+            // What 1.x printed at the end of a run.
+            main.push_str("  return v1Report();\n");
         }
         main.push_str("}\n");
         self.body.push_str(&main);
@@ -1219,7 +1252,7 @@ impl Generator {
             }
             StepAction::JSAstGrep(js) => {
                 self.import("forEachFile");
-                if self.plumb_state {
+                if self.plumb_state && !self.v1_state {
                     notes.push_str(&self.warn(format!(
                         "step '{}': a transform can no longer read or set workflow state; if its script calls getState or setState, give it values through `params` and return what it finds as `data`",
                         step.name
@@ -1227,7 +1260,10 @@ impl Generator {
                 }
                 // Which files, in which language, with which semantic analysis
                 // and capabilities, is the selector's part; the rest the callback's.
-                let (selector, options) = self.jssg_selector(js, scope);
+                let (selector, mut options) = self.jssg_selector(js, scope);
+                if self.v1_state {
+                    options.push(("v1State", "state".into()));
+                }
                 let callback = match self.plain_module(js) {
                     Ok(module) => self.jssg_plain(js, scope, &module),
                     Err(reason) => {
@@ -1242,7 +1278,15 @@ impl Generator {
                         self.jssg_adapter(js, options, "jssgFile")
                     }
                 };
-                self.for_each_file(&selector, callback)
+                let task = self.for_each_file(&selector, callback);
+                if self.v1_state || self.v1_metrics {
+                    let state = if self.v1_state { ", state" } else { "" };
+                    return (
+                        notes,
+                        format!("v1Apply(await step({name}, {task}){state});"),
+                    );
+                }
+                task
             }
             StepAction::Codemod(codemod) => {
                 self.import("codemod");
@@ -1561,6 +1605,9 @@ impl Generator {
             source.push_str(
                 "\n/** An optional count from a `${{ }}`: empty (a null value) leaves it unset. */\nfunction optionalCount(text: string): number | undefined {\n  return text.trim() === \"\" ? undefined : Number(text);\n}\n",
             );
+        }
+        if self.v1_state || self.v1_metrics {
+            source.push_str(v1::HELPERS);
         }
         if self.uses_matrix_env {
             source.push_str(

@@ -791,9 +791,7 @@ nodes:
         upgrade_file(&path).unwrap_err(),
     ] {
         assert!(
-            error.contains(
-                "step 'Where' uses runtime: docker, which codemod 2.0 doesn't support yet"
-            ),
+            error.contains("node 'where' runs its steps in a docker container (`runtime: docker`)"),
             "{error}"
         );
         assert!(error.contains("npx codemod@1"), "{error}");

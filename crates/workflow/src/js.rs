@@ -93,6 +93,12 @@ javascript! {
     pub(crate) fn child_process_module = include_str!("js/child_process.ts"), "child_process.ts"
 }
 javascript! {
+    /// `codemod-internal:v1` in isolates of workflow.yaml runs: the codemod
+    /// 1.x transform APIs 2.0 removed (`codemod:metrics`, and
+    /// `codemod:workflow`'s state functions).
+    pub(crate) fn v1_module = include_str!("js/v1.ts"), "v1.ts"
+}
+javascript! {
     /// Replay-safe globals of the workflow body; a script, not a module.
     pub(crate) fn body_globals = include_str!("js/body_globals.ts"), "body_globals.ts"
 }
@@ -122,6 +128,7 @@ mod tests {
             super::assess_module(),
             super::callback_globals_module(),
             super::child_process_module(),
+            super::v1_module(),
         ] {
             assert!(!js.is_empty());
             assert!(!js.contains("interface "), "types are left in:\n{js}");

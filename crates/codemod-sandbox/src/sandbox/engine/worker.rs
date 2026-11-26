@@ -140,6 +140,9 @@ impl Worker {
             .await;
 
         let fetch = options.capabilities.contains(&LlrtSupportedModules::Fetch);
+        let read_only_fs = options.read_only_fs.filter(|_| {
+            options.dry_run || !options.capabilities.contains(&LlrtSupportedModules::Fs)
+        });
         let mut module_builder = LlrtModuleBuilder::build();
         for capability in &options.capabilities {
             match capability {
@@ -157,18 +160,18 @@ impl Worker {
             }
         }
 
-        let (mut resolver, mut loader, globals) = module_builder.builder.build();
-        let read_only_fs = options
-            .read_only_fs
-            .clone()
-            .filter(|_| !options.capabilities.contains(&LlrtSupportedModules::Fs));
+        let (mut resolver, loader, globals) = module_builder.builder.build();
+        let (codemod_resolver, mut loader) = crate::with_codemod_modules!(loader, llm: fetch);
         if read_only_fs.is_some() {
-            resolver = resolver.add_name("fs").add_name("fs/promises");
-            loader = loader
-                .with_module("fs", CuratedFsModule)
-                .with_module("fs/promises", CuratedFsPromisesModule);
+            for name in ["fs", "node:fs"] {
+                resolver = resolver.add_name(name);
+                loader = loader.with_module(name, CuratedFsModule);
+            }
+            for name in ["fs/promises", "node:fs/promises"] {
+                resolver = resolver.add_name(name);
+                loader = loader.with_module(name, CuratedFsPromisesModule);
+            }
         }
-        let (codemod_resolver, loader) = crate::with_codemod_modules!(loader, llm: fetch);
         let codemod_resolver = codemod_resolver.providing(options.codemod_modules.clone());
 
         let mut memory_resolver = BuiltinResolver::default();

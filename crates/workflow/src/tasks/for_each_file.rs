@@ -32,6 +32,7 @@ use super::changes::{self, Change, PlannedChange};
 use super::isolate::{self, module_name, StepIsolates};
 use super::overlay::Overlay;
 use super::reduce::{self, FinishOnDrop, Fold, InOrder, Reduce};
+use super::v1_host::{self, V1Host};
 use super::{block_on, parallel_map, TaskContext, TaskOutcome};
 use crate::run::RunContext;
 
@@ -99,6 +100,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         outcomes,
         other_changes,
         reduced,
+        v1,
     } = run_callback(
         task,
         &request.callback,
@@ -175,6 +177,11 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     if let Some(usage) = assessed {
         result["assessed"] = json!(usage);
     }
+    // Codemod 1.x compatibility: the state the step's transforms set and
+    // what they counted, which the translated workflow takes from here.
+    if let Some(v1) = v1 {
+        result["v1"] = v1;
+    }
     Ok(TaskOutcome::new(result).with_failures(failed, total))
 }
 
@@ -201,6 +208,9 @@ struct Ran {
     other_changes: Vec<JssgFileChange>,
     /// With a reducer: the folded outputs, or why the fold failed.
     reduced: Option<Result<Value, String>>,
+    /// In a run of a workflow.yaml: what its 1.x transforms set and counted
+    /// (see [`V1Host::finish`]).
+    v1: Option<Value>,
 }
 
 /// Run the extracted callback `callback` on the selected `files`, in
@@ -251,6 +261,7 @@ fn run_callback(
     };
     isolates.semantic_provider = butterflow_core::jssg_runner::semantic_provider(&mode, &paths);
     let name = module_name(task, callback);
+    let v1_host = isolates.v1.then(V1Host::new);
     let next = AtomicUsize::new(0);
     let concurrency = selector.concurrency.unwrap_or(1).max(1);
     let workers = std::thread::available_parallelism()
@@ -314,6 +325,7 @@ fn run_callback(
                         other_files: &other_files,
                         overlay: run.overlay.as_deref(),
                         in_order,
+                        v1: v1_host.clone(),
                     };
                     let progress = &progress;
                     scope.spawn(move || {
@@ -355,6 +367,7 @@ fn run_callback(
         outcomes,
         other_changes: other_files.into_changes(run.overlay.as_deref()),
         reduced,
+        v1: v1_host.and_then(|host| host.finish()),
     })
 }
 
@@ -614,6 +627,9 @@ struct Job<'a> {
     overlay: Option<&'a Overlay>,
     /// With a reducer: where each file's output goes.
     in_order: Option<&'a InOrder>,
+    /// In a run of a workflow.yaml: the 1.x state and metrics the step's
+    /// workers share.
+    v1: Option<Arc<V1Host>>,
 }
 
 fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
@@ -635,11 +651,16 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
         other_files,
         overlay,
         in_order,
+        v1,
     } = job;
     block_on(async move {
         let worker = isolate::start(options, registry, assess).await?;
         let sandbox = &worker;
         let results = async_with!(sandbox.context => |ctx| {
+            if let Some(v1) = v1 {
+                v1_host::install(&ctx, v1, Arc::clone(cancel))
+                    .map_err(|e| format!("could not start the step's runtime: {e}"))?;
+            }
             let setup = async {
                 let declared = Module::declare(ctx.clone(), name, module)?;
                 crate::run::set_import_meta(&declared, workflow_path)?;
