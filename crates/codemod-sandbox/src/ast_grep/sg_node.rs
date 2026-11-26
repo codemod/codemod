@@ -592,7 +592,7 @@ impl SgRootInner {
 
     /// The file this root was parsed from, canonicalized (so two roots for
     /// one file agree), or "" for a root parsed from a string.
-    fn canonical_filename(&self) -> &str {
+    pub(crate) fn canonical_filename(&self) -> &str {
         self.canonical_filename
             .get_or_init(|| match &self.filename {
                 #[cfg(feature = "native")]
@@ -2175,6 +2175,25 @@ impl<'js> SgNodeRjs<'js> {
         }
     }
 
+    /// The nearest ancestor of this kind.
+    pub(crate) fn ancestor_of_kind(&self, kind: &str) -> Option<Self> {
+        let mut current = self.inner_node.get_node().parent();
+        while let Some(node) = current {
+            if node.kind() == kind {
+                let node_match: NodeMatch<_> = node.into();
+                let static_node_match: NodeMatch<'static, TSDoc> =
+                    unsafe { std::mem::transmute(node_match) };
+                return Some(SgNodeRjs {
+                    root: Arc::clone(&self.root),
+                    inner_node: static_node_match,
+                    _phantom: PhantomData,
+                });
+            }
+            current = node.parent();
+        }
+        None
+    }
+
     /// The innermost syntax node with this byte range, or the tightest one around it.
     fn node_in(root: &Arc<SgRootInner>, range: language_core::ByteRange) -> Option<Self> {
         let (start, end) = (range.start as usize, range.end as usize);
@@ -2210,6 +2229,23 @@ impl<'js> SgNodeRjs<'js> {
     /// The language this node's file is parsed as, as `parse` names it.
     pub(crate) fn language_name(&self) -> String {
         get_language(&self.root.grep).to_string()
+    }
+
+    /// The root node of `root`: its whole file.
+    pub(crate) fn root_node(root: &Arc<SgRootInner>) -> Self {
+        let node_match: NodeMatch<_> = root.grep.root().into();
+        let static_node_match: NodeMatch<'static, TSDoc> =
+            unsafe { std::mem::transmute(node_match) };
+        SgNodeRjs {
+            root: Arc::clone(root),
+            inner_node: static_node_match,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Whether this is its file's root node.
+    pub(crate) fn is_root(&self) -> bool {
+        self.inner_node.get_node().parent().is_none()
     }
 
     /// The innermost node with this byte range in `root`.

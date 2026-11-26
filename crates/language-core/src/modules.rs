@@ -1,6 +1,6 @@
 //! Module resolution exposed to codemods: what a specifier resolves to, what
-//! a module's export lands on, which specifier reaches a file, and which
-//! files import one.
+//! a module's export lands on, which specifier reaches a file, which files
+//! import one, and which modules a file imports.
 
 use crate::{ByteRange, UnparsedFile};
 use serde::{Deserialize, Serialize};
@@ -73,6 +73,18 @@ pub struct ImportersFile {
     pub file_path: PathBuf,
     pub content: String,
     pub importers: Vec<Importer>,
+}
+
+/// One place a file refers to a workspace module, and the module.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Import {
+    /// The statement or call that names the module, as for [`Importer`].
+    pub range: ByteRange,
+    pub kind: ImportKind,
+    /// The specifier as written.
+    pub specifier: String,
+    /// The module's file.
+    pub target: PathBuf,
 }
 
 /// Result of an importers query.

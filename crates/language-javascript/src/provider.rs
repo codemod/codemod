@@ -304,6 +304,10 @@ impl SemanticProvider for OxcSemanticProvider {
         Ok(self.workspace("importers")?.importers(target))
     }
 
+    fn imports(&self, file: &Path) -> SemanticResult<Vec<language_core::Import>> {
+        Ok(self.workspace("imports")?.imports(file))
+    }
+
     fn get_definition(
         &self,
         file_path: &Path,

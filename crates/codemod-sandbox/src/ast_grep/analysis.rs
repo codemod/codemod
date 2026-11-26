@@ -77,6 +77,8 @@ enum Builtin {
     Uses,
     Definition,
     References,
+    Imports,
+    Importers,
     TypeOf,
 }
 
@@ -89,6 +91,8 @@ impl Builtin {
             Self::Uses => "uses",
             Self::Definition => "definition",
             Self::References => "references",
+            Self::Imports => "imports",
+            Self::Importers => "importers",
             Self::TypeOf => "typeOf",
         }
     }
@@ -277,6 +281,11 @@ impl<'js> Lookup<'js> {
                         edge.set("node", node)?;
                         push(edge)?;
                     }
+                }
+            }
+            Builtin::Imports | Builtin::Importers => {
+                for edge in module_edges(ctx, &sg, kind)? {
+                    push(edge)?;
                 }
             }
             Builtin::TypeOf => {
@@ -665,9 +674,9 @@ pub(crate) fn dataflow_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Object<'j
     )
 }
 
-/// `symbols(lang)`: the `definition` and `references` lookups, and two
-/// functions for codemods that rewrite imports: `resolveModule(file,
-/// specifier)` and `specifierFor(file, target, options)`.
+/// `symbols(lang)`: the `definition`, `references`, `imports` and
+/// `importers` lookups, and two functions for codemods that rewrite imports:
+/// `resolveModule(file, specifier)` and `specifierFor(file, target, options)`.
 pub(crate) fn symbols_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Object<'js>> {
     let family = family_of(&ctx, "symbols", &lang)?;
     let object = pair(
@@ -676,6 +685,8 @@ pub(crate) fn symbols_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Object<'js
         &[
             ("definition", Builtin::Definition),
             ("references", Builtin::References),
+            ("imports", Builtin::Imports),
+            ("importers", Builtin::Importers),
         ],
     )?;
     object.set(
@@ -730,6 +741,115 @@ fn specifier_for_rjs<'js>(
     let dir = target_directory(&ctx);
     let target = file_of_value(&ctx, &target, dir.as_deref(), "specifierFor(target)")?;
     specifier_from(&ctx, &*provider, &path, &target, options)
+}
+
+/// `imports` and `importers` edges for a file's root node: each to the root
+/// node of the other file, with the statement or call that names the module
+/// (`site`), its `kind` and its `specifier`.
+fn module_edges<'js>(
+    ctx: &Ctx<'js>,
+    sg: &SgNodeRjs<'js>,
+    kind: Builtin,
+) -> Result<Vec<Object<'js>>> {
+    let what = kind.name();
+    if !sg.is_root() {
+        return Err(Exception::throw_type(
+            ctx,
+            &format!(
+                "{what}.get(node): modules are files, so give a file's root node \
+                 (parse(file).root()), not a {}.",
+                sg.inner_node.get_node().kind()
+            ),
+        ));
+    }
+    let file = std::path::PathBuf::from(sg.root.canonical_filename());
+    if file.as_os_str().is_empty() {
+        return Err(Exception::throw_message(
+            ctx,
+            &format!("{what}.get(node): this root was parsed from a string, not a file."),
+        ));
+    }
+    let provider = sg
+        .root
+        .semantic_provider
+        .clone()
+        .or_else(|| step_provider(ctx))
+        .ok_or_else(|| {
+            Exception::throw_message(
+                ctx,
+                &format!("{what}.get(node): there is no semantic analysis here."),
+            )
+        })?;
+    let failed = |e: language_core::SemanticError| {
+        Exception::throw_message(ctx, &format!("{what}.get(node): {e}"))
+    };
+    let mut roots: HashMap<std::path::PathBuf, Option<Arc<SgRootInner>>> = HashMap::new();
+    roots.insert(file.clone(), Some(Arc::clone(&sg.root)));
+    let mut root_of = |path: &std::path::Path| -> Option<Arc<SgRootInner>> {
+        roots
+            .entry(path.to_path_buf())
+            .or_insert_with(|| {
+                root_for_text(
+                    Some(Arc::clone(&provider)),
+                    path,
+                    step_text(ctx, path)?,
+                    target_directory(ctx).as_deref(),
+                )
+            })
+            .clone()
+    };
+    // (file the module is named in, the other end, range, kind, specifier)
+    let mut found = Vec::new();
+    if kind == Builtin::Imports {
+        for import in provider.imports(&file).map_err(failed)? {
+            found.push((
+                file.clone(),
+                import.target,
+                import.range,
+                import.kind,
+                import.specifier,
+            ));
+        }
+    } else {
+        for importing in provider.importers(&file).map_err(failed)?.files {
+            for importer in importing.importers {
+                found.push((
+                    importing.file_path.clone(),
+                    importing.file_path.clone(),
+                    importer.range,
+                    importer.kind,
+                    importer.specifier,
+                ));
+            }
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut edges = Vec::new();
+    for (site_file, other, range, import_kind, specifier) in found {
+        let (Some(site_root), Some(other_root)) = (root_of(&site_file), root_of(&other)) else {
+            continue;
+        };
+        let Some(mut site) = SgNodeRjs::node_at(&site_root, range) else {
+            continue;
+        };
+        // A static import is found by its binding: the edge names the statement.
+        if import_kind == language_core::ImportKind::Import {
+            if let Some(statement) = site.ancestor_of_kind("import_statement") {
+                site = statement;
+            }
+        }
+        let node = SgNodeRjs::root_node(&other_root);
+        if !seen.insert((node.key(), site.key())) {
+            continue;
+        }
+        let edge = Object::new(ctx.clone())?;
+        edge.set("node", node)?;
+        edge.set("site", site)?;
+        edge.set("kind", import_kind.as_str())?;
+        edge.set("specifier", specifier)?;
+        edges.push(edge);
+    }
+    Ok(edges)
 }
 
 /// `types(lang)`: `{ typeOf }`. A step that imports `types` gets them: the

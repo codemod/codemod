@@ -996,9 +996,31 @@ declare module "codemod:ast-grep" {
   };
 
   /**
+   * How a file names a module:
+   * - 'import': `import … from "m"`, `import "m"`; Python `import m`, `from m import x`
+   * - 'export': `export … from "m"`, `export * from "m"`
+   * - 'require': `require("m")`
+   * - 'dynamic': `import("m")`; Python `importlib.import_module("m")`, `__import__("m")`
+   * - 'mock': `jest.mock("m")`, `vi.mock("m")`, ...; Python `mock.patch("m.x")`, `monkeypatch.setattr("m.x", …)`
+   */
+  export type ModuleRefKind = "import" | "export" | "require" | "dynamic" | "mock";
+
+  /** Where a module is named (`site`: the statement or call), how, and with what specifier. */
+  export interface ModuleMeta extends SiteMeta {
+    kind: ModuleRefKind;
+    specifier: string;
+  }
+
+  /**
    * `symbols(lang)`: an identifier's definition and a name's references, in
    * the step's scope (the file, unless the step asks for the workspace), and
    * module resolution (workspace scope).
+   *
+   * `imports` and `importers` are keyed by a file's root node
+   * (`parse(file).root()`) and land on root nodes: the workspace modules a
+   * file imports (installed packages left out), and the files that import
+   * it, statically, dynamically or in test mocks. Crawl `importers` for
+   * every file that depends on a module, directly or not. Workspace scope.
    */
   export function symbols(language: AnalysisLanguage): {
     /**
@@ -1049,6 +1071,8 @@ declare module "codemod:ast-grep" {
      * ```
      */
     specifierFor(file: ModuleFile, target: ModuleFile, options?: SpecifierOptions): string | null;
+    imports: Lookup<SgNode, SgNode, ModuleMeta>;
+    importers: Lookup<SgNode, SgNode, ModuleMeta>;
   };
 
   /**

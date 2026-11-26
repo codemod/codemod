@@ -410,7 +410,7 @@ impl PyFlow {
 
     /// Whether `path` is the workspace's own code: under the root, outside
     /// virtual environments and other skipped directories.
-    fn in_workspace(&self, path: &Path) -> bool {
+    pub(crate) fn in_workspace(&self, path: &Path) -> bool {
         let Some(root) = &self.root else {
             return true;
         };
