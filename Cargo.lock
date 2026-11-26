@@ -3679,6 +3679,7 @@ dependencies = [
  "salsa",
  "tempfile",
  "thiserror 2.0.16",
+ "toml",
  "ty_ide",
  "ty_project",
  "ty_python_semantic",

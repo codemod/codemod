@@ -39,6 +39,7 @@
 
 mod analyzer;
 mod db;
+mod entry_points;
 mod error;
 pub mod flow;
 mod flow_host;
