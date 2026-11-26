@@ -56,11 +56,15 @@ declare module "codemod:workflow" {
   // shell `env`) and returns what it found on its result.
   //
   // Code inside `step(() => ...)` and `forEachFile(...)` callbacks runs in
-  // its own isolate, with every module the run allows (`fs`, `fetch` and
-  // `child_process` behind --allow-*). The rest of the workflow, the body,
-  // runs again on every resume: there, `Date`, `Math.random` and
-  // `crypto.randomUUID` are replay-safe, and modules that read files, the
-  // network, the environment or the clock are build errors.
+  // its own isolate and is pure: it changes the current file through `file`,
+  // reads the target through a read-only `fs`, and analyzes code. The
+  // network, commands, other writes, `process.env` changes and timers fail
+  // there with the step to use instead: `http()`, `shell()`, `agent()`,
+  // `sleep()`. The rest of the workflow, the body, runs again on every
+  // resume: there, `Date`, `Math.random` and `crypto.randomUUID` are
+  // replay-safe, and modules that read files, the network, the environment
+  // or the clock are build errors, as are `fetch` and timers anywhere in a
+  // workflow file.
 
   /** A JSON value: what step results and captured variables may hold. */
   export type JsonValue =
@@ -191,8 +195,9 @@ declare module "codemod:workflow" {
   /**
    * Runs a function once, in its own isolate, and records its result, which
    * must be JSON. Write it inline: outside variables arrive as frozen copies,
-   * and assigning to them is a build error. Inside, `Date`, `fetch`, `fs` and
-   * so on are real (as the run's capabilities allow).
+   * and assigning to them is a build error. Inside, `Date` and `Math.random`
+   * are real and the target can be read with `fs`; the network, commands and
+   * other writes are not available: use `http()`, `shell()` or `agent()` steps.
    */
   export function step<Result>(
     run: () => PromiseLike<Checked<Result>>,
@@ -289,10 +294,10 @@ declare module "codemod:workflow" {
      */
     semanticAnalysis?: SemanticAnalysis;
     /**
-     * Capabilities the callback needs besides the run's: `"fs"`, `"fetch"`,
-     * `"child_process"`. Interactive runs ask for those the run does not
-     * grant (`--allow-fs`, ..., or codemod.yaml); others go without. A dry
-     * run never has `fs` or `child_process`.
+     * @deprecated Callbacks no longer get capabilities: they read the target
+     * through a read-only `fs` without one, and reach the network and run
+     * commands through `http()` and `shell()` steps. Still accepted; the
+     * step's log says it is ignored.
      */
     capabilities?: readonly Capability[];
   }
@@ -642,6 +647,79 @@ declare module "codemod:workflow" {
   export function shell(
     options: ShellOptions,
   ): (strings: TemplateStringsArray, ...values: ShellValue[]) => ShellTask;
+
+  /**
+   * A header value for `http()`: the text, or `{ env: "NAME" }` to read it
+   * from the environment when the request is sent. The run records the
+   * name, never the value, so tokens stay out of the run's records.
+   */
+  export type HttpHeaderValue = string | { env: string };
+
+  export interface HttpOptions {
+    /** `"GET"` (the default), `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, ... */
+    method?: string;
+    headers?: Readonly<Record<string, HttpHeaderValue>>;
+    /** The request body, as text. */
+    body?: string;
+    /** A JSON request body; sets `content-type: application/json`. Not with `body`. */
+    json?: JsonValue;
+    /** How long the request may take. Default: 30 seconds. */
+    timeout?: Duration;
+    /**
+     * Return a 4xx or 5xx response as the step's result. Without it such a
+     * response fails the step, so `retries` apply.
+     */
+    allowErrorStatus?: boolean;
+    /**
+     * `"skip"` (the default): a dry run sends nothing, logs the request it
+     * would send, and gives `{ skipped: true }`. `"perform"`: send it in a
+     * dry run too, for requests that only read.
+     */
+    dryRun?: "skip" | "perform";
+  }
+
+  export interface HttpRequest extends HttpOptions {
+    /** An `http://` or `https://` URL. */
+    url: string;
+  }
+
+  /** The response, as the run records it. */
+  export interface HttpResponse {
+    status: number;
+    statusText: string;
+    /** `status` is 2xx. */
+    ok: boolean;
+    /** The URL that answered, after redirects. */
+    url: string;
+    /** Header names in lower case; repeated headers joined with ", ". */
+    headers: Record<string, string>;
+    /** The body as text (up to 10 MiB), or base64 when `bodyEncoding` says so. */
+    body: string;
+    /** Set when the body is not UTF-8 text. */
+    bodyEncoding?: "base64";
+    /** The parsed body, when the response says it is JSON. */
+    json?: JsonValue;
+  }
+
+  export type HttpTask = Task<Skippable<HttpResponse>>;
+
+  /**
+   * Sends an HTTP request, as a step: how a workflow reaches the network
+   * (callbacks cannot). The response is recorded with the step, so a resumed
+   * run gets it back without sending the request again. A dry run skips it
+   * unless `dryRun: "perform"`. A 4xx or 5xx response fails the step unless
+   * `allowErrorStatus` is set.
+   *
+   * @example
+   * const release = await step("Latest release", http("https://api.github.com/repos/org/repo/releases/latest", {
+   *   headers: { authorization: { env: "GITHUB_TOKEN" } },
+   * }));
+   * if (!release.skipped) console.log(release.json);
+   *
+   * await step("Notify", http({ url: hook, method: "POST", json: { done: true } }));
+   */
+  export function http(url: string, options?: HttpOptions): HttpTask;
+  export function http(request: HttpRequest): HttpTask;
 
   /** What `forEachFile(selector, astGrep(rules))` gives. */
   export interface AstGrepResult {

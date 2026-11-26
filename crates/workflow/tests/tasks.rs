@@ -1396,27 +1396,18 @@ export default async function main() {
 }
 
 /// Writing a file its own text is leaving it alone: it is not part of the
-/// commit, so a change made to it meanwhile is no conflict.
+/// commit.
 #[test]
 fn a_callback_that_writes_a_file_its_own_text_does_not_change_it() {
-    let h = Harness::with_services(
-        Arc::new(MemoryStore::default()),
-        Arc::new(NonInteractive { approve_all: false }),
-        Services {
-            capabilities: [codemod_llrt_capabilities::types::LlrtSupportedModules::Fs].into(),
-            ..Services::default()
-        },
-    );
+    let h = Harness::new();
     h.write("a.ts", "a\n");
     h.write("b.ts", "b\n");
     let report = h.start(
         r#"
 import { step, forEachFile } from "codemod/workflow";
-export default async function main({ target }) {
-  return step(forEachFile({ include: "*.ts", capabilities: ["fs"] }, async (file) => {
+export default async function main() {
+  return step(forEachFile({ include: "*.ts" }, async (file) => {
     if (file.path === "a.ts") return file.write("A\n");
-    const fs = await import("fs");
-    fs.writeFileSync(`${target}/b.ts`, "changed meanwhile\n");
     file.write(file.text);
   }));
 }
@@ -1428,7 +1419,7 @@ export default async function main({ target }) {
         json!({ "written": ["a.ts"], "renamed": [], "deleted": [] })
     );
     assert_eq!(h.read("a.ts"), "A\n");
-    assert_eq!(h.read("b.ts"), "changed meanwhile\n");
+    assert_eq!(h.read("b.ts"), "b\n");
     assert_eq!(h.engine_summary_diffs(), 1);
 }
 
@@ -2613,53 +2604,6 @@ export default async function main() {{
     }
 }
 
-/// A callback gets the capabilities its selector asks for once they are
-/// approved, and never `fs` or `child_process` in a dry run.
-#[test]
-fn callbacks_get_the_capabilities_their_selector_asks_for() {
-    let workflow = |options: &str| {
-        format!(
-            r#"
-import {{ step, forEachFile }} from "codemod/workflow";
-export default async function main() {{
-  const read = await step(forEachFile({{ include: "a.txt"{options} }}, async (file) => {{
-    const fs = await import("fs");
-    return fs.readFileSync(`${{import.meta.dirname}}/data.txt`, "utf8").trim();
-  }}));
-  return read;
-}}
-"#
-        )
-    };
-    let denied = Harness::new();
-    denied.write("a.txt", "a\n");
-    denied.bundle_file("data.txt", "secret\n");
-    let report = denied.start(&workflow(r#", capabilities: ["fs"]"#), Value::Null);
-    let error = output(&report).unwrap_err();
-    assert!(error.contains("fs"), "{error}");
-
-    // Granted to the run (--allow-fs, or codemod.yaml), it is the callback's.
-    let h = Harness::with_services(
-        Arc::new(MemoryStore::default()),
-        Arc::new(NonInteractive { approve_all: false }),
-        Services {
-            capabilities: [codemod_llrt_capabilities::types::LlrtSupportedModules::Fs].into(),
-            ..Services::default()
-        },
-    );
-    h.write("a.txt", "a\n");
-    h.bundle_file("data.txt", "secret\n");
-    let report = h.start(&workflow(r#", capabilities: ["fs"]"#), Value::Null);
-    assert_eq!(output(&report).unwrap()["outputs"], json!(["secret"]));
-    // A dry run installs no file system, whatever was granted.
-    let error = output(&h.dry_run(&workflow(r#", capabilities: ["fs"]"#))).unwrap_err();
-    assert!(error.contains("fs"), "{error}");
-
-    let error =
-        output(&h.start(&workflow(r#", capabilities: ["disk"]"#), Value::Null)).unwrap_err();
-    assert!(error.contains("capabilities must be an array"), "{error}");
-}
-
 /// A callback imported from a file: its default export, with the inline
 /// callback's signature.
 const MIGRATE: &str = r#"
@@ -2912,9 +2856,9 @@ export default async function main({ target }) {
     assert_eq!(h.read("a.ts"), "const a = 1;\n");
 }
 
-/// Work a callback leaves running (a timer it does not wait for, an
-/// interval it never clears) does not crash the run when the step's
-/// workers finish.
+/// Work a callback leaves running (a promise it does not wait for) does
+/// not crash the run when the step's workers finish. Timers fail in
+/// callbacks, so they leave none.
 #[test]
 fn work_a_callback_leaves_running_does_not_crash_the_run() {
     let h = Harness::new();
@@ -2925,8 +2869,7 @@ fn work_a_callback_leaves_running_does_not_crash_the_run() {
 import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   await step("Edit", forEachFile("*.ts", (file) => {
-    if (file.path === "a.ts") new Promise((resolve) => setTimeout(resolve, 50)).then(() => {});
-    else setInterval(() => {}, 10);
+    (async () => { for (let i = 0; i < 1000; i++) await null; })();
     file.write(file.text.replace("1", "2"));
   }));
 }
@@ -2938,28 +2881,10 @@ export default async function main() {
     assert_eq!(h.read("b.ts"), "const b = 2;\n");
 }
 
-/// A function step that returns with a timer or an interval still pending
-/// does not crash the run either.
+/// A function step or `dependencyGraph` callback that returns with work
+/// still pending does not crash the run either.
 #[test]
 fn work_a_function_step_leaves_running_does_not_crash_the_run() {
-    let h = Harness::new();
-    let report = h.start(
-        r#"
-import { step } from "codemod/workflow";
-export default async function main() {
-  const a = await step("Timer", () => { setTimeout(() => {}, 10_000); return 1; });
-  const b = await step("Interval", () => { setInterval(() => {}, 10); return 2; });
-  return [a, b];
-}
-"#,
-        Value::Null,
-    );
-    assert_eq!(output(&report).unwrap(), json!([1, 2]));
-}
-
-/// Nor does a `dependencyGraph` callback that leaves an interval running.
-#[test]
-fn work_a_dependency_graph_callback_leaves_running_does_not_crash_the_run() {
     let h = Harness::new();
     yarn_target(&h);
     let report = h.start(
@@ -2967,12 +2892,14 @@ fn work_a_dependency_graph_callback_leaves_running_does_not_crash_the_run() {
 import { step } from "codemod/workflow";
 import { dependencyGraph } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph({}, (g) => { setInterval(() => {}, 10); setTimeout(() => {}, 10_000); return g.node("dnd").name; }));
+  const a = await step("Pending", () => { (async () => { for (let i = 0; i < 1000; i++) await null; })(); return 1; });
+  const b = await step(dependencyGraph({}, (g) => { (async () => { for (let i = 0; i < 1000; i++) await null; })(); return g.node("dnd").name; }));
+  return [a, b];
 }
 "#,
         Value::Null,
     );
-    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(output(&report).unwrap(), json!([1, "dnd"]));
 }
 
 /// What every step of a dry run returns, and what it reports it would

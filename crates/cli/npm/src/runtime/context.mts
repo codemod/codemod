@@ -27,7 +27,26 @@ export interface RunScope {
   runtime: Runtime;
   /** Whether `console` output of the run's code goes to its logs. */
   captureConsole: boolean;
+  /** What `Date`, `performance.now` and `Math.random` give in the body. */
+  body?: BodyClock;
   step?: StepScope;
+}
+
+/**
+ * The workflow body's clock and random numbers: the clock starts at the
+ * run's start time and only moves to the time recorded for a step that
+ * finished; the numbers are seeded by the run id. So the body issues the
+ * same steps on every resume.
+ */
+export interface BodyClock {
+  /** The workflow clock, in ms since the epoch. */
+  now(): number;
+  /** Where the clock started: the run's start time. */
+  readonly origin: number;
+  /** Move the clock to `ms`, if that is later. */
+  advance(ms: number): void;
+  /** The next seeded number in [0, 1). */
+  random(): number;
 }
 
 const KEY = Symbol.for("codemod.workflow.context");

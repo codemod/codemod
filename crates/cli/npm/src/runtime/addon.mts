@@ -88,6 +88,10 @@ export interface NativeRun {
   readonly target: string;
   readonly params: Record<string, Json>;
   readonly dryRun: boolean;
+  /** The run's id; the body's random numbers are seeded by it. */
+  readonly runId: string;
+  /** When the run started (ms since the epoch), also on a resume. */
+  readonly startedAt: number;
   /** Steps recorded by earlier executions of the run. */
   history(): StepRecord[];
   testPlan(): TestPlan | null;

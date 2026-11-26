@@ -90,7 +90,7 @@ fn adapter_only(path: &Path) -> Option<String> {
         if text.contains("jssgTransform") {
             return Some(format!("{name} calls jssgTransform"));
         }
-        if calls_rename(&text) {
+        if calls_rename(&file, &text) {
             return Some(format!("{name} calls root.rename()"));
         }
         let dir = file.parent().unwrap_or(Path::new("."));
@@ -103,8 +103,38 @@ fn adapter_only(path: &Path) -> Option<String> {
     None
 }
 
-/// `x.rename(`, other than Node.js's `fs.rename`.
-fn calls_rename(text: &str) -> bool {
+/// `x.rename(...)`, other than Node.js's `fs.rename`: a call, not the
+/// text in a string (`pattern: "Schema.rename($A)"`), when the file parses.
+fn calls_rename(file: &Path, text: &str) -> bool {
+    if !text.contains(".rename(") {
+        return false;
+    }
+    let allocator = Allocator::default();
+    let source_type = SourceType::from_path(file).unwrap_or_else(|_| SourceType::ts());
+    let parsed = Parser::new(&allocator, text, source_type).parse();
+    if parsed.panicked || !parsed.errors.is_empty() {
+        return calls_rename_in_text(text);
+    }
+    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    let found = semantic.nodes().iter().any(|node| {
+        let AstKind::CallExpression(call) = node.kind() else {
+            return false;
+        };
+        let Expression::StaticMemberExpression(member) = call.callee.without_parentheses() else {
+            return false;
+        };
+        member.property.name == "rename"
+            && !matches!(
+                member.object.without_parentheses(),
+                Expression::Identifier(object)
+                    if matches!(object.name.as_str(), "fs" | "promises" | "fsp" | "fsPromises")
+            )
+    });
+    found
+}
+
+/// [`calls_rename`] for a file that does not parse: any `.rename(` in it.
+fn calls_rename_in_text(text: &str) -> bool {
     text.match_indices(".rename(").any(|(at, _)| {
         let before = &text[..at];
         let object = before
@@ -116,7 +146,7 @@ fn calls_rename(text: &str) -> bool {
 }
 
 /// Relative specifiers in `import`, `export ... from` and `require`.
-fn relative_imports(text: &str) -> Vec<String> {
+pub(crate) fn relative_imports(text: &str) -> Vec<String> {
     let mut found = Vec::new();
     for keyword in ["from", "import", "require("] {
         for (at, _) in text.match_indices(keyword) {
@@ -136,7 +166,7 @@ fn relative_imports(text: &str) -> Vec<String> {
     found
 }
 
-fn resolve(dir: &Path, specifier: &str) -> Option<PathBuf> {
+pub(crate) fn resolve(dir: &Path, specifier: &str) -> Option<PathBuf> {
     let base = dir.join(specifier);
     if base.is_file() {
         return Some(base);
@@ -175,9 +205,9 @@ fn default_export(program: &Program, source: &str) -> Option<TransformModule> {
                     ExportDefaultDeclarationKind::Identifier(identifier) => {
                         binding(program, &identifier.name, source, 0)
                     }
-                    other => other
-                        .as_expression()
-                        .and_then(|expression| from_expression(expression, source)),
+                    other => other.as_expression().and_then(|expression| {
+                        from_expression(expression, source).or_else(|| computed(expression))
+                    }),
                 };
             }
             Statement::ExportNamedDeclaration(export) if export.source.is_none() => {
@@ -278,6 +308,26 @@ fn from_expression(expression: &Expression, source: &str) -> Option<TransformMod
             function.return_type.as_deref(),
             source,
         )),
+        _ => None,
+    }
+}
+
+/// A default export computed at load time, as bundlers write for CommonJS
+/// (`export default __entry.default || __entry.transform`): which function
+/// it is can't be read, so the callback calls it every way a transform may
+/// be: with the options, awaited, taking text or `{ edit, data }`.
+fn computed(expression: &Expression) -> Option<TransformModule> {
+    match expression.without_parentheses() {
+        Expression::LogicalExpression(_)
+        | Expression::ConditionalExpression(_)
+        | Expression::StaticMemberExpression(_)
+        | Expression::ComputedMemberExpression(_)
+        | Expression::CallExpression(_) => Some(TransformModule {
+            takes_options: true,
+            is_async: true,
+            returns_result: true,
+            get_selector: false,
+        }),
         _ => None,
     }
 }
@@ -428,6 +478,40 @@ mod tests {
             analyzed("t.ts", "export default class {}\n"),
             Analysis::Adapter(_)
         ));
+    }
+
+    #[test]
+    fn rename_in_a_string_is_not_a_call() {
+        assert!(matches!(
+            analyzed(
+                "t.ts",
+                "const rules = [{ pattern: \"Schema.rename($MAPPING)\" }];\nexport default function t(root) { return null; }\n"
+            ),
+            Analysis::Plain(_)
+        ));
+        assert!(matches!(
+            analyzed(
+                "t.ts",
+                "export default function t(root) { (root).rename('x.ts'); return null; }\n"
+            ),
+            Analysis::Adapter(_)
+        ));
+    }
+
+    #[test]
+    fn a_commonjs_bundle_is_called_every_way_a_transform_may_be() {
+        assert_eq!(
+            analyzed(
+                "t.ts",
+                "var __entry = { default: async (root) => null };\nexport default __entry.default || __entry.transform;\n"
+            ),
+            Analysis::Plain(TransformModule {
+                takes_options: true,
+                is_async: true,
+                returns_result: true,
+                get_selector: false,
+            })
+        );
     }
 
     #[test]

@@ -42,3 +42,34 @@ fn no_command_in_non_interactive_mode_prints_next_steps() {
     assert!(stderr.contains(&format!("3. Run a published package: {npx} <package>")));
     assert!(!stdout.contains("What would you like to do?"));
 }
+
+#[test]
+fn unpublish_without_a_terminal_needs_yes() {
+    let output = Command::new(codemod_binary())
+        .args(["unpublish", "@codemod/nope", "--version", "1.0.0"])
+        .env("DISABLE_ANALYTICS", "true")
+        .output()
+        .expect("failed to run codemod unpublish");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("pass --yes to confirm"), "{stderr}");
+}
+
+#[test]
+fn init_without_a_terminal_does_not_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = Command::new(codemod_binary())
+        .arg("init")
+        .current_dir(dir.path())
+        .env("DISABLE_ANALYTICS", "true")
+        .output()
+        .expect("failed to run codemod init");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Treated as --no-interactive: a missing flag, not a failed prompt.
+    assert!(stderr.contains("Path argument is required"), "{stderr}");
+    assert!(!stderr.contains("not a TTY"), "{stderr}");
+    assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
+}

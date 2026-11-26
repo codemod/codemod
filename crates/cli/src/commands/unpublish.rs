@@ -28,6 +28,10 @@ pub struct Command {
     /// Show what would be unpublished without actually doing it
     #[arg(long)]
     dry_run: bool,
+
+    /// Unpublish without asking for confirmation (needed when there is no terminal to ask on)
+    #[arg(long, short = 'y')]
+    yes: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -56,6 +60,12 @@ pub async fn handler(args: &Command) -> Result<()> {
     if args.version.is_some() && args.force {
         warn!("Both --version and --force specified. Will unpublish only the specified version.");
     }
+
+    // Before anything else: unattended, nothing can confirm it but --yes.
+    let ask = must_ask(
+        args.yes || args.dry_run,
+        crate::utils::interactive::is_interactive(false),
+    )?;
 
     // Get registry configuration
     let storage = TokenStorage::new()?;
@@ -97,7 +107,7 @@ pub async fn handler(args: &Command) -> Result<()> {
     }
 
     // Confirm unpublish operation
-    if !confirm_unpublish(&args.package, args.version.as_deref(), args.force)? {
+    if ask && !confirm_unpublish(&args.package, args.version.as_deref(), args.force)? {
         println!("Unpublish operation cancelled.");
         return Ok(());
     }
@@ -137,6 +147,18 @@ pub async fn handler(args: &Command) -> Result<()> {
     println!();
     println!("⚠️  Note: Unpublished packages cannot be republished with the same version number.");
     Ok(())
+}
+
+/// Whether to ask before unpublishing: not when `confirmed` (--yes, or a
+/// dry run), and refused when there is no terminal to ask on.
+fn must_ask(confirmed: bool, interactive: bool) -> Result<bool> {
+    match (confirmed, interactive) {
+        (true, _) => Ok(false),
+        (false, true) => Ok(true),
+        (false, false) => Err(anyhow!(
+            "Unpublishing can't be undone and there is no terminal to confirm it on: pass --yes to confirm."
+        )),
+    }
 }
 
 fn confirm_unpublish(package: &str, version: Option<&str>, force: bool) -> Result<bool> {
@@ -256,6 +278,14 @@ fn format_package_name(package: &UnpublishedPackage) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unattended_unpublish_needs_yes() {
+        assert!(must_ask(false, false).is_err());
+        assert!(must_ask(false, true).unwrap());
+        assert!(!must_ask(true, false).unwrap());
+        assert!(!must_ask(true, true).unwrap());
+    }
 
     #[test]
     fn test_format_package_name() {

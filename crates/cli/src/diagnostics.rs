@@ -412,7 +412,14 @@ fn truncate_help_output(output: &str) -> String {
 
 fn render_report(diagnostic: &(dyn Diagnostic + Send + Sync + 'static)) -> String {
     let mut rendered = String::new();
-    let handler = GraphicalReportHandler::new_themed(GraphicalTheme::unicode());
+    // Errors go to stderr: colored only when it is a terminal, without
+    // NO_COLOR or --no-color.
+    let theme = if console::colors_enabled_stderr() && console::colors_enabled() {
+        GraphicalTheme::unicode()
+    } else {
+        GraphicalTheme::unicode_nocolor()
+    };
+    let handler = GraphicalReportHandler::new_themed(theme);
     if handler.render_report(&mut rendered, diagnostic).is_ok() {
         rendered
     } else {

@@ -66,13 +66,13 @@ Commit the starting files so the target is clean, then try a dry run. It runs ev
 git init
 git add .
 git commit -m "Before the migration"
-npx codemod@2.0.0-alpha.5 workflow run -w ./workflow.ts --dry-run
+npx codemod@alpha workflow run -w ./workflow.ts --dry-run
 ```
 
 It prints `Replaced 3 calls in 2 files` and the diff it would apply, and `git status` shows no changes. Now run it for real:
 
 ```bash
-npx codemod@2.0.0-alpha.5 workflow run -w ./workflow.ts
+npx codemod@alpha workflow run -w ./workflow.ts
 git diff -- src
 ```
 
@@ -124,7 +124,7 @@ To try it, restore the original files with `git restore src`. The CLI refuses to
 git restore src
 git add workflow.ts
 git commit -m "Remove unused imports"
-npx codemod@2.0.0-alpha.5 workflow run -w ./workflow.ts
+npx codemod@alpha workflow run -w ./workflow.ts
 ```
 
 It prints `Replaced 3 calls in 2 files` and `Removed the util import from 2 files`. `git diff -- src` shows both imports gone, with blank lines left where they were. The next step cleans those up.
@@ -220,13 +220,13 @@ Restore the files, commit, then run without prompts:
 git restore src
 git add workflow.ts scripts
 git commit -m "Finish the migration workflow"
-npx codemod@2.0.0-alpha.5 workflow run -w ./workflow.ts --no-interactive
+npx codemod@alpha workflow run -w ./workflow.ts --no-interactive
 ```
 
 The run prints `Replaced 3 calls in 2 files` and `Removed the util import from 2 files`, then pauses at `Format 2 changed files with Prettier?` and prints the command to continue. Approve with the run ID from the output:
 
 ```bash
-npx codemod@2.0.0-alpha.5 workflow resume --id <run-id> --approve
+npx codemod@alpha workflow resume --id <run-id> --approve
 ```
 
 The workflow runs again from the top, but finished steps reuse their saved results (`↺ ... (done earlier)`). Prettier lists both files and the run prints `Prettier reformatted 2 files`. `git diff -- src` now shows clean files with no imports.
@@ -248,7 +248,7 @@ Commit the changes and run the workflow again. It stops early with `No util.isAr
 ```
 
 ```bash
-npm install --save-dev codemod@2.0.0-alpha.5
+npm install --save-dev codemod@alpha
 echo node_modules > .gitignore
 ```
 

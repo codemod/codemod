@@ -31,6 +31,11 @@ declare module "codemod-internal:jssg-compat" {
     basePath?: string;
     /** Run the transform, but leave the file as it was. */
     dryRun?: boolean;
+    /**
+     * Codemod 1.x compatibility, in runs of a workflow.yaml: the workflow's
+     * state, which the transform reads with `getState` from `codemod:workflow`.
+     */
+    v1State?: Readonly<Record<string, unknown>>;
   }
 
   /**

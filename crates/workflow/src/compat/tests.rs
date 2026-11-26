@@ -766,6 +766,38 @@ fn templates_used_many_times_over_are_walked_once() {
     );
 }
 
+#[test]
+fn a_container_runtime_is_refused_by_run_and_upgrade() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workflow.yaml");
+    std::fs::write(
+        &path,
+        r#"
+version: "1"
+nodes:
+  - id: where
+    name: Where
+    runtime:
+      type: docker
+      image: alpine
+    steps:
+      - name: uname
+        run: uname -s
+"#,
+    )
+    .unwrap();
+    for error in [
+        translate_file(&path).unwrap_err(),
+        upgrade_file(&path).unwrap_err(),
+    ] {
+        assert!(
+            error.contains("node 'where' runs its steps in a docker container (`runtime: docker`)"),
+            "{error}"
+        );
+        assert!(error.contains("npx codemod@1"), "{error}");
+    }
+}
+
 // ---- `codemod workflow upgrade`: plain callbacks ----
 
 /// `upgrade_file` on a package of `files`, checking the result builds.
@@ -859,7 +891,7 @@ export default async function main() {
 }
 
 #[test]
-fn transforms_that_take_options_get_them_and_capabilities_stay_on_the_selector() {
+fn upgraded_transforms_keep_options_but_not_obsolete_capabilities() {
     let yaml = format!(
         r#"version: "1"
 nodes:
@@ -954,7 +986,6 @@ async function removeDependenciesNode(params: Params, target: string) {
         include: ["**/package.json"],
         exclude: ["**/node_modules/**"],
         language: "typescript",
-        capabilities: ["child_process", "fs"],
       },
       async (file) => {
         const out = await removeDependenciesTransform(parse(file), {

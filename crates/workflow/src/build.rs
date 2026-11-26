@@ -134,6 +134,47 @@ const PURE_BUILTINS: &[&str] = &[
     "stream/web",
 ];
 
+/// Globals no workflow code may use: the body runs again on every resume,
+/// and callbacks are pure. See [`unavailable`].
+const FORBIDDEN_GLOBALS: &[&str] = &[
+    "fetch",
+    "XMLHttpRequest",
+    "WebSocket",
+    "setTimeout",
+    "setInterval",
+    "setImmediate",
+];
+
+/// Where workflow code runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodeSite {
+    /// The workflow body.
+    Body,
+    /// A function step, `forEachFile` callback or reducer.
+    Callback,
+}
+
+/// Why workflow code cannot use `name`, and the step to use instead: the
+/// words of `unavailable` in `js/orchestrator.ts`, which both hosts throw
+/// when such code runs.
+pub fn unavailable(name: &str, site: CodeSite) -> String {
+    let place = match site {
+        CodeSite::Body => "the workflow body, which runs again on every resume",
+        CodeSite::Callback => {
+            "workflow callbacks (function steps, forEachFile callbacks and reducers)"
+        }
+    };
+    match name {
+        "fetch" | "XMLHttpRequest" | "WebSocket" => format!(
+            "{name} is not available in {place}: declare the request as a step, await step(\"label\", http(url, options)), so it is recorded and not sent again on resume"
+        ),
+        "setTimeout" | "setInterval" | "setImmediate" => format!(
+            "{name} is not available in {place}: wait between steps with await sleep(\"10s\")"
+        ),
+        _ => format!("{name} is not available in {place}"),
+    }
+}
+
 /// The class of an import specifier, without looking at the file system.
 pub fn module_class(specifier: &str) -> Result<ModuleClass, String> {
     match codemod_module(specifier) {
@@ -780,6 +821,21 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
             .iter()
             .any(|(span, _)| span.start <= at.start && at.end <= span.end)
     };
+    // Workflow code reaches the network and waits only through declared
+    // steps: `fetch` and timers, as globals, are errors here rather than
+    // when the run gets to them.
+    for reference in analysis.references.iter().filter(|r| r.symbol.is_none()) {
+        let name = &source[reference.span.start as usize..reference.span.end as usize];
+        if FORBIDDEN_GLOBALS.contains(&name) {
+            let site = if in_extracted(reference.span) {
+                CodeSite::Callback
+            } else {
+                CodeSite::Body
+            };
+            return Err(analysis.error(reference.span.start, unavailable(name, site)));
+        }
+    }
+
     // The body's imports, by source position: modules are evaluated in the
     // order they are imported, which a side-effect import may rely on.
     let mut body_lines: Vec<(u32, String)> = Vec::new();

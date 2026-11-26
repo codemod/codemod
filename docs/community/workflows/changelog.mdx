@@ -11,13 +11,64 @@ Workflow v2 is the 2.0 Codemod CLI: workflows are TypeScript (`workflow.ts`), an
 
 ```bash
 npx codemod@alpha workflow run -w workflow.ts --target .
-npx codemod@2.0.0-alpha.8 workflow run -w workflow.ts --target .
+npx codemod@2.0.0-alpha.9 workflow run -w workflow.ts --target .
 ```
 
 To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha workflow upgrade ./my-package --dry-run`. See [Migrate from workflow.yaml](/community/workflows/migrate).
 </Note>
 
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
+
+<Update label="2.0.0-alpha.10" description="November 26, 2026">
+**Breaking changes**
+
+- **A run waiting for an approval exits `3`**. Before, `workflow run --no-interactive` (and `workflow resume`, `codemod <package>`) exited `0` when the run stopped at an approval, so a CI job passed with the migration half done. Now it exits `3`, apart from `1` (failed) and `2` (failed files, `fail()`), and ends with the command that continues it. See [exit codes](/community/cli#exit-codes).
+
+  ```
+  Waiting for approval: Go on?
+    Approve it and go on with: codemod workflow resume --id <ID> --approve approval:1
+  $ echo $?
+  3
+  ```
+
+- **Callbacks are pure.** Function steps, `forEachFile` callbacks and reducers, `dependencyGraph` callbacks and `shard`'s functions no longer get `fetch`, `child_process`, `fs` writes, `process.env` changes or timers, whatever the run grants. Each fails with the step to use instead. They read the target through a read-only `fs` without any flag. `fetch` and timers written in a workflow file are build errors. See [Callbacks are pure](/community/workflows/reference#callbacks-are-pure).
+
+  ```ts
+  // before (with --allow-fetch)
+  const latest = await step("Latest", async () => (await fetch(url)).json());
+
+  // after
+  const latest = (await step("Latest", http(url))).json;
+  ```
+- **`--allow-fs`, `--allow-fetch` and `--allow-child-process` do nothing** for workflow runs. They are accepted with a warning; `capabilities` in `codemod.yaml` and in a `forEachFile` selector are ignored (the step's log says so). The launcher no longer shows capability toggles.
+- **`codemod jssg run` and `codemod jssg test`: `fs` writes need `--allow-fs`.** Without it a transform's `fs` reads the target but `writeFileSync`, `mkdirSync` and `unlinkSync` fail with `EROFS` and a message naming the flag, as `child_process` needs `--allow-child-process`. Before, writes inside the target worked with no flag. See [Security & Capabilities](/community/jssg/security).
+- **The Node.js host enforces the same rules** (`codemod/host`, `codemod/testing`), and replays the body's clock and random numbers as the CLI does, so a test that passes does not fail under the CLI. See [the Node.js host](/community/workflows/node#how-it-differs-from-the-cli).
+- **Declared `string` params stay strings.** `--param version=19` gives `"19"` for a parameter declared `string`; earlier alphas parsed it as `19`.
+- **YAML with `runtime: docker` or `runtime: podman` is refused before any steps run.** Earlier alphas silently ran those steps on the host.
+- **The experimental launcher is opt-in** (`CODEMOD_LAUNCHER=1`). Plain terminal output is the default. `CI=1` never prompts, even with a terminal.
+
+**New**
+
+- **Runs record the codemod version.** `workflow status --format json` shows `codemodVersion`. Resuming a run another version made, whose finished function steps that version built differently, is refused with the version and the steps, instead of running those steps again silently; `--force` runs them again. `workflow list` shows runs this version cannot read as `unreadable (made by codemod <version>)` instead of leaving them out.
+
+- **One run per repository at a time.** Before, two runs on one repository both ran and could write the same files. Now a run (or resume) on a repository another run is executing fails at once, naming that run: `another run (<ID>) is already running on <repo>: wait for it, follow it with codemod workflow attach --id <ID>, or stop it with codemod workflow cancel --id <ID>`. The lock lives in the run store and goes with its process, so a killed run does not leave the repository locked. Dry runs do not lock.
+
+- **`http(url, options)`** in `codemod/workflow`: an HTTP request as a step. Its response is recorded and replayed on resume, not sent again. Header values can come from the environment (`{ env: "GITHUB_TOKEN" }`) so tokens stay out of the run's records. A dry run skips it unless it sets `dryRun: "perform"`. See [HTTP requests](/community/workflows/reference#http-requests).
+- `workflow inspect` lists `http` in `uses`, and shows which declared steps reach outside the target.
+- **1.x YAML packages run without conversion.** Legacy transform metrics and workflow state still work when running `workflow.yaml`, and transforms can read the target with `fs` without a flag. The compatibility path never rewrites the package. See [Upgrade from 1.x](/community/workflows/upgrade-from-1x).
+- **An explicit 1.x fallback.** `codemod run --v1 <package>` (or `CODEMOD_V1=on`) uses pinned codemod 1.18.7. It is deprecated and never selected automatically. See [Running a package with codemod 1.x](/community/workflows/migrate#running-a-package-with-codemod-1x).
+- **`workflow upgrade` converts legacy transform metrics** and warns about `fs` and `child_process` imports without granting capabilities. It refuses transforms that use legacy workflow state rather than generating a workflow that cannot run.
+- **`DO_NOT_TRACK=1` turns off telemetry.** Use `unpublish --yes` for unattended unpublishing.
+
+**Fixes**
+
+- **A run paused at an approval keeps its question.** Before, closing a control channel's stdin or sending `stop` while an approval was open left a `paused` run with `question: null`, and the approval step `canceled`. Now `run_finished` and `workflow status` keep `question` (`approval:1`) and `awaiting`, the step stays `awaiting-approval`, and `workflow resume --approve approval:1` gives it.
+- Local runs identify the package they use, dry runs omit unsaved run IDs, standalone `jssg run` reports errors for each failed file, and errors on non-terminal stderr omit color. Non-interactive `init` uses defaults.
+
+**Docs**
+
+- Added [Upgrade from 1.x](/community/workflows/upgrade-from-1x), [Running in CI and from agents](/community/workflows/ci-and-agents), [Exit codes](/community/workflows/exit-codes), and five tutorials, starting with [Your first workflow](/community/workflows/tutorials/first-workflow).
+</Update>
 
 <Update label="2.0.0-alpha.9" description="November 25, 2026">
 ```bash

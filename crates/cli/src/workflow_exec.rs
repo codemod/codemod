@@ -31,16 +31,16 @@ use serde_json::Value;
 /// The flags every command that runs or resumes a workflow takes.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct RunFlags {
-    /// Allow fs access
-    #[arg(long)]
+    /// Deprecated, does nothing: workflow callbacks read the target without it
+    #[arg(long, hide = true)]
     pub allow_fs: bool,
 
-    /// Allow fetch access
-    #[arg(long)]
+    /// Deprecated, does nothing: declare requests as steps with http()
+    #[arg(long, hide = true)]
     pub allow_fetch: bool,
 
-    /// Allow child process access
-    #[arg(long)]
+    /// Deprecated, does nothing: run commands as steps with shell()
+    #[arg(long, hide = true)]
     pub allow_child_process: bool,
 
     /// Allow codemod/assess to send files to the decision model (System One
@@ -94,40 +94,68 @@ pub struct StartFlags {
 }
 
 impl RunFlags {
-    /// Capabilities granted with `--allow-*` flags.
-    pub fn granted(&self) -> HashSet<LlrtSupportedModules> {
-        [
-            (self.allow_fs, LlrtSupportedModules::Fs),
-            (self.allow_fetch, LlrtSupportedModules::Fetch),
-            (self.allow_child_process, LlrtSupportedModules::ChildProcess),
-        ]
-        .into_iter()
-        .filter_map(|(allowed, module)| allowed.then_some(module))
-        .collect()
+    /// The `--allow-*` flags no longer give workflows anything: callbacks
+    /// are pure, and reach the network and run commands through declared
+    /// steps. Says so for each one given; they are accepted until 2.0.
+    pub fn warn_deprecated_capabilities(&self) {
+        let given = [
+            (
+                self.allow_fetch,
+                "--allow-fetch",
+                "callbacks have no network; declare requests as steps: await step(\"label\", http(url))",
+            ),
+            (
+                self.allow_child_process,
+                "--allow-child-process",
+                "callbacks cannot run commands; run them as steps: await step(\"label\", shell(command))",
+            ),
+            (
+                self.allow_fs,
+                "--allow-fs",
+                "callbacks read the target without it and change files with file.write(), file.rename() and file.delete()",
+            ),
+        ];
+        for (_, flag, instead) in given.iter().filter(|(set, _, _)| *set) {
+            eprintln!(
+                "{} {flag} is deprecated and does nothing now: {instead}",
+                style("warning:").yellow().bold()
+            );
+        }
     }
 
-    /// The capabilities a run gets: the flags', and those the package asks
-    /// for (in its codemod.yaml, given or found in `workflow_dir`) that the
-    /// person grants when asked.
+    /// The capabilities a run's callbacks get: none. The deprecated
+    /// `--allow-*` flags are warned about, and capabilities the package asks
+    /// for (in its codemod.yaml, given or found in `workflow_dir`) noted.
     pub fn capabilities(
         &self,
         manifest: Option<crate::utils::manifest::CodemodManifest>,
         workflow_dir: Option<PathBuf>,
-        dry_run: bool,
+        _dry_run: bool,
     ) -> HashSet<LlrtSupportedModules> {
-        use crate::utils::resolve_capabilities::{
-            prompt_capabilities, resolve_capabilities, ResolveCapabilitiesArgs,
-        };
-        let requested = resolve_capabilities(
+        use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+        self.warn_deprecated_capabilities();
+        let mut requested: Vec<&str> = resolve_capabilities(
             ResolveCapabilitiesArgs {
-                allow_fs: self.allow_fs,
-                allow_fetch: self.allow_fetch,
-                allow_child_process: self.allow_child_process,
+                allow_fs: false,
+                allow_fetch: false,
+                allow_child_process: false,
             },
             manifest,
             workflow_dir,
-        );
-        prompt_capabilities(requested, &self.granted(), self.no_interactive, dry_run)
+        )
+        .into_iter()
+        .filter(|module| codemod_llrt_capabilities::module_builder::UNSAFE_MODULES.contains(module))
+        .map(LlrtSupportedModules::as_str)
+        .collect();
+        requested.sort();
+        if !requested.is_empty() && self.format == OutputFormat::Text {
+            eprintln!(
+                "{} codemod.yaml asks for {}, which workflow callbacks no longer get: steps that need the network or commands use http() and shell()",
+                style("note:").cyan().bold(),
+                requested.join(", ")
+            );
+        }
+        HashSet::new()
     }
 
     /// Settings for a run with these flags and nothing else special.
@@ -308,10 +336,20 @@ impl ExecOutcome {
         }
     }
 
-    /// Like [`Self::ended`], but a run that finished with failed files is
-    /// an error too: [`FinishedWithFailedFiles`], exit code 2.
+    /// Like [`Self::ended`], but a run that waits for an approval is an
+    /// error too ([`WaitingForInput`], exit code 3), and so is one that
+    /// finished with failed files ([`FinishedWithFailedFiles`], exit code 2).
     pub fn result(&self) -> Result<()> {
         self.ended()?;
+        if matches!(self.report.ending, Ending::AwaitingApproval(_)) {
+            let run = &self.report.run;
+            return Err(WaitingForInput {
+                run_id: run.id.clone(),
+                question: run.question.clone(),
+                quiet: self.format == OutputFormat::Jsonl,
+            }
+            .into());
+        }
         match self.failed_files() {
             0 => Ok(()),
             failed => Err(FinishedWithFailedFiles {
@@ -327,6 +365,47 @@ impl ExecOutcome {
 /// The exit code of a run that finished, but with some files failed. A run
 /// that failed outright exits with 1.
 pub const EXIT_FAILED_FILES: i32 = 2;
+
+/// The exit code of a run that stopped to wait for input (an approval):
+/// it is saved, and `workflow resume` continues it. Not 0, so a CI job does
+/// not pass with half a migration done; not 1, which is a failure.
+pub const EXIT_WAITING: i32 = 3;
+
+/// A run stopped to wait for an approval. The CLI exits with
+/// [`EXIT_WAITING`]; the text output already said how to go on.
+#[derive(Debug)]
+pub struct WaitingForInput {
+    pub run_id: String,
+    /// The question it waits for (`approval:3`).
+    pub question: Option<String>,
+    /// The output is JSONL, where `run_finished` already says it.
+    pub quiet: bool,
+}
+
+impl WaitingForInput {
+    /// The command that gives the approval and continues the run.
+    pub fn resume_command(&self) -> String {
+        match &self.question {
+            Some(question) => format!(
+                "codemod workflow resume --id {} --approve {question}",
+                self.run_id
+            ),
+            None => format!("codemod workflow resume --id {} --approve", self.run_id),
+        }
+    }
+}
+
+impl std::fmt::Display for WaitingForInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "waiting for input (exit code {EXIT_WAITING}); continue with: {}",
+            self.resume_command()
+        )
+    }
+}
+
+impl std::error::Error for WaitingForInput {}
 
 /// A run finished, but some of its files failed. The CLI ends its output
 /// with this and exits with [`EXIT_FAILED_FILES`].
@@ -383,6 +462,33 @@ impl std::error::Error for WorkflowFailureAlreadyReported {}
 /// The run store selected by `CODEMOD_RUN_STORE`.
 pub fn store() -> Arc<dyn RunStore> {
     Arc::from(store_from_env())
+}
+
+/// A run's record; for a run this version cannot read, an error that says
+/// which version made it.
+pub fn get_run(store: &dyn RunStore, run_id: &str) -> Result<Option<RunRecord>> {
+    match store.get_run(run_id) {
+        Ok(record) => Ok(record),
+        Err(error) => {
+            let unreadable = store.list_unreadable().unwrap_or_default();
+            match unreadable.iter().find(|run| run.id == run_id) {
+                Some(run) => Err(anyhow!(
+                    "run '{run_id}' is {}, and codemod {} cannot read it: {error}",
+                    unreadable_label(run),
+                    codemod_workflow::CODEMOD_VERSION
+                )),
+                None => Err(error.into()),
+            }
+        }
+    }
+}
+
+/// How `workflow list` shows a run this version cannot read.
+pub fn unreadable_label(run: &codemod_workflow::UnreadableRun) -> String {
+    match &run.codemod_version {
+        Some(version) => format!("unreadable (made by codemod {version})"),
+        None => "unreadable (made by another codemod version)".to_string(),
+    }
 }
 
 /// A run's status for display. A run whose record says running while
@@ -470,9 +576,8 @@ pub async fn start(mut request: ExecRequest) -> Result<ExecOutcome> {
 /// of the run behaves like its start.
 pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutcome> {
     settings.check_control()?;
-    let record = store()
-        .get_run(run_id)?
-        .ok_or_else(|| anyhow!("run '{run_id}' not found"))?;
+    let record =
+        get_run(store().as_ref(), run_id)?.ok_or_else(|| anyhow!("run '{run_id}' not found"))?;
     // Before asking anything: a run that is over stays over.
     match record.status.resumable() {
         codemod_workflow::Resumable::Yes => {}
@@ -703,6 +808,18 @@ pub(crate) fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumabl
                 style("Rejected:").red().bold(),
             );
         }
+        Ending::Paused if run.question.is_some() => {
+            let question = run.question.as_deref().unwrap_or_default();
+            eprintln!(
+                "\n{} {}{}",
+                style("The run was paused at an approval:").yellow().bold(),
+                run.awaiting.as_deref().unwrap_or(question),
+                hint(format!(
+                    "Approve it and go on with: codemod workflow resume --id {} --approve {question}",
+                    run.id
+                ))
+            );
+        }
         Ending::Paused => {
             eprintln!(
                 "\n{}{}",
@@ -714,6 +831,11 @@ pub(crate) fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumabl
             );
         }
         Ending::Failed(error) => {
+            // A failed step's error is already on its `✗` line.
+            let error = match failed_step(error) {
+                Some(label) => format!("step '{label}' failed (see above)"),
+                None => error.clone(),
+            };
             eprintln!(
                 "\n{} {error}{}",
                 style("The run failed:").red().bold(),
@@ -730,6 +852,14 @@ pub(crate) fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumabl
     if let Some(line) = output_summary(outcome.report.ending.output(), &run.id, resumable) {
         eprintln!("{line}");
     }
+}
+
+/// The label of the step a run's error says failed (`StepError: step 'x'
+/// failed: …`, as the engine reports a failed step), whose own line already
+/// showed the error.
+fn failed_step(error: &str) -> Option<&str> {
+    let rest = error.strip_prefix("StepError: step '")?;
+    rest.find("' failed: ").map(|end| &rest[..end])
 }
 
 /// How much of a run's output the text format shows.
@@ -845,6 +975,12 @@ impl crate::journal::Stamped for Renderer {
             return;
         };
         match event {
+            // A dry run is not saved, so its id names nothing to look up.
+            Event::RunStarted { dry_run: true, .. } => self.line(format!(
+                "{} {}",
+                style("Dry run").bold(),
+                style("(not saved)").dim()
+            )),
             Event::RunStarted {
                 run_id, resumed, ..
             } => self.line(format!(

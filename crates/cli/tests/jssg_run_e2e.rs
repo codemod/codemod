@@ -153,11 +153,88 @@ fn jssg_run_drops_a_failed_files_changes_to_other_files() {
     let output = fixture.run(&[]);
     assert!(!output.status.success(), "{}", text(&output));
     assert!(text(&output).contains("bad.ts fails on purpose"));
+    // Piped, so no color codes in the error.
+    assert!(!text(&output).contains('\u{1b}'), "{}", text(&output));
     assert_eq!(fixture.shared_lines(), touched_by_all());
     assert_eq!(
         fixture.read("src/bad.ts"),
         "// touch: shared/index.ts\n// throw\nconst bad = 'OLD';\n"
     );
+}
+
+/// A file that can't be written fails the run, and says so once.
+#[cfg(unix)]
+#[test]
+fn jssg_run_reports_a_write_error_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new(&[("src/ro.ts", "const ro = 'OLD';\n")]);
+    let ro = fixture.target.path().join("src/ro.ts");
+    fs::set_permissions(&ro, fs::Permissions::from_mode(0o444)).unwrap();
+    let output = fixture.run(&[]);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert_eq!(
+        text(&output)
+            .matches("Failed to write modified file")
+            .count(),
+        1,
+        "{}",
+        text(&output)
+    );
+    assert_eq!(fixture.read("src/ro.ts"), "const ro = 'OLD';\n");
+}
+
+/// Without a terminal nothing is asked: a capability given with its flag is
+/// used, and one that wasn't fails the run naming the flag.
+#[test]
+fn jssg_run_without_a_terminal_uses_the_capability_flags_given() {
+    let fixture = Fixture::new(&[]);
+    write(
+        fixture.package.path(),
+        "codemod.ts",
+        r#"
+import * as childProcess from "child_process";
+export default function transform(root: any) {
+  const text: string = root.root().text();
+  const granted = typeof childProcess.spawn === "function";
+  return granted && text.includes("OLD") ? text.replace("OLD", "NEW") : null;
+}
+"#,
+    );
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("pass --allow-child-process"),
+        "{}",
+        text(&output)
+    );
+    assert!(fixture.read("src/f00.ts").contains("'OLD'"));
+
+    let output = fixture.run(&["--allow-child-process"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        fixture.read("src/f00.ts").contains("'NEW'"),
+        "{}",
+        text(&output)
+    );
+}
+
+/// A JavaScript error does not hide another file's error.
+#[cfg(unix)]
+#[test]
+fn jssg_run_reports_every_files_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new(&[
+        ("src/bad.ts", "// throw\nconst bad = 'OLD';\n"),
+        ("src/ro.ts", "const ro = 'OLD';\n"),
+    ]);
+    let ro = fixture.target.path().join("src/ro.ts");
+    fs::set_permissions(&ro, fs::Permissions::from_mode(0o444)).unwrap();
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let text = text(&output);
+    assert!(text.contains("bad.ts fails on purpose"), "{text}");
+    assert!(text.contains("Failed to write modified file"), "{text}");
+    assert!(text.contains("jssg run failed with 2 errors"), "{text}");
 }
 
 /// A dry run writes nothing, and shows the shared file's diff with every
@@ -335,5 +412,64 @@ export default async function transform(root: any, options: any) {
     assert_eq!(
         fs::read_to_string(target.path().join("renamed.ts")).unwrap(),
         "const x = 'NEW';\n"
+    );
+}
+
+/// A transform reads the target with `fs`, but writes through it only with
+/// `--allow-fs`; without it the file fails with an error naming the flag.
+#[test]
+fn jssg_run_fs_writes_need_allow_fs() {
+    let package = TempDir::new().unwrap();
+    let target = TempDir::new().unwrap();
+    write(
+        package.path(),
+        "codemod.ts",
+        r#"
+import fs from "fs";
+
+export default function transform(root: any) {
+  const text = fs.readFileSync(root.filename(), "utf-8");
+  fs.writeFileSync(`${root.filename()}.bak`, text);
+  return null;
+}
+"#,
+    );
+    write(target.path(), "a.ts", "const a = 1;\n");
+    let run = |extra: &[&str]| {
+        let script = package.path().join("codemod.ts");
+        let mut args = vec![
+            "jssg",
+            "run",
+            script.to_str().unwrap(),
+            "--language",
+            "typescript",
+            "--target",
+            target.path().to_str().unwrap(),
+            "--allow-dirty",
+            "--no-interactive",
+        ];
+        args.extend_from_slice(extra);
+        Command::new(env!("CARGO_BIN_EXE_codemod"))
+            .args(&args)
+            .env("DISABLE_ANALYTICS", "true")
+            .output()
+            .expect("failed to run codemod")
+    };
+
+    let output = run(&[]);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("fs.writeFileSync needs the fs capability"),
+        "{}",
+        text(&output)
+    );
+    assert!(text(&output).contains("--allow-fs"), "{}", text(&output));
+    assert!(!target.path().join("a.ts.bak").exists());
+
+    let output = run(&["--allow-fs"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        fs::read_to_string(target.path().join("a.ts.bak")).unwrap(),
+        "const a = 1;\n"
     );
 }

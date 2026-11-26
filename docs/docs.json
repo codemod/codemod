@@ -42,10 +42,23 @@
                 "root": "community/workflows",
                 "pages": [
                   "community/workflows/getting-started",
+                  {
+                    "group": "Tutorials",
+                    "pages": [
+                      "community/workflows/tutorials/first-workflow",
+                      "community/workflows/tutorials/approvals-and-ci",
+                      "community/workflows/tutorials/upgrade-a-1x-package",
+                      "community/workflows/tutorials/semantic-rename",
+                      "community/workflows/tutorials/reports"
+                    ]
+                  },
                   "community/workflows/reference",
                   "community/workflows/testing",
+                  "community/workflows/ci-and-agents",
+                  "community/workflows/exit-codes",
                   "community/workflows/node",
                   "community/workflows/control",
+                  "community/workflows/upgrade-from-1x",
                   "community/workflows/migrate",
                   "community/workflows/ai-harness-rig",
                   "community/workflows/sharding",

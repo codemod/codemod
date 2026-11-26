@@ -273,7 +273,7 @@ fn no_command_message() -> String {
 }
 
 fn should_prompt_for_no_command_action() -> bool {
-    io::stdin().is_terminal() && io::stdout().is_terminal()
+    crate::utils::interactive::is_interactive(false) && io::stdout().is_terminal()
 }
 
 fn exit_with_code(code: i32) -> ! {
@@ -292,6 +292,15 @@ fn effective_disable_analytics(cli: &Cli) -> bool {
             .trailing_args
             .iter()
             .any(|arg| arg == "--disable-analytics")
+        || do_not_track(std::env::var("DO_NOT_TRACK").ok().as_deref())
+}
+
+/// The `DO_NOT_TRACK` convention (consoledonottrack.com): set to anything
+/// but empty, `0` or `false`, it opts out like `DISABLE_ANALYTICS`.
+fn do_not_track(value: Option<&str>) -> bool {
+    value.map(str::trim).is_some_and(|value| {
+        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+    })
 }
 
 const PERSON_TRAITS_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
@@ -437,6 +446,13 @@ async fn main() {
                 eprintln!("\n{}", console::style(failed).yellow().bold());
             }
             exit_with_code(workflow_exec::EXIT_FAILED_FILES);
+        }
+        if let Some(waiting) = error.downcast_ref::<workflow_exec::WaitingForInput>() {
+            // The text output already showed the question and the command.
+            if waiting.quiet {
+                eprintln!("{waiting}");
+            }
+            exit_with_code(workflow_exec::EXIT_WAITING);
         }
         if let Some(failed) = error.downcast_ref::<workflow_exec::FailedByWorkflow>() {
             exit_with_code(failed.exit_code);
@@ -886,6 +902,16 @@ mod tests {
         .expect("implicit package parse");
         assert!(!cli.disable_analytics);
         assert!(effective_disable_analytics(&cli));
+    }
+
+    #[test]
+    fn do_not_track_opts_out_unless_empty_0_or_false() {
+        for value in ["1", "true", "yes"] {
+            assert!(do_not_track(Some(value)), "{value}");
+        }
+        for value in [None, Some(""), Some("0"), Some("false"), Some("FALSE")] {
+            assert!(!do_not_track(value), "{value:?}");
+        }
     }
 
     #[test]

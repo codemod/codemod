@@ -77,6 +77,24 @@ pub(crate) async fn dry_run_only_dependency(
         .context("Failed to inspect bundled codemods")
 }
 
+/// Parse `--param key=value` pairs for `workflow_path`: parameters its
+/// `Params` type declares as `string` keep their text (`4` stays `"4"`);
+/// others are read as JSON when they parse.
+pub(crate) fn parse_workflow_params(
+    workflow_path: &Path,
+    params: &[String],
+) -> Result<HashMap<String, serde_json::Value>> {
+    let text: Vec<String> = if codemod_workflow::is_typescript(workflow_path) {
+        std::fs::read_to_string(workflow_path)
+            .map(|source| codemod_workflow::params::string_params(&source))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    utils::parse_params_keeping_text(params, |key| text.iter().any(|name| name == key))
+        .context("Failed to parse parameters")
+}
+
 /// Run a workflow
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     if args.no_color {
@@ -86,7 +104,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let (workflow_path, workflow_dir) =
         resolve_workflow_source_with_name(&args.workflow, args.workflow_name.as_deref())?;
-    let params = utils::parse_params(&args.params).context("Failed to parse parameters")?;
+    let params = parse_workflow_params(&workflow_path, &args.params)?;
     let target_path = normalize_target_path(
         args.target_path
             .clone()
@@ -116,16 +134,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let mut target_path = target_path;
 
     if crate::launcher::enabled(&flags) {
-        use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
-        let requested = resolve_capabilities(
-            ResolveCapabilitiesArgs {
-                allow_fs: false,
-                allow_fetch: false,
-                allow_child_process: false,
-            },
-            None,
-            Some(workflow_dir.clone()),
-        );
         let Some(choices) = crate::launcher::setup(crate::launcher::Plan {
             title: workflow_label.clone(),
             workflow: &workflow_path,
@@ -133,7 +141,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             params,
             dry_run,
             dry_run_locked: pro_dry_run,
-            requested,
             flags: &flags,
         })
         .await?
@@ -171,7 +178,15 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             ..flags.settings(capabilities, registry.clone(), &telemetry)
         },
     })
-    .await?;
+    .await;
+    let outcome = if is_yaml {
+        crate::commands::run::v1_delegate::with_refusal_hint(
+            outcome,
+            &workflow_dir.to_string_lossy(),
+        )?
+    } else {
+        outcome?
+    };
     let dry_run = outcome.dry_run;
 
     if crate::utils::report_prompt::should_show_report(
@@ -239,7 +254,7 @@ fn upgrade_hint(workflow_dir: &Path) {
         format!("codemod workflow upgrade {}", dir.display())
     };
     eprintln!(
-        "\n{} workflow.yaml runs as before. To move this codemod to workflow.ts, run `{command}`.",
+        "\n{} to move this codemod to workflow.ts, run `{command}`.",
         style("Tip:").cyan().bold()
     );
 }

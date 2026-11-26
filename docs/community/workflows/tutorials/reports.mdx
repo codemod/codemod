@@ -1,0 +1,151 @@
+---
+title: "Build a report that fails CI"
+sidebarTitle: "Reports"
+description: "Count findings per package with a forEachFile reducer, return them as the run's output, fail the run with fail() when there are too many, and read the result with workflow status --format json."
+---
+
+A workflow doesn't have to change code. This one counts `console.log` calls per package, returns the counts as a report, and fails CI when there are more than you allow. The run only reads, so it works on a repository with uncommitted changes too. You need Node.js 22.18 or later and Git.
+
+## 1. The project
+
+```ts packages/api/src/orders.ts
+export function createOrder(id: string) {
+  console.log("creating", id);
+  console.log("done");
+  return { id };
+}
+```
+
+```ts packages/web/src/app.ts
+export function render() {
+  console.log("render");
+  return "<div />";
+}
+```
+
+```ts packages/web/src/util.ts
+export const id = (x: string) => x;
+```
+
+## 2. The workflow
+
+```ts workflow.ts
+import { fail, forEachFile, step } from "codemod/workflow";
+import type { WorkflowContext } from "codemod/workflow";
+
+interface Params {
+  /** How many console.log calls are allowed. @default 0 */
+  max?: number;
+}
+
+export default async function main({ params }: WorkflowContext<Params>) {
+  const max = Number(params.max ?? 0);
+
+  const { reduced: perPackage } = await step(
+    "Count console.log per package",
+    forEachFile(
+      { include: "packages/*/src/**/*.ts", containing: "console.log" },
+      (file) => file.text.split("console.log(").length - 1,
+      (counts, found, path) => {
+        const name = path.split("/")[1];
+        return { ...counts, [name]: (counts[name] ?? 0) + found };
+      },
+      {} as Record<string, number>,
+    ),
+  );
+
+  const total = Object.values(perPackage).reduce((sum, n) => sum + n, 0);
+  const report = { total, max, perPackage };
+  if (total > max) fail(`${total} console.log calls, ${max} allowed`, { output: report });
+  return report;
+}
+```
+
+- The callback returns how many calls one file has.
+- The **reducer**, `(counts, found, path) => …`, folds those numbers into one object per package, starting from `{}`. The step's result has it as `reduced`. A reducer keeps only the running result in memory, so it works on targets with many thousands of files.
+- `containing: "console.log"` skips files that don't mention it.
+- What `main` returns is the run's output. `fail(message, { output })` ends the run as `failed`, keeps the report as its output, and makes the CLI exit `2`.
+- `Params` declares the parameters the workflow takes. `--param max=5` sets `max`.
+
+## 3. Run it
+
+```bash
+git init && git add . && git commit -m "Start"
+npx codemod@alpha workflow run -w workflow.ts --no-interactive
+echo "exit=$?"
+```
+
+```
+▸ Count console.log per package
+✓ Count console.log per package (0.0s)
+
+The run failed: 3 console.log calls, 0 allowed
+Output: {"total":3,"max":0,"perPackage":{"api":2,"web":1}}
+exit=2
+```
+
+Allow five and it passes:
+
+```bash
+npx codemod@alpha workflow run -w workflow.ts --no-interactive --param max=5
+```
+
+```
+✓ Count console.log per package (0.0s)
+Done
+Output: {"total":3,"max":5,"perPackage":{"api":2,"web":1}}
+```
+
+<Note>
+`--param max=5` arrives as the number `5`. A parameter declared `string` keeps the same input as text (`"5"`).
+</Note>
+
+## 4. Read the report as JSON
+
+Every run is saved. Read the failed one back, for a CI summary or a dashboard:
+
+```bash
+npx codemod@alpha workflow list --format json | jq -r '.[0].id'
+npx codemod@alpha workflow status --id <id> --format json
+```
+
+```json
+{
+  "id": "ae3be7f7-49be-481c-b62d-402c5cef6139",
+  "name": "workflow.ts",
+  "status": "failed",
+  "error": "3 console.log calls, 0 allowed",
+  "output": { "total": 3, "max": 0, "perPackage": { "api": 2, "web": 1 } },
+  "exitCode": 2,
+  "failedFiles": 0,
+  "steps": [
+    {
+      "position": 0,
+      "label": "Count console.log per package",
+      "kind": "forEachFile",
+      "status": "succeeded",
+      "result": {
+        "reduced": { "api": 2, "web": 1 },
+        "changes": { "written": [], "renamed": [], "deleted": [] },
+        "failures": []
+      },
+      "attempts": 1,
+      "files": { "failed": 0, "total": 2 }
+    }
+  ]
+}
+```
+
+(Trimmed: the real output also has the workflow and target paths, `params`, timestamps and durations.)
+
+- `output` is the report, also for a failed run.
+- `exitCode` is the code `fail()` gave the CLI to exit with.
+- Each step has its `result`, here the `reduced` counts, and `files`: how many files it worked on and how many failed.
+
+With `--format jsonl`, the run's last line, `run_finished`, carries the same `status` and `output`, so a program driving the run doesn't need a second command.
+
+## Use it in CI
+
+The exit code is all CI needs: `0` passes, `2` fails the job. See [Exit codes](/community/workflows/exit-codes) and [Running in CI and from agents](/community/workflows/ci-and-agents).
+
+`fail()` takes another code if `2` means something else to you: `fail(message, { output, exitCode: 4 })`, any code from 1 to 125.

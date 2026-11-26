@@ -130,17 +130,6 @@ pub fn setup(frame: &mut Frame, state: &SetupState) {
         }
     }
 
-    lines.push(Line::styled("  Capabilities", dim()));
-    for (i, capability) in state.capabilities.iter().enumerate() {
-        lines.push(row(
-            Field::Capability(i),
-            format!("  {}", capability.module.as_str()),
-            vec![check(capability.granted)],
-            (capability.requested && !capability.granted)
-                .then(|| "requested by the package; you are asked when it runs".into()),
-        ));
-    }
-
     let agent = &state.agents[state.agent];
     lines.push(row(
         Field::Agent,

@@ -323,6 +323,13 @@ pub struct TestPlan {
 }
 
 impl RunContext {
+    /// The workflow is a workflow.yaml, so the package is a codemod 1.x
+    /// package: its transforms get the 1.x APIs 2.0 removed (see
+    /// `js/v1.ts`). Nested codemods decide for their own workflow.
+    pub(crate) fn v1_compat(&self) -> bool {
+        !crate::engine::is_typescript(&self.workflow_path)
+    }
+
     /// The context of a codemod nested in this run's step at `position`: its
     /// own workflow, params and step history, everything else shared. It
     /// stops when that step does (`cancel`). `alongside`: that step ran
@@ -407,6 +414,15 @@ impl RunContext {
         }
     }
 
+    /// What the approval a step waits for asks, if one does: also when the
+    /// run was paused while it waited.
+    pub fn awaiting(&self) -> Option<String> {
+        match &*self.interruption.lock().unwrap_or_else(|e| e.into_inner()) {
+            Some(Interruption::AwaitingApproval(message)) => Some(message.clone()),
+            _ => None,
+        }
+    }
+
     /// Whether a step about to start must not, because the run was canceled.
     pub fn refuses_steps(&self) -> bool {
         let canceled = self.canceled();
@@ -445,8 +461,8 @@ impl RunContext {
         match (interruption, body) {
             (_, Ending::Rejected(message)) => Ending::Rejected(message),
             (Some(Interruption::Canceled), _) | (_, Ending::Canceled | Ending::Paused) => stopped(),
-            // A question closed because the run was stopped is not one the
-            // run waits for.
+            // A run stopped at a question ends as stopped. A paused one
+            // keeps the question (see `awaiting`); resuming it asks again.
             (Some(Interruption::AwaitingApproval(_)), _) | (_, Ending::AwaitingApproval(_))
                 if self.halt.reason() != StopReason::None =>
             {

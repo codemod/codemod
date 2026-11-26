@@ -67,6 +67,7 @@ export const {
   dependencyGraph: __dependencyGraph,
   forEachFile,
   shell,
+  http,
   astGrep,
   shard,
   codemod,

@@ -1,9 +1,9 @@
 //! Function steps: `step(() => ...)` and `step(label, () => ...)`.
 //!
 //! The build extracts the function like a `forEachFile` callback. It runs
-//! once, in its own isolate, where the clock, randomness, network and files
-//! are real (as the run's capabilities allow); its result is recorded and
-//! replayed on resume.
+//! once, in its own isolate, where the clock and randomness are real and the
+//! target can be read but nothing else reached (see `isolate`); its result
+//! is recorded and replayed on resume.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

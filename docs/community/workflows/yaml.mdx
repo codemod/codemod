@@ -18,7 +18,7 @@ In a repository with many packages, run it once at the root to upgrade them all.
 
 - `js-ast-grep` steps get file-scope semantic analysis unless `semantic_analysis: none` is set, as `codemod jssg run` and `codemod jssg test` do.
 - `state.schema` is accepted but not used. State is not validated.
-- `runtime: docker` and `runtime: podman` are not supported; steps run directly.
+- `runtime: docker` and `runtime: podman` are not supported yet: a workflow with them is refused before it runs. Use the [opt-in 1.x fallback](/community/workflows/migrate#running-a-package-with-codemod-1x) if it needs those runtimes.
 - A step `if:` condition that fails to evaluate still skips the step, and the run's log now says so.
 - Fields that never had an effect (`codemod.args`, `codemod.env`, `codemod.working_dir`, unused `ai` options, template `outputs`) are reported as warnings by `codemod workflow validate` and `codemod workflow upgrade`.
 - Runs are resumed with `codemod workflow resume --id <run-id>`; manual nodes become approval steps, resumed with `--approve`.
@@ -701,14 +701,16 @@ nodes:
         run: ./deploy.sh
 ```
 
-Resume paused tasks:
+Resume a run waiting for approval:
 ```bash
-# Resume all paused tasks
-npx codemod workflow resume -i <run-id> --trigger-all
+# Give every approval the run asks for
+npx codemod workflow resume -i <run-id> --approve
 
-# Resume a specific task
-npx codemod workflow resume -i <run-id> -t <task-uuid>
+# Give one approval, by the question id `workflow status` shows (e.g. approval:3)
+npx codemod workflow resume -i <run-id> --approve <question-id>
 ```
+
+The 1.x `resume` flags `--tasks_ids` and `--dry-run` are gone: `--approve <question-id>` replaces `--tasks_ids`, and a dry run is not saved, so it can't be resumed. See [Upgrade from 1.x](/community/workflows/upgrade-from-1x#commands-and-flags-that-changed).
 
 ---
 
@@ -918,19 +920,6 @@ templates:
       - name: Format
         run: npx prettier --write .
 ```
-
----
-
-## Roadmap
-
-<Steps>
-  <Step title="Container runtime support" icon="flag-pennant">
-    Support for `runtime: docker` and other container runtimes.
-  </Step>
-  <Step title="Nested matrix strategies" icon="flag-pennant">
-    Matrix strategies within matrix strategies for complex fan-out.
-  </Step>
-</Steps>
 
 ---
 

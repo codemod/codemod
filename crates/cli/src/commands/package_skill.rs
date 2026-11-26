@@ -149,8 +149,7 @@ pub async fn install_package_skill(
     request: &PackageSkillInstallRequest,
     telemetry: &TelemetrySenderMutex,
 ) -> Result<String> {
-    let interactive = !request.no_interactive
-        && std::io::stdin().is_terminal()
+    let interactive = crate::utils::interactive::is_interactive(request.no_interactive)
         && std::io::stdout().is_terminal();
     let execution = execute_install_package_skill(request, interactive)
         .await

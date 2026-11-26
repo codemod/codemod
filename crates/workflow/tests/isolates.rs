@@ -28,7 +28,7 @@ fn callbacks_can_be_async_and_run_concurrently() {
     let report = h.start(
         r#"
 import { step, forEachFile } from "codemod/workflow";
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = async (ticks: number) => { for (let i = 0; i < ticks; i++) await null; };
 export default async function main() {
   return step(forEachFile({ include: "*.txt", concurrency: 4 }, async (file) => {
     await sleep(5);
@@ -332,7 +332,7 @@ fn a_function_step_runs_in_an_isolate_with_captures_and_real_modules() {
         r#"
 import { step } from "codemod/workflow";
 import path from "path";
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = async (ticks: number) => { for (let i = 0; i < ticks; i++) await null; };
 export default async function main({ params }: { params: { name: string } }) {
   const name = params.name;
   return step("Compute", async () => {
@@ -464,10 +464,23 @@ export default async function main() {
 #[test]
 fn timers_in_the_body_fail_with_a_hint() {
     let h = Harness::new();
-    let report = h.start(
+    let error = load_error(
+        &h,
         r#"
 export default async function main() {
   await new Promise((resolve) => setTimeout(resolve, 1));
+}
+"#,
+    );
+    assert!(
+        error.contains("setTimeout is not available in the workflow body"),
+        "{error}"
+    );
+    // Reached some other way, it fails when called.
+    let report = h.start(
+        r#"
+export default async function main() {
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 1));
 }
 "#,
         Value::Null,
@@ -477,6 +490,7 @@ export default async function main() {
         error.contains("setTimeout is not available in the workflow body"),
         "{error}"
     );
+    assert!(error.contains("sleep("), "{error}");
 }
 
 #[test]

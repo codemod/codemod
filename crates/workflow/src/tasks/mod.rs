@@ -22,12 +22,14 @@ mod dependency_graph;
 pub(crate) mod for_each_file;
 mod function;
 mod git;
+mod http;
 mod install_skill;
 pub(crate) mod isolate;
 pub(crate) mod overlay;
 mod reduce;
 mod shard;
 mod shell;
+mod v1_host;
 mod wait;
 
 pub(crate) use wait::describe as describe_duration;
@@ -220,6 +222,7 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         "function" => function::run(task, content).map_err(TaskError::from),
         "dependencyGraph" => dependency_graph::run(task, content).map_err(TaskError::from),
         "shell" => shell::run(task, parse(content)?),
+        "http" => http::run(task, parse(content)?),
         "astGrep" => ast_grep::run(task, parse(content)?),
         "shard" => shard::run(task, content),
         "codemod" => codemod::run(task, parse(content)?),
@@ -233,8 +236,15 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         "pullRequest" => git::pull_request(task, parse(content)?),
         other => Err(TaskError::Failed(format!("unknown task kind '{other}'"))),
     };
+    // A step stopped mid-way was canceled. An approval left unanswered
+    // because the run was paused still waits: the paused run keeps its
+    // question, and resuming it asks again (or `--approve` gives it).
+    let still_waiting = |error: &TaskError| {
+        matches!(error, TaskError::AwaitingApproval(_))
+            && task.run.halt.reason() <= crate::run::StopReason::Pause
+    };
     if task.canceled()
-        && matches!(result, Err(ref error) if !matches!(error, TaskError::Rejected(_)))
+        && matches!(result, Err(ref error) if !matches!(error, TaskError::Rejected(_)) && !still_waiting(error))
     {
         return Err(TaskError::Canceled);
     }

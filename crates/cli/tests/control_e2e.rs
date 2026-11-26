@@ -300,9 +300,44 @@ fn stopping_over_control_pauses_the_run_and_resume_continues_it() {
     assert_eq!(closed["by"], "stop", "{closed}");
     let finished = run.event("run_finished");
     assert_eq!(finished["status"], "paused", "{finished}");
-    let (code, _, stderr) = run.finish();
+    // Paused at the question: the run still waits for it.
+    assert_eq!(finished["question"], "approval:1", "{finished}");
+    assert_eq!(finished["awaiting"], "Go on to b?", "{finished}");
+    let (code, events, stderr) = run.finish();
     assert_eq!(code, Some(1), "{stderr}");
-    assert_eq!(fixture.status(&id)["status"], "paused");
+    // The approval step waits; it was not canceled.
+    let step = named(&events, "step_finished")
+        .into_iter()
+        .find(|event| event["step"] == "1")
+        .unwrap_or_else(|| panic!("{events:#?}"));
+    assert_eq!(step["status"], "awaiting-approval", "{step}");
+    let status = fixture.status(&id);
+    assert_eq!(status["status"], "paused", "{status}");
+    assert_eq!(status["question"], "approval:1", "{status}");
+    assert_eq!(status["awaiting"], "Go on to b?", "{status}");
+    assert_eq!(
+        status["steps"][1]["status"], "awaiting-approval",
+        "{status}"
+    );
+
+    // `--approve <id>` gives the question the paused run waits for.
+    let output = fixture.codemod(&[
+        "workflow",
+        "resume",
+        "--id",
+        &id,
+        "--approve",
+        "approval:1",
+        "--no-interactive",
+    ]);
+    assert_eq!(
+        fixture.read("src/b.ts"),
+        "let b = 2;\n",
+        "{}",
+        text(&output)
+    );
+    let status = fixture.status(&id);
+    assert_eq!(status["question"], "approval:3", "{status}");
 
     let output = fixture.codemod(&[
         "workflow",
@@ -313,7 +348,6 @@ fn stopping_over_control_pauses_the_run_and_resume_continues_it() {
         "--no-interactive",
     ]);
     assert!(output.status.success(), "{}", text(&output));
-    assert_eq!(fixture.read("src/b.ts"), "let b = 2;\n");
     assert_eq!(fixture.status(&id)["status"], "succeeded");
 }
 
@@ -340,14 +374,16 @@ fn closing_stdin_pauses_the_run() {
     drop(run.stdin.take());
     let closed = run.event("question_closed");
     assert_eq!(closed["by"], "eof", "{closed}");
-    assert_eq!(run.event("run_finished")["status"], "paused");
+    let finished = run.event("run_finished");
+    assert_eq!(finished["status"], "paused", "{finished}");
+    assert_eq!(finished["question"], "approval:1", "{finished}");
 }
 
 #[test]
 fn a_canceled_run_is_resumed_only_with_force() {
     let fixture = Fixture::new(TWO_APPROVALS);
     let output = fixture.run(&["--format", "jsonl"]);
-    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
     let id = run_id(&events(&output));
 
     let canceled = fixture.codemod(&["workflow", "cancel", "--id", &id]);
@@ -395,7 +431,7 @@ fn resume_approves_only_the_question_it_names() {
         "approval:1",
         "--no-interactive",
     ]);
-    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
     assert!(
         text(&output).contains("--approve approval:3"),
         "{}",
@@ -417,6 +453,181 @@ fn resume_approves_only_the_question_it_names() {
     ]);
     assert!(output.status.success(), "{}", text(&output));
     assert_eq!(fixture.status(&id)["status"], "succeeded");
+}
+
+#[test]
+fn a_run_waiting_for_an_approval_exits_3_with_the_command_that_continues_it() {
+    let fixture = Fixture::new(TWO_APPROVALS);
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    let shown = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        shown.contains("codemod workflow resume --id") && shown.contains("--approve approval:1"),
+        "{shown}"
+    );
+
+    // JSONL: stdout stays events; one line on stderr says how to go on.
+    let output = fixture.run(&["--format", "jsonl"]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    let id = run_id(&events(&output));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "codemod workflow resume --id {id} --approve approval:1"
+        )),
+        "{stderr}"
+    );
+    assert_eq!(fixture.status(&id)["status"], "awaiting-approval");
+}
+
+/// Rewrite a file in the run store.
+fn edit_store(fixture: &Fixture, path: &str, edit: impl FnOnce(String) -> String) {
+    let path = fixture.store.path().join(path);
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(&path, edit(text)).unwrap();
+}
+
+#[test]
+fn a_run_another_version_made_is_resumed_only_when_its_steps_still_match() {
+    let fixture = Fixture::new(
+        r#"
+import { step, approval } from "codemod/workflow";
+export default async function main() {
+  await step("Count", () => 1);
+  await step(approval("Go on?"));
+  return "done";
+}
+"#,
+    );
+    let output = fixture.run(&["--format", "jsonl"]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    let id = run_id(&events(&output));
+    let status = fixture.status(&id);
+    let version = status["codemodVersion"].as_str().unwrap().to_string();
+    assert!(!version.is_empty(), "{status}");
+
+    // Made by another version whose function steps hash the same: resumed.
+    edit_store(&fixture, &format!("{id}/run.json"), |text| {
+        text.replace(&version, "0.0.1-older")
+    });
+    let output = fixture.codemod(&["workflow", "resume", "--id", &id, "--no-interactive"]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    assert_eq!(fixture.status(&id)["codemodVersion"], version.as_str());
+
+    // ... and one whose functions it built differently: refused, naming
+    // the version and the steps, unless forced.
+    edit_store(&fixture, &format!("{id}/run.json"), |text| {
+        text.replace(&version, "0.0.1-older")
+    });
+    edit_store(&fixture, &format!("{id}/steps.json"), |text| {
+        regex::Regex::new("cb_[0-9a-f]{16}")
+            .unwrap()
+            .replace_all(&text, "cb_0000000000000000")
+            .into_owned()
+    });
+    let output = fixture.codemod(&[
+        "workflow",
+        "resume",
+        "--id",
+        &id,
+        "--approve",
+        "--no-interactive",
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let shown = text(&output);
+    assert!(
+        shown.contains("codemod 0.0.1-older")
+            && shown.contains("Count")
+            && shown.contains("--force"),
+        "{shown}"
+    );
+    assert_eq!(fixture.status(&id)["status"], "awaiting-approval");
+
+    let output = fixture.codemod(&[
+        "workflow",
+        "resume",
+        "--id",
+        &id,
+        "--approve",
+        "--force",
+        "--no-interactive",
+        "--format",
+        "jsonl",
+    ]);
+    assert!(output.status.success(), "{}", text(&output));
+    // The step ran again.
+    assert_eq!(named(&events(&output), "step_started")[0]["label"], "Count");
+    assert_eq!(fixture.status(&id)["status"], "succeeded");
+}
+
+#[test]
+fn runs_this_version_cannot_read_are_listed_as_unreadable() {
+    let fixture = Fixture::new(TWO_APPROVALS);
+    let dir = fixture.store.path().join("from-the-future");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("run.json"),
+        r#"{"id":"from-the-future","status":"teleported","codemodVersion":"9.9.9","startedAt":"2026-01-01T00:00:00Z"}"#,
+    )
+    .unwrap();
+    let output = fixture.codemod(&["workflow", "list"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("unreadable (made by codemod 9.9.9)"),
+        "{}",
+        text(&output)
+    );
+    let output = fixture.codemod(&["workflow", "list", "--format", "json"]);
+    let listed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(listed[0]["status"], "unreadable", "{listed}");
+    assert_eq!(listed[0]["codemodVersion"], "9.9.9");
+    let output = fixture.codemod(&["workflow", "status", "--id", "from-the-future"]);
+    assert!(!output.status.success());
+    assert!(text(&output).contains("codemod 9.9.9"), "{}", text(&output));
+}
+
+#[test]
+fn one_run_at_a_time_changes_a_target() {
+    let fixture = Fixture::new(TWO_APPROVALS);
+    let mut first = fixture.control(&fixture.run_args(&[]));
+    let id = first.event("hello")["run_id"].as_str().unwrap().to_string();
+    first.event("question");
+
+    // A second run on the same target fails fast, naming the first.
+    let second = fixture.run(&["--approve"]);
+    assert_eq!(second.status.code(), Some(1), "{}", text(&second));
+    // As one line: the error is wrapped to the terminal's width.
+    let shown = regex::Regex::new("\x1b\\[[0-9;]*m")
+        .unwrap()
+        .replace_all(&text(&second), "")
+        .replace('│', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        shown.contains(&format!("another run ({id})"))
+            && shown.contains(&format!("codemod workflow attach --id {id}"))
+            && shown.contains(&format!("codemod workflow cancel --id {id}")),
+        "{shown}"
+    );
+    assert_eq!(fixture.read("src/b.ts"), "var b = 2;\n");
+
+    // A killed run's lock goes with its process.
+    first.child.kill().unwrap();
+    let (_, _, _) = first.finish();
+    let second = fixture.run(&["--approve"]);
+    assert!(second.status.success(), "{}", text(&second));
+    assert_eq!(fixture.read("src/b.ts"), "let b = 2;\n");
+    // And the killed run can be resumed once the target is free.
+    let resumed = fixture.codemod(&[
+        "workflow",
+        "resume",
+        "--id",
+        &id,
+        "--approve",
+        "--no-interactive",
+    ]);
+    assert!(resumed.status.success(), "{}", text(&resumed));
 }
 
 #[test]

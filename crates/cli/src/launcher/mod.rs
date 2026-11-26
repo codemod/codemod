@@ -1,17 +1,18 @@
 //! The interactive launcher: a terminal UI shown when a workflow runs in an
 //! interactive terminal. A setup screen chooses the target, params, dry run,
-//! capabilities, coding agent and decision model; a run screen shows the
+//! coding agent and decision model; a run screen shows the
 //! steps live, their logs and diffs, and answers approvals in place.
 //!
-//! Only `workflow_exec` and the run commands call in here, and only when
-//! [`enabled`] says so: `--no-interactive`, `--format jsonl`, a pipe, `CI`
-//! or `CODEMOD_LAUNCHER=0` keep the plain output.
+//! Experimental and opt-in: only `CODEMOD_LAUNCHER=1` turns it on. Only
+//! `workflow_exec` and the run commands call in here, and only when
+//! [`enabled`] says so: without the opt-in, and with `--no-interactive`,
+//! `--format jsonl`, a pipe or `CI`, runs keep the plain output and prompts.
 
 mod render;
 mod setup;
 mod view;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{IsTerminal, Stdout};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -20,7 +21,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use butterflow_core::structured_log::OutputFormat;
-use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_workflow::events::Event;
 use codemod_workflow::interaction::{
     AgentChoice, Approval, Ask, Decision, Interaction, NonInteractive,
@@ -46,15 +46,21 @@ use view::{Action, RunView, StepState};
 
 /// Whether runs with these flags show the launcher.
 pub fn enabled(flags: &RunFlags) -> bool {
-    let opted_out = std::env::var("CODEMOD_LAUNCHER")
-        .map(|value| matches!(value.trim(), "0" | "false" | "off" | "no"))
-        .unwrap_or(false);
-    flags.format == OutputFormat::Text
+    opted_in(std::env::var("CODEMOD_LAUNCHER").ok().as_deref())
+        && flags.format == OutputFormat::Text
         && flags.control.is_none()
-        && !opted_out
-        && std::env::var_os("CI").is_none()
         && crate::utils::interactive::is_interactive(flags.no_interactive)
         && std::io::stdout().is_terminal()
+}
+
+/// Whether `CODEMOD_LAUNCHER` asks for the launcher: it is off by default.
+fn opted_in(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "on" | "yes"
+        )
+    })
 }
 
 // ------------------------------------------------------------ terminal ---
@@ -98,17 +104,12 @@ pub struct Plan<'a> {
     pub dry_run: bool,
     /// The run must be a dry run (a pro codemod).
     pub dry_run_locked: bool,
-    /// Capabilities the package's manifest asks for.
-    pub requested: HashSet<LlrtSupportedModules>,
     pub flags: &'a RunFlags,
 }
 
 impl SetupChoices {
-    /// Put the capability, agent and model choices into the flags.
+    /// Put the agent and model choices into the flags.
     pub fn apply_to(&self, flags: &mut RunFlags) {
-        flags.allow_fs = self.granted.contains(&LlrtSupportedModules::Fs);
-        flags.allow_fetch = self.granted.contains(&LlrtSupportedModules::Fetch);
-        flags.allow_child_process = self.granted.contains(&LlrtSupportedModules::ChildProcess);
         flags.agent = self.agent.clone();
         flags.model = Some(self.decision_model.clone());
     }
@@ -139,8 +140,6 @@ pub async fn setup(plan: Plan<'_>) -> Result<Option<SetupChoices>> {
         declared,
         dry_run: plan.dry_run,
         dry_run_locked: plan.dry_run_locked,
-        granted: plan.flags.granted(),
-        requested: plan.requested,
         installed_agents: codemod_agents::installed()
             .into_iter()
             .map(|(agent, _)| (agent.id().to_string(), agent.label().to_string()))
@@ -601,4 +600,19 @@ fn print_record(view: &RunView) {
         lines.push(style("Done").green().bold().to_string());
     }
     eprintln!("{}", lines.join("\n"));
+}
+
+#[cfg(test)]
+mod opt_in_tests {
+    use super::opted_in;
+
+    #[test]
+    fn the_launcher_is_off_unless_asked_for() {
+        for value in ["1", "true", "ON", " yes "] {
+            assert!(opted_in(Some(value)), "{value}");
+        }
+        for value in [None, Some(""), Some("0"), Some("false"), Some("off")] {
+            assert!(!opted_in(value), "{value:?}");
+        }
+    }
 }

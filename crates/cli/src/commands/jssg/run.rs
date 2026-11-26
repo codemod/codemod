@@ -99,6 +99,22 @@ pub struct Command {
     pub verbose: bool,
 }
 
+/// The `--allow-*` flag that grants what a transform's error says is
+/// missing: a module it could not import, or `fetch`.
+fn missing_capability_flag(error: &str) -> Option<&'static str> {
+    if error.contains("fetch is not defined") {
+        return Some("--allow-fetch");
+    }
+    let start = error.find("Error resolving module '")? + "Error resolving module '".len();
+    let module = &error[start..];
+    let module = module[..module.find('\'')?].trim_start_matches("node:");
+    match module.split('/').next()? {
+        "fs" => Some("--allow-fs"),
+        "child_process" => Some("--allow-child-process"),
+        _ => None,
+    }
+}
+
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     if args.no_color {
         console::set_colors_enabled(false);
@@ -246,7 +262,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         }
     };
 
-    let _ = config.execute(|file_path, _config| {
+    let executed = config.execute(|file_path, _config| {
         // Only process files
         if !file_path.is_file() {
             return;
@@ -372,8 +388,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 }
                 Err(e) => {
                     transaction.finish(false);
+                    let hint = missing_capability_flag(&e)
+                        .map(|flag| format!("\nThe transform needs a capability: pass {flag}."))
+                        .unwrap_or_default();
                     execution_errors.lock().unwrap().push(format!(
-                        "Failed to execute codemod on {}:\n{}",
+                        "Failed to execute codemod on {}:\n{}{hint}",
                         file_path.display(),
                         e
                     ));
@@ -384,6 +403,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             return;
         }
     });
+    // Nothing ran (a capability was refused, the target can't be read):
+    // the run failed.
+    if let Err(error) = executed {
+        anyhow::bail!("{error}");
+    }
 
     // Every file is done: apply what is left (everything, in a dry run).
     let mut renames = renames.into_inner().unwrap();
@@ -484,12 +508,36 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let seconds = duration_ms / 1000.0;
     println!("✨ Done in {seconds:.3}s");
 
-    let collected_errors = execution_errors
+    // A file that could not be written is tried again after each later file
+    // and at the end: report its error once.
+    let mut seen = std::collections::HashSet::new();
+    let collected_errors: Vec<String> = execution_errors
         .lock()
         .map(|errors| errors.clone())
-        .unwrap_or_default();
-    if !collected_errors.is_empty() {
-        return Err(anyhow::anyhow!("{}", collected_errors.join("\n\n")));
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|error| seen.insert(error.clone()))
+        .collect();
+    match collected_errors.as_slice() {
+        [] => {}
+        [error] => return Err(anyhow::anyhow!("{error}")),
+        // Each on its own: rendered together, a JavaScript error's
+        // diagnostic would hide the others.
+        errors => {
+            for error in errors {
+                eprintln!("{}", crate::diagnostics::render_error_message(error));
+            }
+            eprintln!(
+                "{}",
+                console::style(format!(
+                    "jssg run failed with {} errors (above).",
+                    errors.len()
+                ))
+                .red()
+                .bold()
+            );
+            return Err(crate::workflow_exec::WorkflowFailureAlreadyReported.into());
+        }
     }
 
     let collected_diffs = diff_collector
@@ -550,4 +598,30 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::missing_capability_flag;
+
+    #[test]
+    fn names_the_flag_for_a_missing_capability() {
+        let error = |module: &str| {
+            format!("Runtime error: Failed to declare module: Error: Error resolving module '{module}' from '/x/t.ts'")
+        };
+        assert_eq!(
+            missing_capability_flag(&error("child_process")),
+            Some("--allow-child-process")
+        );
+        assert_eq!(
+            missing_capability_flag(&error("node:fs/promises")),
+            Some("--allow-fs")
+        );
+        assert_eq!(
+            missing_capability_flag("ReferenceError: fetch is not defined"),
+            Some("--allow-fetch")
+        );
+        assert_eq!(missing_capability_flag(&error("lodash")), None);
+        assert_eq!(missing_capability_flag("Error: boom"), None);
+    }
 }

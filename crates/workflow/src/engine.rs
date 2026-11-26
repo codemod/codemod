@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use butterflow_state::run_store::{
-    MemoryStore, RunLease, RunRecord, RunSettings, RunStatus, RunStore, StepRecord, StoreError,
+    MemoryStore, RunLease, RunRecord, RunSettings, RunStatus, RunStore, StepRecord, StepStatus,
+    StoreError, TargetHolder,
 };
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -45,8 +46,19 @@ pub enum EngineError {
     Exists(String),
     #[error("run '{0}' is being executed by another process; wait for it, or stop it with `codemod workflow cancel --id {0}`")]
     Busy(String),
+    #[error("{}", target_busy(.0))]
+    TargetBusy(TargetHolder),
     #[error("'{0}' cannot name an event: use 1 to 100 letters, digits, '.', '_' or '-'")]
     EventName(String),
+    #[error("{}", other_version(run, made_by.as_deref(), stale))]
+    OtherVersion {
+        run: String,
+        /// The version that made the run's steps; `None` for runs from
+        /// before versions were recorded.
+        made_by: Option<String>,
+        /// The labels of the finished steps that would run again.
+        stale: Vec<String>,
+    },
     #[error("run '{run}' was started {started}, and can only be resumed there: {resuming} records steps differently")]
     OtherHost {
         run: String,
@@ -55,12 +67,55 @@ pub enum EngineError {
     },
 }
 
+/// Why a run cannot start on a target another run holds.
+fn target_busy(holder: &TargetHolder) -> String {
+    let run = &holder.run_id;
+    format!(
+        "another run ({run}) is already running on {}: wait for it, follow it with `codemod workflow attach --id {run}`, or stop it with `codemod workflow cancel --id {run}`",
+        holder.target.display()
+    )
+}
+
+/// Why a run another codemod version made is not resumed.
+fn other_version(run: &str, made_by: Option<&str>, stale: &[String]) -> String {
+    let (steps, them) = match stale.len() {
+        1 => ("step", "it"),
+        _ => ("steps", "them"),
+    };
+    let made = match made_by {
+        Some(version) => format!("codemod {version}"),
+        None => "an earlier codemod (2.0.0-alpha.9 or before)".to_string(),
+    };
+    let same = match made_by {
+        Some(version) => format!(
+            "Resume it with that version (npx codemod@{version} workflow resume --id {run}), or pass"
+        ),
+        None => "Pass".to_string(),
+    };
+    format!(
+        "run '{run}' was made by {made}, and codemod {CODEMOD_VERSION} builds the workflow's functions differently: {} finished {steps} ({}) would run again. {same} --force to run {them} again",
+        stale.len(),
+        stale.join(", ")
+    )
+}
+
 /// The host a run's JavaScript runs in, as people know it.
 fn host_name(host: &str) -> &'static str {
     match host {
         QUICKJS_HOST => "by the codemod CLI",
         _ => "with runWorkflow in Node.js",
     }
+}
+
+/// The codemod version, recorded on each run: its step keys depend on it.
+pub const CODEMOD_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The callback ids (`cb_<16 hex digits>`) a step key names.
+fn callback_ids(key: &str) -> impl Iterator<Item = &str> {
+    key.match_indices("cb_").filter_map(|(at, _)| {
+        let id = key.get(at..at + 19)?;
+        id[3..].bytes().all(|b| b.is_ascii_hexdigit()).then_some(id)
+    })
 }
 
 /// The engine's own JavaScript runtime, as recorded in a run's settings.
@@ -130,7 +185,8 @@ pub struct ResumeOptions {
     /// Skip the check for uncommitted changes that a run which has not
     /// written yet makes before its first write (`--allow-dirty`).
     pub allow_dirty: bool,
-    /// Continue a run that was canceled or rejected (`--force`).
+    /// Continue a run that was canceled or rejected, or one another codemod
+    /// version made whose finished function steps would run again (`--force`).
     pub force: bool,
 }
 
@@ -158,7 +214,9 @@ impl RunReport {
             Ending::FailedWithOutput { error, output, .. } => {
                 (output.clone(), Some(error), None, None)
             }
-            Ending::Canceled | Ending::Paused => (Value::Null, None, None, None),
+            Ending::Canceled => (Value::Null, None, None, None),
+            // Paused at a question: the run still waits for it.
+            Ending::Paused => (Value::Null, None, self.run.awaiting.as_ref(), None),
             Ending::Rejected(message) => (Value::Null, Some(message), None, None),
             Ending::AwaitingApproval(message) => (Value::Null, None, Some(message), None),
             Ending::Stopped(label) => (Value::Null, None, None, Some(label)),
@@ -276,6 +334,9 @@ pub(crate) struct Execution {
     pub context: Arc<RunContext>,
     stop: StopHandle,
     _lease: Box<dyn RunLease>,
+    /// The hold on the run's target, so no other run changes it meanwhile;
+    /// `None` for dry runs and tests.
+    _target: Option<Box<dyn RunLease>>,
 }
 
 impl Execution {
@@ -295,8 +356,25 @@ impl Execution {
         let context = &self.context;
         let mut record = self.record.clone();
         record.conclude(ending.outcome());
-        if matches!(ending, Ending::AwaitingApproval(_)) {
-            record.question = context.halt.question();
+        match ending {
+            Ending::AwaitingApproval(_) => record.question = context.halt.question(),
+            // Paused while a question was open: the run still waits for it,
+            // and `workflow resume --approve <id>` gives it.
+            Ending::Paused => {
+                if let Some(question) = context.halt.question() {
+                    record.awaiting = context.awaiting().or_else(|| {
+                        context
+                            .store
+                            .load_steps(&record.id)
+                            .ok()?
+                            .into_iter()
+                            .find(|step| step.status == StepStatus::AwaitingApproval)
+                            .and_then(|step| step.error)
+                    });
+                    record.question = Some(question);
+                }
+            }
+            _ => {}
         }
         // Still to check when the run never got past the check.
         record.settings.check_uncommitted = context
@@ -445,6 +523,7 @@ impl Engine {
             output: None,
             exit_code: None,
             settings: self.settings(host),
+            codemod_version: Some(CODEMOD_VERSION.to_string()),
         };
         record.settings.check_uncommitted = check_uncommitted;
         // Dry runs and tests leave no run behind.
@@ -456,6 +535,12 @@ impl Engine {
         if store.get_run(&record.id)?.is_some() {
             return Err(EngineError::Exists(record.id));
         }
+        // Before the run is saved: a run refused here leaves nothing behind.
+        let target_lease = if dry_run || test.is_some() {
+            None
+        } else {
+            Some(lock_target(store.as_ref(), &record.target, &record.id)?)
+        };
         store.put_run(&record)?;
         let lease = store
             .acquire(&record.id)?
@@ -467,7 +552,9 @@ impl Engine {
                 Arc::clone(&store),
             ))
         });
-        Ok(self.begin(store, record, lease, callbacks, dry_run, test, false, gate))
+        let mut execution = self.begin(store, record, lease, callbacks, dry_run, test, false, gate);
+        execution._target = target_lease;
+        Ok(execution)
     }
 
     /// Take a stored run to continue it, marked running again.
@@ -490,12 +577,36 @@ impl Engine {
                 },
             });
         }
+        // Function steps are keyed by a hash of the code the build generates,
+        // which another version may generate differently. Then finished
+        // steps would silently run again: refused, unless forced.
+        if host == QUICKJS_HOST
+            && !options.force
+            && record.codemod_version.as_deref() != Some(CODEMOD_VERSION)
+        {
+            let stale: Vec<String> = self
+                .store
+                .load_steps(&record.id)?
+                .into_iter()
+                .filter(|step| matches!(step.status, StepStatus::Succeeded | StepStatus::Partial))
+                .filter(|step| callback_ids(&step.key).any(|id| !callbacks.contains_key(id)))
+                .map(|step| step.label)
+                .collect();
+            if !stale.is_empty() {
+                return Err(EngineError::OtherVersion {
+                    run: record.id.clone(),
+                    made_by: record.codemod_version.clone(),
+                    stale,
+                });
+            }
+        }
         // The lease comes first: while another process executes the run, its
         // record and cancel request are not ours to change.
         let lease = self
             .store
             .acquire(&record.id)?
             .ok_or_else(|| EngineError::Busy(record.id.clone()))?;
+        let target_lease = lock_target(self.store.as_ref(), &record.target, &record.id)?;
         record
             .reopen(options.force)
             .map_err(|refused| match refused {
@@ -506,6 +617,8 @@ impl Engine {
                 },
             })?;
         self.store.clear_cancel(&record.id)?;
+        // Steps recorded from here on are this version's.
+        record.codemod_version = Some(CODEMOD_VERSION.to_string());
         // A run that already wrote is not checked again: it made the changes
         // there may be. One that never got past the check checks again.
         if options.allow_dirty {
@@ -520,7 +633,9 @@ impl Engine {
                 Arc::clone(&store),
             ))
         });
-        Ok(self.begin(store, record, lease, callbacks, false, None, true, gate))
+        let mut execution = self.begin(store, record, lease, callbacks, false, None, true, gate);
+        execution._target = Some(target_lease);
+        Ok(execution)
     }
 
     /// Announce a run and set up what its steps share.
@@ -585,6 +700,7 @@ impl Engine {
             context,
             stop: self.stop.clone(),
             _lease: lease,
+            _target: None,
         }
     }
 
@@ -666,6 +782,23 @@ pub fn send_event(
         }
     }
     Ok(store.send_event(run_id, name, data)?)
+}
+
+/// Hold the repository `target` is in (or `target` itself, outside one)
+/// for run `run_id`: one run changes a repository at a time.
+fn lock_target(
+    store: &dyn RunStore,
+    target: &Path,
+    run_id: &str,
+) -> Result<Box<dyn RunLease>, EngineError> {
+    let target = absolute(target);
+    let repository = target
+        .ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .unwrap_or(&target);
+    store
+        .lock_target(repository, run_id)?
+        .map_err(EngineError::TargetBusy)
 }
 
 fn absolute(path: &Path) -> PathBuf {

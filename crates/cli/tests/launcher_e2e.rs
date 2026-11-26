@@ -53,7 +53,30 @@ struct Session {
 }
 
 impl Session {
+    /// The launcher is opt-in: these sessions ask for it.
     fn start(home: &Path, store: &Path, cwd: &Path, args: &[&str]) -> Self {
+        Self::start_with(home, store, cwd, args, Some("1"))
+    }
+
+    fn start_with(
+        home: &Path,
+        store: &Path,
+        cwd: &Path,
+        args: &[&str],
+        launcher: Option<&str>,
+    ) -> Self {
+        Self::start_env(home, store, cwd, args, launcher, &[])
+    }
+
+    /// `env` is set last, e.g. `CI=1`.
+    fn start_env(
+        home: &Path,
+        store: &Path,
+        cwd: &Path,
+        args: &[&str],
+        launcher: Option<&str>,
+        env: &[(&str, &str)],
+    ) -> Self {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: ROWS,
@@ -73,7 +96,13 @@ impl Session {
         // Nothing to fetch the model list from.
         command.env("TYPESAFE_BASE_URL", "http://127.0.0.1:9");
         command.env_remove("CI");
-        command.env_remove("CODEMOD_LAUNCHER");
+        match launcher {
+            Some(value) => command.env("CODEMOD_LAUNCHER", value),
+            None => command.env_remove("CODEMOD_LAUNCHER"),
+        }
+        for (key, value) in env {
+            command.env(key, value);
+        }
         let child = pair.slave.spawn_command(command).unwrap();
         drop(pair.slave);
 
@@ -137,12 +166,13 @@ impl Session {
         std::thread::sleep(Duration::from_millis(150));
     }
 
-    fn finish(mut self) -> (bool, String) {
+    /// Wait for the process to exit: its exit code, and what it showed.
+    fn finish(mut self) -> (u32, String) {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             if let Some(status) = self.child.try_wait().unwrap() {
                 std::thread::sleep(Duration::from_millis(200));
-                return (status.success(), self.text());
+                return (status.exit_code(), self.text());
             }
             if Instant::now() > deadline {
                 let _ = self.child.kill();
@@ -194,11 +224,11 @@ fn a_dry_run_is_reviewed_applied_and_approved_in_the_launcher() {
     );
 
     // Setup: the focus starts on Start. Pick the next model, then turn on
-    // the dry run (fields: target, dry run, 3 capabilities, agent, model).
+    // the dry run (fields: target, dry run, agent, model).
     session.wait_for("Start run");
     session.keys(UP);
     session.keys(RIGHT);
-    for _ in 0..5 {
+    for _ in 0..2 {
         session.keys(UP);
     }
     session.keys(" ");
@@ -226,8 +256,8 @@ fn a_dry_run_is_reviewed_applied_and_approved_in_the_launcher() {
     // The plain record stays in the terminal; then the report question.
     session.wait_for("View results in the browser");
     session.keys("n\r");
-    let (success, output) = session.finish();
-    assert!(success, "{output}");
+    let (code, output) = session.finish();
+    assert_eq!(code, 0, "{output}");
     assert!(output.contains("approval: Apply the change?"), "{output}");
     assert!(output.contains("1 file changed"), "{output}");
     assert_eq!(
@@ -274,8 +304,9 @@ fn pausing_at_an_approval_leaves_a_run_to_resume() {
     session.keys("l");
     session.wait_for("waiting for approval");
     session.keys("q");
-    let (success, output) = session.finish();
-    assert!(success, "{output}");
+    let (code, output) = session.finish();
+    // Waiting for input: exit code 3.
+    assert_eq!(code, 3, "{output}");
     let id = regex::Regex::new(r"workflow resume --id ([0-9a-f-]+) --approve")
         .unwrap()
         .captures(&output)
@@ -297,12 +328,115 @@ fn pausing_at_an_approval_leaves_a_run_to_resume() {
     session.keys("y");
     session.wait_for("done");
     session.keys("q");
-    let (success, output) = session.finish();
-    assert!(success, "{output}");
+    let (code, output) = session.finish();
+    assert_eq!(code, 0, "{output}");
     assert_eq!(
         fs::read_to_string(target.path().join("src/a.ts")).unwrap(),
         "let a = 1;\n"
     );
+}
+
+/// In a terminal without `CODEMOD_LAUNCHER=1`, a run asks with plain
+/// prompts and prints plain lines: no full-screen launcher.
+#[test]
+fn without_the_opt_in_a_terminal_run_uses_plain_prompts() {
+    let package = TempDir::new().unwrap();
+    let target = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let store = TempDir::new().unwrap();
+    write(package.path(), "workflow.ts", WORKFLOW);
+    write(package.path(), "scripts/replace.ts", REPLACE);
+    write(target.path(), "src/a.ts", "var a = 1;\n");
+
+    let mut session = Session::start_with(
+        home.path(),
+        store.path(),
+        target.path(),
+        &[
+            "workflow",
+            "run",
+            "-w",
+            package.path().to_str().unwrap(),
+            "--target",
+            target.path().to_str().unwrap(),
+            "--allow-dirty",
+        ],
+        None,
+    );
+    session.wait_for("Apply the change?");
+    assert!(!session.text().contains("Start run"), "{}", session.text());
+    session.keys("y\r");
+    session.wait_for("View results in the browser");
+    session.keys("n\r");
+    // Never switched to the alternate screen.
+    let raw = String::from_utf8_lossy(&session.output.lock().unwrap()).into_owned();
+    assert!(!raw.contains("\x1b[?1049h"), "{raw}");
+    let (code, output) = session.finish();
+    assert_eq!(code, 0, "{output}");
+    assert_eq!(
+        fs::read_to_string(target.path().join("src/a.ts")).unwrap(),
+        "let a = 1;\n"
+    );
+}
+
+/// With `CI=1`, even on a terminal, nothing asks: the no-command menu prints
+/// next steps, a package with several workflows runs its default one, and
+/// `ai` sets up with its defaults.
+#[test]
+fn ci_never_prompts_even_on_a_terminal() {
+    let home = TempDir::new().unwrap();
+    let store = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    let ci = [("CI", "1")];
+
+    let session = Session::start_env(home.path(), store.path(), cwd.path(), &[], None, &ci);
+    let (code, output) = session.finish();
+    assert_eq!(code, 1, "{output}");
+    assert!(output.contains("Next steps"), "{output}");
+    assert!(!output.contains("What would you like to do?"), "{output}");
+
+    let package = TempDir::new().unwrap();
+    write(
+        package.path(),
+        "codemod.yaml",
+        "schema_version: \"1.0\"\nname: two\nversion: 0.1.0\ndescription: two\nauthor: test\nworkflows:\n  - name: first\n    path: first.ts\n    default: true\n  - name: second\n    path: second.ts\n",
+    );
+    for name in ["first", "second"] {
+        write(
+            package.path(),
+            &format!("{name}.ts"),
+            &format!("export default async function main() {{ return \"ran {name}\"; }}\n"),
+        );
+    }
+    let session = Session::start_env(
+        home.path(),
+        store.path(),
+        cwd.path(),
+        &[
+            "run",
+            package.path().to_str().unwrap(),
+            "--target",
+            cwd.path().to_str().unwrap(),
+            "--allow-dirty",
+        ],
+        None,
+        &ci,
+    );
+    let (code, output) = session.finish();
+    assert_eq!(code, 0, "{output}");
+    assert!(output.contains("ran first"), "{output}");
+    assert!(!output.contains("Select a workflow"), "{output}");
+
+    let session = Session::start_env(
+        home.path(),
+        store.path(),
+        cwd.path(),
+        &["ai", "--harness", "claude"],
+        None,
+        &ci,
+    );
+    let (_, output) = session.finish();
+    assert!(!output.contains("Set it up for:"), "{output}");
 }
 
 #[test]
@@ -331,8 +465,8 @@ fn quitting_the_setup_runs_nothing() {
     );
     session.wait_for("Start run");
     session.keys("q");
-    let (success, output) = session.finish();
-    assert!(success, "{output}");
+    let (code, output) = session.finish();
+    assert_eq!(code, 0, "{output}");
     assert!(output.contains("Nothing ran."), "{output}");
     assert_eq!(
         fs::read_to_string(target.path().join("src/a.ts")).unwrap(),

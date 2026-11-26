@@ -828,6 +828,7 @@ version = "1.18.7"
 dependencies = [
  "chrono",
  "dirs",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
@@ -1337,6 +1338,7 @@ dependencies = [
 name = "codemod-workflow"
 version = "1.18.7"
 dependencies = [
+ "base64 0.22.1",
  "butterflow-core",
  "butterflow-models",
  "butterflow-runners",

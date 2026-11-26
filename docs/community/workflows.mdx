@@ -33,16 +33,16 @@ Steps start when you call `step()`, so `Promise.all` runs steps in parallel. Git
 
 A callback can also live in its own file, as its default export: `import migrateImports from "./scripts/migrate-imports.ts"`, then `forEachFile(selector, migrateImports)`. The workflow body never loads it, and the step runs again on resume when the file changes. In place of a callback, with `import rules from "./rules/config.yml"`, `forEachFile(selector, astGrep(rules))` applies ast-grep rules (rules can also be written in the workflow as objects).
 
-Code inside steps and callbacks runs in its own isolate, with npm packages, files next to the workflow, and file or network access when the run allows it. The rest of the workflow is kept deterministic, so a resumed run takes the same path. See [The workflow body](/community/workflows/reference#the-workflow-body).
+Code inside steps and callbacks runs in its own isolate, with npm packages and files next to the workflow. Callbacks only compute: commands, network requests and agents are steps of their own (`shell`, `http`, `agent`), so the run can show them and replay their results. The rest of the workflow is kept deterministic, so a resumed run takes the same path. See [The workflow body](/community/workflows/reference#the-workflow-body).
 
 ### Tasks
 
 | Task | Purpose |
 |---|---|
 | `forEachFile` | Edit, rename or delete files with a per-file callback, inline or imported, or `astGrep` rules |
-| `jssg` | A [JSSG](/community/jssg) transform file, for `forEachFile` |
 | `astGrep` | ast-grep rules, written as objects or imported from YAML, for `forEachFile` |
 | `shell` | Run shell commands for setup, cleanup or external tools |
+| `http` | Make an HTTP request |
 | `agent` | Hand a prompt to a coding agent |
 | `codemod` | Run a package from the [Codemod Registry](https://go.codemod.com/registry) |
 | `installSkill` | Install a package's skill into a coding-agent harness |
@@ -52,7 +52,7 @@ Code inside steps and callbacks runs in its own isolate, with npm packages, file
 
 ### Values and parameters
 
-Workflows have no shared state. Steps hand values to each other as data: a step's result (a function's return value, a transform's `data`, a shell command's `values`) goes into the next step's options. Parameters passed with `--param key=value` reach the workflow as `params`.
+Workflows have no shared state. Steps hand values to each other as data: a step's result (what a function or callback returns, what a shell command prints) goes into the next step. Parameters passed with `--param key=value` reach the workflow as `params`.
 
 ### workflow.yaml
 
@@ -69,6 +69,12 @@ A Codemod package bundles everything needed to run a workflow: metadata, workflo
 ## Next steps
 
 <CardGroup cols={2}>
+  <Card title="Your first workflow" icon="rocket" href="/community/workflows/tutorials/first-workflow">
+    One `forEachFile` step and a dry run, in five minutes.
+  </Card>
+  <Card title="Upgrade from 1.x" icon="arrow-up" href="/community/workflows/upgrade-from-1x">
+    What changes for people who run codemods and for codemod authors.
+  </Card>
   <Card title="Build your first workflow" icon="graduation-cap" href="/community/workflows/getting-started">
     A hands-on tutorial: ast-grep rules, a per-file callback, a shell step, an approval, and tests.
   </Card>

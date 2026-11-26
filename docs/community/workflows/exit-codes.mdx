@@ -1,0 +1,57 @@
+---
+title: "Exit codes"
+description: "What each exit code of codemod workflow run, workflow resume and codemod <package> means, and how to read the run's result in a script."
+---
+
+`codemod workflow run`, `codemod workflow resume` and `codemod <package>` exit with a code that says how the run ended. Use it in CI and scripts; for the details, read the run with `codemod workflow status --id <id> --format json`.
+
+| Code | Run status | Meaning | What to do |
+| --- | --- | --- | --- |
+| `0` | `succeeded` | The run finished. | Nothing. |
+| `1` | `failed`, `paused`, `canceled`, `rejected` | A step failed, the run was stopped (Ctrl-C, `stop` over `--control stdio`), canceled with `workflow cancel`, or an approval was rejected. Also: an error before the run started, such as a workflow that doesn't build. | Read the error. Resume a failed or paused run with `workflow resume --id <id>`. |
+| `2` | `succeeded` or `failed` | The run finished, but some files failed (`succeeded`), or the workflow called [`fail()`](/community/workflows/reference#failing-a-run-with-a-report) (`failed`). The run keeps its output. | Read the output: `Output: …`, or `output` in `workflow status --format json`. |
+| `3` | `awaiting-approval` | The run stopped at an approval nobody could answer (`--no-interactive`, CI) and is waiting. Nothing after the approval ran. | Approve with `workflow resume --id <id> --approve <question-id>`, or end the run with `workflow cancel --id <id>`. |
+| other | `failed` | The workflow called `fail(message, { exitCode })` with that code (1 to 125). | Depends on the workflow. |
+
+<Note>
+Up to 2.0.0-alpha.9, a run waiting at an approval exits `0`. From alpha.10 it exits `3`, so a CI job no longer passes with half a migration done. To get past approvals in CI, pass `--approve` on `workflow run`.
+</Note>
+
+A workflow can also deliberately return `3` with `fail()`. Check `workflow status` to tell `failed` apart from `awaiting-approval`.
+
+A command line the CLI can't parse (an unknown flag, a missing value) exits `2` before any run starts, and prints usage instead of a run. Check for it before treating `2` as "finished with failures" in a script that builds its command line.
+
+A dry run is never saved, so it can't wait at an approval: a dry run that reaches one exits `1` and says to pass `--approve`. With `--control stdio`, it waits for an answer like a real run.
+
+## Read the result in a script
+
+```bash
+npx codemod@alpha workflow run -w workflow.ts --target . --no-interactive
+code=$?
+case $code in
+  0) echo "done" ;;
+  2) echo "finished with failures" ;;
+  3) echo "waiting for approval" ;;
+  *) echo "failed ($code)"; exit $code ;;
+esac
+```
+
+To read the run itself, get its id from `workflow list --format json` (newest first) and its status from `workflow status`:
+
+```bash
+id=$(npx codemod@alpha workflow list --format json | jq -r '.[0].id')
+npx codemod@alpha workflow status --id "$id" --format json | jq '{status, exitCode, question, output}'
+```
+
+```json
+{
+  "status": "failed",
+  "exitCode": 2,
+  "question": null,
+  "output": { "total": 3, "max": 0, "perPackage": { "api": 2, "web": 1 } }
+}
+```
+
+`exitCode` is the code `fail()` gave, or `null` when the workflow didn't call it. `question` is the approval a waiting run needs, such as `"approval:1"`. A paused run keeps it too, so you can resume it with `--approve <question>` without remembering it.
+
+With `--format jsonl`, the last line is a `run_finished` event with the same `status`, `output` and `question`. See [Running in CI and from agents](/community/workflows/ci-and-agents).
