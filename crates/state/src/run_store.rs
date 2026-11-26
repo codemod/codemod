@@ -131,6 +131,23 @@ pub struct RunRecord {
     /// What the run was started with, so resuming it continues the same way.
     #[serde(default)]
     pub settings: RunSettings,
+    /// The codemod version that last executed the run. Its step keys are
+    /// that version's: function steps are keyed by a hash of the code it
+    /// generated. `None` for runs from before versions were recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codemod_version: Option<String>,
+}
+
+/// A run in the store this version cannot read: a newer (or much older)
+/// codemod wrote it. Listed so it does not silently disappear.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnreadableRun {
+    pub id: String,
+    /// The version that wrote it, when the record says.
+    pub codemod_version: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    /// Why it cannot be read.
+    pub error: String,
 }
 
 /// The choices a run was started with that its steps depend on.
@@ -354,8 +371,13 @@ pub trait RunStore: Send + Sync {
     /// Insert or replace a run's record.
     fn put_run(&self, run: &RunRecord) -> StoreResult<()>;
     fn get_run(&self, run_id: &str) -> StoreResult<Option<RunRecord>>;
-    /// Most recent first. Entries that cannot be read are left out.
+    /// Most recent first. Entries that cannot be read are left out: see
+    /// [`RunStore::list_unreadable`].
     fn list_runs(&self, limit: usize) -> StoreResult<Vec<RunRecord>>;
+    /// Runs whose record this version cannot read, most recent first.
+    fn list_unreadable(&self) -> StoreResult<Vec<UnreadableRun>> {
+        Ok(Vec::new())
+    }
     /// Insert or replace the step at `step.position`.
     fn put_step(&self, run_id: &str, step: &StepRecord) -> StoreResult<()>;
     /// Ordered by position.
@@ -701,7 +723,8 @@ impl RunStore for LocalStore {
             }
         };
         // Stray files and records this version cannot read are not runs to
-        // list; one of them must not hide the rest.
+        // list (`list_unreadable` has the latter); one of them must not hide
+        // the rest.
         let mut records: Vec<RunRecord> = entries
             .flatten()
             .filter_map(|entry| {
@@ -713,6 +736,43 @@ impl RunStore for LocalStore {
         records.sort_by_key(|r| std::cmp::Reverse(r.started_at));
         records.truncate(limit);
         Ok(records)
+    }
+
+    fn list_unreadable(&self) -> StoreResult<Vec<UnreadableRun>> {
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return Ok(Vec::new());
+        };
+        let mut unreadable: Vec<UnreadableRun> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path().join("run.json");
+                if !path.is_file() {
+                    return None;
+                }
+                let error = match Self::read_json::<RunRecord>(&path) {
+                    Ok(_) => return None,
+                    Err(error) => error.to_string(),
+                };
+                // What can still be made out of it.
+                let raw: Option<Value> = fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|text| serde_json::from_str(&text).ok());
+                let field = |name: &str| {
+                    raw.as_ref()
+                        .and_then(|raw| raw.get(name))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                };
+                Some(UnreadableRun {
+                    id: field("id").unwrap_or_else(|| entry.file_name().to_string_lossy().into()),
+                    codemod_version: field("codemodVersion"),
+                    started_at: field("startedAt").and_then(|at| at.parse().ok()),
+                    error,
+                })
+            })
+            .collect();
+        unreadable.sort_by_key(|run| std::cmp::Reverse(run.started_at));
+        Ok(unreadable)
     }
 
     fn put_step(&self, run_id: &str, step: &StepRecord) -> StoreResult<()> {
@@ -884,6 +944,7 @@ mod tests {
             output: None,
             exit_code: None,
             settings: RunSettings::default(),
+            codemod_version: None,
         }
     }
 
@@ -1060,6 +1121,27 @@ mod tests {
             .map(|r| r.id)
             .collect();
         assert_eq!(listed, ["a"]);
+        let unreadable = store.list_unreadable().unwrap();
+        assert_eq!(unreadable.len(), 1, "{unreadable:?}");
+        assert_eq!(unreadable[0].id, "broken");
+        assert_eq!(unreadable[0].codemod_version, None);
+    }
+
+    #[test]
+    fn a_record_a_newer_version_wrote_is_listed_as_unreadable_with_its_version() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = LocalStore::new(dir.path());
+        fs::create_dir(dir.path().join("new")).unwrap();
+        fs::write(
+            dir.path().join("new").join("run.json"),
+            br#"{"id":"new","status":"teleported","codemodVersion":"9.0.0","startedAt":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(store.list_runs(10).unwrap().is_empty());
+        let unreadable = store.list_unreadable().unwrap();
+        assert_eq!(unreadable[0].id, "new");
+        assert_eq!(unreadable[0].codemod_version.as_deref(), Some("9.0.0"));
+        assert!(unreadable[0].started_at.is_some());
     }
 
     #[test]

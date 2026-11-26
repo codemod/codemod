@@ -480,6 +480,112 @@ fn a_run_waiting_for_an_approval_exits_3_with_the_command_that_continues_it() {
     assert_eq!(fixture.status(&id)["status"], "awaiting-approval");
 }
 
+/// Rewrite a file in the run store.
+fn edit_store(fixture: &Fixture, path: &str, edit: impl FnOnce(String) -> String) {
+    let path = fixture.store.path().join(path);
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(&path, edit(text)).unwrap();
+}
+
+#[test]
+fn a_run_another_version_made_is_resumed_only_when_its_steps_still_match() {
+    let fixture = Fixture::new(
+        r#"
+import { step, approval } from "codemod/workflow";
+export default async function main() {
+  await step("Count", () => 1);
+  await step(approval("Go on?"));
+  return "done";
+}
+"#,
+    );
+    let output = fixture.run(&["--format", "jsonl"]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    let id = run_id(&events(&output));
+    let status = fixture.status(&id);
+    let version = status["codemodVersion"].as_str().unwrap().to_string();
+    assert!(!version.is_empty(), "{status}");
+
+    // Made by another version whose function steps hash the same: resumed.
+    edit_store(&fixture, &format!("{id}/run.json"), |text| {
+        text.replace(&version, "0.0.1-older")
+    });
+    let output = fixture.codemod(&["workflow", "resume", "--id", &id, "--no-interactive"]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    assert_eq!(fixture.status(&id)["codemodVersion"], version.as_str());
+
+    // ... and one whose functions it built differently: refused, naming
+    // the version and the steps, unless forced.
+    edit_store(&fixture, &format!("{id}/run.json"), |text| {
+        text.replace(&version, "0.0.1-older")
+    });
+    edit_store(&fixture, &format!("{id}/steps.json"), |text| {
+        regex::Regex::new("cb_[0-9a-f]{16}")
+            .unwrap()
+            .replace_all(&text, "cb_0000000000000000")
+            .into_owned()
+    });
+    let output = fixture.codemod(&[
+        "workflow",
+        "resume",
+        "--id",
+        &id,
+        "--approve",
+        "--no-interactive",
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let shown = text(&output);
+    assert!(
+        shown.contains("codemod 0.0.1-older")
+            && shown.contains("Count")
+            && shown.contains("--force"),
+        "{shown}"
+    );
+    assert_eq!(fixture.status(&id)["status"], "awaiting-approval");
+
+    let output = fixture.codemod(&[
+        "workflow",
+        "resume",
+        "--id",
+        &id,
+        "--approve",
+        "--force",
+        "--no-interactive",
+        "--format",
+        "jsonl",
+    ]);
+    assert!(output.status.success(), "{}", text(&output));
+    // The step ran again.
+    assert_eq!(named(&events(&output), "step_started")[0]["label"], "Count");
+    assert_eq!(fixture.status(&id)["status"], "succeeded");
+}
+
+#[test]
+fn runs_this_version_cannot_read_are_listed_as_unreadable() {
+    let fixture = Fixture::new(TWO_APPROVALS);
+    let dir = fixture.store.path().join("from-the-future");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("run.json"),
+        r#"{"id":"from-the-future","status":"teleported","codemodVersion":"9.9.9","startedAt":"2026-01-01T00:00:00Z"}"#,
+    )
+    .unwrap();
+    let output = fixture.codemod(&["workflow", "list"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("unreadable (made by codemod 9.9.9)"),
+        "{}",
+        text(&output)
+    );
+    let output = fixture.codemod(&["workflow", "list", "--format", "json"]);
+    let listed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(listed[0]["status"], "unreadable", "{listed}");
+    assert_eq!(listed[0]["codemodVersion"], "9.9.9");
+    let output = fixture.codemod(&["workflow", "status", "--id", "from-the-future"]);
+    assert!(!output.status.success());
+    assert!(text(&output).contains("codemod 9.9.9"), "{}", text(&output));
+}
+
 #[test]
 fn seq_keeps_increasing_when_a_run_is_resumed() {
     let fixture = Fixture::new(TWO_APPROVALS);

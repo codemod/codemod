@@ -436,6 +436,33 @@ pub fn store() -> Arc<dyn RunStore> {
     Arc::from(store_from_env())
 }
 
+/// A run's record; for a run this version cannot read, an error that says
+/// which version made it.
+pub fn get_run(store: &dyn RunStore, run_id: &str) -> Result<Option<RunRecord>> {
+    match store.get_run(run_id) {
+        Ok(record) => Ok(record),
+        Err(error) => {
+            let unreadable = store.list_unreadable().unwrap_or_default();
+            match unreadable.iter().find(|run| run.id == run_id) {
+                Some(run) => Err(anyhow!(
+                    "run '{run_id}' is {}, and codemod {} cannot read it: {error}",
+                    unreadable_label(run),
+                    codemod_workflow::CODEMOD_VERSION
+                )),
+                None => Err(error.into()),
+            }
+        }
+    }
+}
+
+/// How `workflow list` shows a run this version cannot read.
+pub fn unreadable_label(run: &codemod_workflow::UnreadableRun) -> String {
+    match &run.codemod_version {
+        Some(version) => format!("unreadable (made by codemod {version})"),
+        None => "unreadable (made by another codemod version)".to_string(),
+    }
+}
+
 /// A run's status for display. A run whose record says running while
 /// nothing executes it was interrupted: its process was killed.
 pub fn status_label(store: &dyn RunStore, run: &RunRecord) -> String {
@@ -521,9 +548,8 @@ pub async fn start(mut request: ExecRequest) -> Result<ExecOutcome> {
 /// of the run behaves like its start.
 pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutcome> {
     settings.check_control()?;
-    let record = store()
-        .get_run(run_id)?
-        .ok_or_else(|| anyhow!("run '{run_id}' not found"))?;
+    let record =
+        get_run(store().as_ref(), run_id)?.ok_or_else(|| anyhow!("run '{run_id}' not found"))?;
     // Before asking anything: a run that is over stays over.
     match record.status.resumable() {
         codemod_workflow::Resumable::Yes => {}

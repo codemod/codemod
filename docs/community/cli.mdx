@@ -526,6 +526,8 @@ Continue a run that failed, was paused (Ctrl-C) or interrupted, or is waiting fo
 
 The run continues with what it was started with: its capabilities, `--managed-git` and `--agent` carry over (a new `--agent` or `--model` wins), and flags you pass add to them. A run that another process is still executing cannot be resumed; wait for it or cancel it. A run started with `runWorkflow` in Node.js is resumed there, not here.
 
+Each run records the codemod version that ran it (`codemodVersion` in `workflow status --format json`). Function and `forEachFile` steps are matched by a hash of the code the CLI builds from them, which another version may build differently. When you resume a run another version made and some finished steps no longer match, `workflow resume` refuses and names the version and the steps: resume it with that version (`npx codemod@<version> workflow resume --id <ID>`), or pass `--force` to run those steps again.
+
 ```bash
 npx codemod workflow resume --id <ID> [--approve [<QUESTION_ID>]] [--force]
 ```
@@ -545,7 +547,7 @@ npx codemod workflow resume --id <ID> [--approve [<QUESTION_ID>]] [--force]
 </ResponseField>
 
 <ResponseField name="--force" type="boolean">
-  Continue a run that was canceled or rejected. Steps that finished keep their results; the step that was rejected asks again.
+  Continue a run that was canceled or rejected. Steps that finished keep their results; the step that was rejected asks again. Also continues a run another codemod version made whose finished function steps no longer match: those run again.
 </ResponseField>
 
 <ResponseField name="--allow-dirty" type="boolean">
@@ -663,12 +665,12 @@ npx codemod workflow status -i <ID> --format json
 </ResponseField>
 
 <ResponseField name="--format <text|json>" type="string">
-  `json` prints the run as one JSON object: `id`, `name`, `workflow`, `target`, `params`, `status`, `startedAt`, `endedAt`, `durationMs`, `awaiting` and `question` (what the approval it waits for asks, and its id), `error`, `output` (what the workflow returned or gave `fail()`), `exitCode` (from `fail()`, else `null`), `failedFiles`, and `steps`, each with `position`, `label`, `kind`, `status`, `error`, `result`, `finishedAt`, `durationMs`, `attempts` (how many times it ran, `1` unless it was retried) and `files` (`{ failed, total }` for a step that works on files: `forEachFile`, `astGrep`, a nested `codemod`; `null` for other steps).
+  `json` prints the run as one JSON object: `id`, `name`, `workflow`, `target`, `params`, `status`, `startedAt`, `endedAt`, `durationMs`, `awaiting` and `question` (what the approval it waits for asks, and its id), `error`, `output` (what the workflow returned or gave `fail()`), `exitCode` (from `fail()`, else `null`), `codemodVersion` (the version that last ran it; `null` for runs from 2.0.0-alpha.9 or before), `failedFiles`, and `steps`, each with `position`, `label`, `kind`, `status`, `error`, `result`, `finishedAt`, `durationMs`, `attempts` (how many times it ran, `1` unless it was retried) and `files` (`{ failed, total }` for a step that works on files: `forEachFile`, `astGrep`, a nested `codemod`; `null` for other steps).
 </ResponseField>
 
 **`workflow list`**
 
-List workflow runs.
+List workflow runs. A run this version cannot read (a newer codemod wrote it) is listed as `unreadable (made by codemod <version>)`; use that version to see or resume it.
 
 ```bash
 npx codemod workflow list [-l <LIMIT>] [--format json]
@@ -679,7 +681,7 @@ npx codemod workflow list [-l <LIMIT>] [--format json]
 </ResponseField>
 
 <ResponseField name="--format <text|json>" type="string">
-  `json` prints an array of runs, most recent first, each as `workflow status --format json` shows it without `steps`.
+  `json` prints an array of runs, most recent first, each as `workflow status --format json` shows it without `steps`. An unreadable run has only `id`, `status` (`"unreadable"`), `startedAt`, `codemodVersion` and `error`.
 </ResponseField>
 
 **`workflow cancel`**

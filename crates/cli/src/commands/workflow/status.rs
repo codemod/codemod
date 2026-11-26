@@ -50,6 +50,7 @@ pub(crate) fn run_json(
         "error": run.error,
         "output": run.output,
         "exitCode": run.exit_code,
+        "codemodVersion": run.codemod_version,
     });
     value["failedFiles"] = steps
         .iter()
@@ -96,8 +97,7 @@ struct StepRow {
 /// Show a workflow run and its steps
 pub async fn handler(args: &Command) -> Result<()> {
     let store = store();
-    let run = store
-        .get_run(&args.id)?
+    let run = crate::workflow_exec::get_run(store.as_ref(), &args.id)?
         .ok_or_else(|| anyhow!("run '{}' not found", args.id))?;
     let steps = store.load_steps(&args.id)?;
     if args.format == ListFormat::Json {
@@ -218,6 +218,7 @@ mod tests {
             output: None,
             exit_code: None,
             settings: RunSettings::default(),
+            codemod_version: None,
         };
         store.put_run(&run).unwrap();
         let steps = [

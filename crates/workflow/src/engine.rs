@@ -48,6 +48,15 @@ pub enum EngineError {
     Busy(String),
     #[error("'{0}' cannot name an event: use 1 to 100 letters, digits, '.', '_' or '-'")]
     EventName(String),
+    #[error("{}", other_version(run, made_by.as_deref(), stale))]
+    OtherVersion {
+        run: String,
+        /// The version that made the run's steps; `None` for runs from
+        /// before versions were recorded.
+        made_by: Option<String>,
+        /// The labels of the finished steps that would run again.
+        stale: Vec<String>,
+    },
     #[error("run '{run}' was started {started}, and can only be resumed there: {resuming} records steps differently")]
     OtherHost {
         run: String,
@@ -56,12 +65,46 @@ pub enum EngineError {
     },
 }
 
+/// Why a run another codemod version made is not resumed.
+fn other_version(run: &str, made_by: Option<&str>, stale: &[String]) -> String {
+    let (steps, them) = match stale.len() {
+        1 => ("step", "it"),
+        _ => ("steps", "them"),
+    };
+    let made = match made_by {
+        Some(version) => format!("codemod {version}"),
+        None => "an earlier codemod (2.0.0-alpha.9 or before)".to_string(),
+    };
+    let same = match made_by {
+        Some(version) => format!(
+            "Resume it with that version (npx codemod@{version} workflow resume --id {run}), or pass"
+        ),
+        None => "Pass".to_string(),
+    };
+    format!(
+        "run '{run}' was made by {made}, and codemod {CODEMOD_VERSION} builds the workflow's functions differently: {} finished {steps} ({}) would run again. {same} --force to run {them} again",
+        stale.len(),
+        stale.join(", ")
+    )
+}
+
 /// The host a run's JavaScript runs in, as people know it.
 fn host_name(host: &str) -> &'static str {
     match host {
         QUICKJS_HOST => "by the codemod CLI",
         _ => "with runWorkflow in Node.js",
     }
+}
+
+/// The codemod version, recorded on each run: its step keys depend on it.
+pub const CODEMOD_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The callback ids (`cb_<16 hex digits>`) a step key names.
+fn callback_ids(key: &str) -> impl Iterator<Item = &str> {
+    key.match_indices("cb_").filter_map(|(at, _)| {
+        let id = key.get(at..at + 19)?;
+        id[3..].bytes().all(|b| b.is_ascii_hexdigit()).then_some(id)
+    })
 }
 
 /// The engine's own JavaScript runtime, as recorded in a run's settings.
@@ -131,7 +174,8 @@ pub struct ResumeOptions {
     /// Skip the check for uncommitted changes that a run which has not
     /// written yet makes before its first write (`--allow-dirty`).
     pub allow_dirty: bool,
-    /// Continue a run that was canceled or rejected (`--force`).
+    /// Continue a run that was canceled or rejected, or one another codemod
+    /// version made whose finished function steps would run again (`--force`).
     pub force: bool,
 }
 
@@ -465,6 +509,7 @@ impl Engine {
             output: None,
             exit_code: None,
             settings: self.settings(host),
+            codemod_version: Some(CODEMOD_VERSION.to_string()),
         };
         record.settings.check_uncommitted = check_uncommitted;
         // Dry runs and tests leave no run behind.
@@ -510,6 +555,29 @@ impl Engine {
                 },
             });
         }
+        // Function steps are keyed by a hash of the code the build generates,
+        // which another version may generate differently. Then finished
+        // steps would silently run again: refused, unless forced.
+        if host == QUICKJS_HOST
+            && !options.force
+            && record.codemod_version.as_deref() != Some(CODEMOD_VERSION)
+        {
+            let stale: Vec<String> = self
+                .store
+                .load_steps(&record.id)?
+                .into_iter()
+                .filter(|step| matches!(step.status, StepStatus::Succeeded | StepStatus::Partial))
+                .filter(|step| callback_ids(&step.key).any(|id| !callbacks.contains_key(id)))
+                .map(|step| step.label)
+                .collect();
+            if !stale.is_empty() {
+                return Err(EngineError::OtherVersion {
+                    run: record.id.clone(),
+                    made_by: record.codemod_version.clone(),
+                    stale,
+                });
+            }
+        }
         // The lease comes first: while another process executes the run, its
         // record and cancel request are not ours to change.
         let lease = self
@@ -526,6 +594,8 @@ impl Engine {
                 },
             })?;
         self.store.clear_cancel(&record.id)?;
+        // Steps recorded from here on are this version's.
+        record.codemod_version = Some(CODEMOD_VERSION.to_string());
         // A run that already wrote is not checked again: it made the changes
         // there may be. One that never got past the check checks again.
         if options.allow_dirty {
