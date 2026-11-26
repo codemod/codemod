@@ -243,3 +243,35 @@ export default async function main() {
     );
     assert_eq!(output(&report).unwrap(), json!(["place -> on_placed"]));
 }
+
+#[test]
+fn crawling_callers_goes_past_a_module_level_decorator_which_has_no_callers() {
+    let h = Harness::new();
+    h.write(
+        "app.py",
+        "from x import task\n\n@task\ndef send():\n    pass\n\ndef place():\n    send()\n",
+    );
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, callGraph, crawl } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "app.py" }, async (file) => {
+    const send = parse(file).root().find({ rule: { kind: "function_definition", has: { field: "name", regex: "^send$" } } });
+    const reached = await crawl(callGraph("python").callers, [send]);
+    return [...reached].map(([node, edge]) => `${node.kind()} ${edge ? edge.via : "start"}`).sort();
+  }));
+  return found.outputs.flat();
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!([
+            "decorator callback",
+            "function_definition direct",
+            "function_definition start"
+        ])
+    );
+}

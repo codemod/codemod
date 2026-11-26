@@ -142,14 +142,26 @@ pub fn applicable(
                 not("this is not a variable. Ask about a variable's name or a use of it (for `a.b`, ask about `a`)")
             }
         }
+        // A call made by top-level code (the node a callers edge gives for
+        // it, a decorator included) has no callers: the module runs it.
         QueryKind::Callers
             if functions_at(host, &path, range, true).is_empty()
-                && flow.function_at(range).is_none() =>
+                && flow.function_at(range).is_none()
+                && !top_level_call(&flow, range) =>
         {
             not("there is no function here. Ask about a function, its name, a call to it, or code inside it")
         }
         _ => Ok(()),
     }
+}
+
+/// Whether `range` is a call top-level code makes: the call's own range,
+/// or a node around it that starts with it (a Python `decorator` node runs
+/// on to the end of its line).
+fn top_level_call(flow: &FileFlow, range: ByteRange) -> bool {
+    flow.calls.iter().any(|call| {
+        call.function.is_none() && call.range.start == range.start && call.range.is_within(&range)
+    })
 }
 
 pub fn data_flow(
