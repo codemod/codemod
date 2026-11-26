@@ -164,6 +164,56 @@ fn a_class_var_read_through_self_is_its_declared_type() {
     assert_eq!(
         ws.type_of("tool.py", "self.configuration_schema")
             .as_deref(),
-        Some("dict")
+        Some("dict[Unknown, Unknown]")
+    );
+}
+
+const PLUGIN: &str = "\
+from typing import ClassVar, Optional, Type
+
+class Config:
+    pass
+
+class Plugin:
+    schema: ClassVar[Optional[Type[Config]]] = None
+
+    def load(self):
+        if self.schema is None:
+            return None
+        return self.schema
+
+    @classmethod
+    def describe(cls):
+        return cls.schema if cls.schema else None
+";
+
+/// The type of `needle` where it first appears inside `context`.
+fn type_in(ws: &Workspace, file: &str, context: &str, needle: &str) -> Option<String> {
+    let around = ws.find(file, context);
+    let text = fs::read_to_string(ws.path(file)).unwrap();
+    let start = around.start + text[around.start as usize..].find(needle).unwrap() as u32;
+    ws.provider
+        .get_type(
+            &ws.path(file),
+            ByteRange::new(start, start + needle.len() as u32),
+        )
+        .unwrap()
+}
+
+#[test]
+fn self_attr_read_past_a_none_check_is_the_declared_type_without_none() {
+    let ws = Workspace::new(&[("plugin.py", PLUGIN)]);
+    assert_eq!(
+        type_in(&ws, "plugin.py", "return self.schema", "self.schema").as_deref(),
+        Some("type[Config]")
+    );
+}
+
+#[test]
+fn cls_attr_read_where_it_is_truthy_is_the_declared_type_without_none() {
+    let ws = Workspace::new(&[("plugin.py", PLUGIN)]);
+    assert_eq!(
+        type_in(&ws, "plugin.py", "return cls.schema", "cls.schema").as_deref(),
+        Some("type[Config]")
     );
 }

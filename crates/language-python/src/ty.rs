@@ -203,6 +203,10 @@ impl TySession {
         let parsed = parsed_module(&db, file).load(&db);
         let target = Target::find(parsed.syntax(), range)?;
         let model = SemanticModel::new(&db, file);
+        let attribute = match &target {
+            Target::Expr(ast::ExprRef::Attribute(attribute)) => Some(*attribute),
+            _ => None,
+        };
         let ty = match target {
             Target::Expr(expr) => expr.inferred_type(&model),
             Target::Function(function) => function.inferred_type(&model),
@@ -211,7 +215,15 @@ impl TySession {
             Target::Alias(alias) => alias.inferred_type(&model),
         };
         let printed = ty.display(&db).to_string();
-        known(&printed).then_some(printed)
+        if known(&printed) {
+            return Some(printed);
+        }
+        // `self.x` / `cls.x`: this ty types an unannotated `self` as Unknown
+        // (narrowed: `Unknown & ~None`). The class attribute's declared type,
+        // narrowed the same way, is what the read holds.
+        let declared = class_attribute(parsed.syntax(), attribute?)?;
+        let declared = ast::ExprRef::from(declared).inferred_type(&model);
+        narrowed(&declared.display(&db).to_string(), &printed)
     }
 
     /// Where ty says the attribute starting at `offset` (the `save` of
@@ -246,10 +258,161 @@ impl TySession {
     }
 }
 
-/// Whether ty's printed type says something: not `Unknown`, and not one of
-/// its placeholders for what it does not model yet (`@Todo`).
+/// Whether ty's printed type says something: some arm of it is more than
+/// `Unknown` (`Unknown & ~None`, what narrowing an unknown leaves, is not),
+/// and it holds none of ty's placeholders for what it does not model yet
+/// (`@Todo`). `Unknown | ForeignKey` is known, and kept whole: the Unknown
+/// arm says the attribute's declared type is not known.
 fn known(printed: &str) -> bool {
-    !printed.is_empty() && printed != "Unknown" && !printed.contains("@Todo")
+    !printed.is_empty()
+        && !printed.contains("@Todo")
+        && split_top(printed, " | ").iter().any(|arm| {
+            split_top(unparenthesized(arm), " & ")
+                .iter()
+                .any(|part| !part.starts_with('~') && *part != "Unknown")
+        })
+}
+
+/// `printed` split at `separator` outside brackets and parentheses.
+fn split_top<'a>(printed: &'a str, separator: &str) -> Vec<&'a str> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    let bytes = printed.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'[' | b'(' => depth += 1,
+            b']' | b')' => depth -= 1,
+            _ if depth == 0 && printed[at..].starts_with(separator) => {
+                parts.push(&printed[start..at]);
+                at += separator.len();
+                start = at;
+                continue;
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    parts.push(&printed[start..]);
+    parts
+}
+
+/// `(a & b)` without its parentheses.
+fn unparenthesized(arm: &str) -> &str {
+    arm.strip_prefix('(')
+        .and_then(|inner| inner.strip_suffix(')'))
+        .filter(|inner| split_top(inner, ")").len() == 1)
+        .unwrap_or(arm)
+}
+
+/// `declared` with what narrowing took away from the read (`~None`,
+/// `~AlwaysFalsy` in `narrowed_read`): `type[Config] | None` read past an
+/// `is None` check is `type[Config]`. None when the declared type is not
+/// known, or the read was narrowed in a way this does not follow.
+fn narrowed(declared: &str, narrowed_read: &str) -> Option<String> {
+    if !known(declared) {
+        return None;
+    }
+    let mut arms = split_top(declared, " | ");
+    let read_arms = split_top(narrowed_read, " | ");
+    let [read] = read_arms.as_slice() else {
+        return None;
+    };
+    for part in split_top(unparenthesized(read), " & ") {
+        match part {
+            "Unknown" => {}
+            // None is always falsy: both leave it out.
+            "~None" | "~AlwaysFalsy" => arms.retain(|arm| *arm != "None"),
+            _ => return None,
+        }
+    }
+    (!arms.is_empty()).then(|| arms.join(" | "))
+}
+
+/// What says the type of the class attribute `attribute` reads, when it reads
+/// it through the first parameter (`self`, `cls`) of a method of that class:
+/// the annotation it is declared with (`ClassVar[Optional[Type[Config]]]` of
+/// `schema: ClassVar[Optional[Type[Config]]] = None`, which ty types as
+/// `type[Config] | None`), else the name a plain assignment binds.
+fn class_attribute<'a>(
+    module: &'a ast::ModModule,
+    attribute: &ast::ExprAttribute,
+) -> Option<&'a ast::Expr> {
+    let ast::Expr::Name(object) = attribute.value.as_ref() else {
+        return None;
+    };
+    let mut finder = MethodFinder {
+        range: attribute.range,
+        classes: Vec::new(),
+        found: None,
+    };
+    source_order::walk_body(&mut finder, &module.body);
+    let (class, method) = finder.found?;
+    let first = method
+        .parameters
+        .posonlyargs
+        .iter()
+        .chain(method.parameters.args.iter())
+        .next()?;
+    if first.parameter.name.as_str() != object.id.as_str() {
+        return None;
+    }
+    let name = attribute.attr.as_str();
+    let is_name =
+        |target: &ast::Expr| matches!(target, ast::Expr::Name(n) if n.id.as_str() == name);
+    let declared = class.body.iter().find_map(|stmt| match stmt {
+        ast::Stmt::AnnAssign(assign) if is_name(&assign.target) => Some(&*assign.annotation),
+        _ => None,
+    });
+    declared.or_else(|| {
+        class.body.iter().find_map(|stmt| match stmt {
+            ast::Stmt::Assign(assign) => assign.targets.iter().find(|t| is_name(t)),
+            _ => None,
+        })
+    })
+}
+
+/// The innermost method around a range, with its class.
+struct MethodFinder<'a> {
+    range: TextRange,
+    classes: Vec<&'a ast::StmtClassDef>,
+    found: Option<(&'a ast::StmtClassDef, &'a ast::StmtFunctionDef)>,
+}
+
+impl<'a> SourceOrderVisitor<'a> for MethodFinder<'a> {
+    fn enter_node(&mut self, node: AnyNodeRef<'a>) -> TraversalSignal {
+        if !node.range().contains_range(self.range) {
+            return TraversalSignal::Skip;
+        }
+        match node {
+            AnyNodeRef::StmtClassDef(class) => self.classes.push(class),
+            AnyNodeRef::StmtFunctionDef(function) => {
+                if let Some(class) = self.classes.last() {
+                    let in_body = class.body.iter().any(
+                        |stmt| matches!(stmt, ast::Stmt::FunctionDef(f) if std::ptr::eq(f, function)),
+                    );
+                    if in_body {
+                        self.found = Some((class, function));
+                    }
+                }
+            }
+            _ => {}
+        }
+        TraversalSignal::Traverse
+    }
+
+    fn leave_node(&mut self, node: AnyNodeRef<'a>) {
+        if let AnyNodeRef::StmtClassDef(class) = node {
+            if self
+                .classes
+                .last()
+                .is_some_and(|last| std::ptr::eq(*last, class))
+            {
+                self.classes.pop();
+            }
+        }
+    }
 }
 
 /// What a range names, for the type question.
@@ -323,5 +486,36 @@ impl<'a> SourceOrderVisitor<'a> for Finder<'a> {
             }
         }
         TraversalSignal::Traverse
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{known, narrowed};
+
+    #[test]
+    fn what_narrowing_an_unknown_leaves_is_not_known() {
+        assert!(!known("Unknown"));
+        assert!(!known("Unknown & ~None"));
+        assert!(!known("Unknown & ~AlwaysFalsy"));
+        assert!(!known("(Unknown & ~None) | Unknown"));
+        assert!(known("Unknown | ForeignKey"));
+        assert!(known("Order & ~None"));
+        assert!(!known("@Todo(generics)"));
+    }
+
+    #[test]
+    fn a_declared_type_narrowed_like_the_read_drops_none() {
+        assert_eq!(
+            narrowed("type[Config] | None", "Unknown & ~None").as_deref(),
+            Some("type[Config]")
+        );
+        assert_eq!(
+            narrowed("type[Config] | None", "Unknown & ~AlwaysFalsy").as_deref(),
+            Some("type[Config]")
+        );
+        assert_eq!(narrowed("type[Config] | None", "Unknown & ~int"), None);
+        assert_eq!(narrowed("None", "Unknown & ~None"), None);
+        assert_eq!(narrowed("Unknown", "Unknown"), None);
     }
 }
