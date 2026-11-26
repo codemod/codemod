@@ -1,63 +1,45 @@
-// F1 (ergonomics review): uses through `import * as utils` must count, as
-// edges in the references lookup and in the callers lookup, or a safe-delete
-// codemod deletes functions that are still used.
+// Uses through `import * as utils` count as references and as callers, or a
+// safe-delete codemod deletes functions that are still used.
 import { callGraph, symbols } from "codemod:ast-grep";
+import { equal, test } from "./spec.js";
+export { run as default } from "./spec.js";
 
-function expectEqual(actual, expected, label) {
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error(
-      label + ": expected " + JSON.stringify(expected) + ", got " + JSON.stringify(actual),
-    );
-  }
-}
-
-function basename(path) {
-  return path.split("/").pop();
-}
-
-// Who makes a call: the calling function's name, or "<module>" for a call at
-// a module's top level, where the edge's node is the call itself.
-function callerName(edge) {
-  if (edge.node.equals(edge.site)) return "<module>";
-  const own = edge.node.field("name");
-  return own ? own.text() : "<anonymous>";
-}
-
-export default function transform(root) {
-  const graph = callGraph("javascript");
-  const { references } = symbols("javascript");
-  const name = (fn) =>
-    root
-      .root()
-      .find({
-        rule: { kind: "function_declaration", has: { field: "name", regex: "^" + fn + "$" } },
-      })
-      .field("name");
-  const refs = (fn) =>
-    (references.get(name(fn)) ?? []).map(
-      (e) => basename(e.node.getRoot().filename()) + ":" + e.node.text(),
-    );
-  const callers = (fn) =>
-    (graph.callers.get(name(fn)) ?? []).map((e) => callerName(e) + ":" + e.via + " " + e.site.text());
-
-  // Stored in an object: a reference, not a call.
-  expectEqual(refs("oldRound"), ["app.js:oldRound"], "references of oldRound");
-  expectEqual(callers("oldRound"), [], "callers of oldRound");
-
-  // Handed to unknown code: a reference, and an assumed callback call.
-  expectEqual(refs("registered"), ["app.js:registered"], "references of registered");
-  expectEqual(
-    callers("registered"),
-    ["<module>:callback hooks.register(utils.registered)"],
-    "callers of registered",
+const name = (root, fn) =>
+  root
+    .root()
+    .find({ rule: { kind: "function_declaration", has: { field: "name", regex: "^" + fn + "$" } } })
+    .field("name");
+const refs = (root, fn) =>
+  (symbols("javascript").references.get(name(root, fn)) ?? []).map(
+    (e) => e.node.getRoot().filename().split("/").pop() + ":" + e.node.text(),
+  );
+// Who makes a call: the calling function, or "<module>" for a call at a
+// module's top level, where the edge's node is the call itself.
+const callerName = (edge) =>
+  edge.node.equals(edge.site) ? "<module>" : (edge.node.field("name")?.text() ?? "<anonymous>");
+const callers = (root, fn) =>
+  (callGraph("javascript").callers.get(name(root, fn)) ?? []).map(
+    (e) => callerName(e) + ":" + e.via + " " + e.site.text(),
   );
 
-  // utils?.["called"](): both.
-  expectEqual(refs("called"), ["app.js:called"], "references of called");
-  expectEqual(callers("called"), ['run:method utils?.["called"]()'], "callers of called");
+test("a function stored in an object is a reference, not a call", (root) => {
+  equal([refs(root, "oldRound"), callers(root, "oldRound")], [["app.js:oldRound"], []]);
+});
 
-  // Really unused: nothing either way.
-  expectEqual(refs("unused"), [], "references of unused");
-  expectEqual(callers("unused"), [], "callers of unused");
-  return null;
-}
+test("a function handed to unknown code is a reference and an assumed callback", (root) => {
+  equal(
+    [refs(root, "registered"), callers(root, "registered")],
+    [["app.js:registered"], ["<module>:callback hooks.register(utils.registered)"]],
+  );
+});
+
+test("a computed namespace call is a reference and a method call", (root) => {
+  equal(
+    [refs(root, "called"), callers(root, "called")],
+    [["app.js:called"], ['run:method utils?.["called"]()']],
+  );
+});
+
+test("an unused export has neither references nor callers", (root) => {
+  equal([refs(root, "unused"), callers(root, "unused")], [[], []]);
+});

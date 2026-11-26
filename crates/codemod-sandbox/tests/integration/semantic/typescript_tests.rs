@@ -1,377 +1,145 @@
-//! TypeScript semantic analysis integration tests.
-
-use ast_grep_language::SupportLang;
-use codemod_sandbox::CodemodLang;
+//! TypeScript semantic analysis: one test per fixture.
 
 jssg_test! {
-    name: test_get_definition_file_scope,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_definition_file_scope.js",
-    fixture_dir: "typescript/definition_file_scope",
-    target: "input.ts",
+    name: one_file,
+    fixture: "typescript/one_file",
+    codemod: "ts_one_file.js",
+    targets: ["input.ts"],
+    scope: file,
 }
 
 jssg_test! {
-    name: test_find_references_file_scope,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_find_references_file_scope.js",
-    fixture_dir: "typescript/find_references_file_scope",
-    target: "input.ts",
-}
-
-jssg_test! {
-    name: test_find_references_function_same_file,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_find_references_function.js",
-    fixture_dir: "typescript/find_references_function",
-    target: "input.ts",
-}
-
-jssg_test! {
-    name: test_cross_file_definition_workspace_scope,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_cross_file_definition.js",
-    fixture_dir: "typescript/cross_file_definition",
-    target: "main.ts",
+    name: cross_file,
+    fixture: "typescript/cross_file",
+    codemod: "ts_cross_file.js",
+    targets: ["main.ts"],
     scope: workspace,
-}
-
-jssg_test! {
-    name: test_cross_file_references_workspace_scope,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_cross_file_references.js",
-    fixture_dir: "typescript/cross_file_references",
-    target: "utils.ts",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_find_references_cross_file_with_cache,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_cross_file_references_with_cache.js",
-    fixture_dir: "typescript/cross_file_references_with_cache",
-    target: "utils.ts",
     preprocess: ["main.ts"],
+}
+
+jssg_test! {
+    name: reexports,
+    fixture: "typescript/reexport_definition",
+    codemod: "ts_reexport.js",
+    targets: [
+        "packages/web/src/app.ts",
+        "packages/shared/src/index.ts",
+        "packages/shared/src/dates.ts",
+    ],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_reexport_import_definition_follows_barrel,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_reexport_import_definition.js",
-    fixture_dir: "typescript/reexport_definition",
-    target: "packages/web/src/app.ts",
+    name: definition_exports,
+    fixture: "typescript/definition_exports",
+    codemod: "ts_definition_exports.js",
+    targets: ["app.ts"],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_reexport_specifier_definition,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_reexport_specifier_definition.js",
-    fixture_dir: "typescript/reexport_definition",
-    target: "packages/shared/src/index.ts",
+    name: module_top_level_effects,
+    fixture: "typescript/side_effect_barrel",
+    codemod: "ts_module_effects.js",
+    targets: ["src/App.ts", "src/icons/register.ts", "src/icons/Icon.ts"],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_reexport_references_through_barrel,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_reexport_references.js",
-    fixture_dir: "typescript/reexport_definition",
-    target: "packages/shared/src/dates.ts",
+    name: jsx,
+    fixture: "typescript/jsx_callees",
+    codemod: "tsx_jsx.js",
+    targets: ["src/Toolbar.tsx", "src/Nav.tsx"],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_definition_export_name_name_node_and_follow,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_definition_export_name.js",
-    fixture_dir: "typescript/definition_exports",
-    target: "app.ts",
-    scope: workspace,
-}
-
-// Module top level and JSX elements in the call graph. Fixtures come from the
-// debarrel and i18n reviews (gap D, visibility).
-
-jssg_test! {
-    name: test_callees_module_top_level_side_effects,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_callees_module_top_level.js",
-    fixture_dir: "typescript/side_effect_barrel",
-    target: "src/icons/register.ts",
+    name: builtin_models,
+    fixture: "typescript/builtin_models",
+    codemod: "ts_builtin_models.js",
+    targets: ["src/models.ts", "src/consumer.ts"],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_callees_module_top_level_calls_imported_function,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_callees_module_top_level.js",
-    fixture_dir: "typescript/side_effect_barrel",
-    target: "src/App.ts",
+    name: workspace_package_without_install,
+    fixture: "typescript/workspace_package_no_install",
+    codemod: "ts_workspace_package.js",
+    targets: ["packages/app/src/App.ts"],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_callees_module_that_only_declares,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_callees_module_top_level.js",
-    fixture_dir: "typescript/side_effect_barrel",
-    target: "src/icons/Icon.ts",
+    name: overloads,
+    fixture: "typescript/overloads",
+    codemod: "ts_overloads.js",
+    targets: ["main.ts"],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_callees_jsx_element_is_its_component,
-    language: CodemodLang::Static(SupportLang::Tsx),
-    codemod: "tsx_callees_jsx_element.js",
-    fixture_dir: "typescript/jsx_callees",
-    target: "src/Toolbar.tsx",
+    name: callees_through_returned_values,
+    fixture: "typescript/returns",
+    codemod: "ts_returns.js",
+    targets: ["src/app.ts"],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_flow_builtin_models_promise_and_array_callbacks,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_flow_builtin_models.js",
-    fixture_dir: "typescript/builtin_models",
-    target: "src/models.ts",
+    name: interprocedural_flow,
+    fixture: "typescript/interprocedural",
+    codemod: "ts_interprocedural.js",
+    targets: ["app.ts"],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_flow_dynamic_import_then,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_flow_builtin_models.js",
-    fixture_dir: "typescript/builtin_models",
-    target: "src/consumer.ts",
+    name: default_import,
+    fixture: "typescript/default_import_refs",
+    codemod: "tsx_default_import.js",
+    targets: ["emails/WelcomeEmail.tsx"],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_flow_stop_at_first_sink,
-    language: CodemodLang::Static(SupportLang::Tsx),
-    codemod: "tsx_flow_stop_at.js",
-    fixture_dir: "typescript/jsx_callees",
-    target: "src/Toolbar.tsx",
-}
-
-jssg_test! {
-    name: test_workspace_package_without_install,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_workspace_package_no_install.js",
-    fixture_dir: "typescript/workspace_package_no_install",
-    target: "packages/app/src/App.ts",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_callees_overloads_resolve_to_implementation,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_callees_overloads.js",
-    fixture_dir: "typescript/overloads",
-    target: "main.ts",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_callees_through_returned_values,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_callees_through_returns.js",
-    fixture_dir: "typescript/returns",
-    target: "src/app.ts",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_flow_interprocedural,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_flow_interprocedural.js",
-    fixture_dir: "typescript/interprocedural",
-    target: "app.ts",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_references_through_default_import,
-    language: CodemodLang::Static(SupportLang::Tsx),
-    codemod: "tsx_references_default_import.js",
-    fixture_dir: "typescript/default_import_refs",
-    target: "emails/WelcomeEmail.tsx",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_callees_jsx_member_tag,
-    language: CodemodLang::Static(SupportLang::Tsx),
-    codemod: "tsx_callees_jsx_element.js",
-    fixture_dir: "typescript/jsx_callees",
-    target: "src/Nav.tsx",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_untracked_expressions_answer_empty,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_untracked_expressions.js",
-    fixture_dir: "typescript/type_positions",
-    target: "a.ts",
-}
-
-jssg_test! {
-    name: test_resolve_module_resolve_export_and_specifier_for,
-    language: CodemodLang::Static(SupportLang::TypeScript),
+    name: module_resolution,
+    fixture: "typescript/module_resolution",
     codemod: "ts_module_resolution.js",
-    fixture_dir: "typescript/module_resolution",
-    target: "src/pages/home.ts",
+    targets: ["src/pages/home.ts"],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_has_top_level_effects,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_has_top_level_effects.js",
-    fixture_dir: "typescript/side_effect_barrel",
-    target: "src/App.ts",
+    name: package_boundary,
+    fixture: "typescript/package_boundary",
+    codemod: "ts_package_boundary.js",
+    targets: ["packages/app/src/App.ts"],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_specifier_for_respects_package_exports,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_specifier_package_boundary.js",
-    fixture_dir: "typescript/package_boundary",
-    target: "packages/app/src/App.ts",
-    scope: workspace,
-}
-
-// Types from the TypeScript 7 checker (`types: "ts7"`, `ts_api.rs`). They
-// need its `tsc` binary: CODEMOD_TS_API names it (CI installs the pinned
-// typescript@7.0). Without one they pass without checking anything.
-
-#[tokio::test]
-async fn test_callees_through_types_class_method() {
-    use super::fixtures::{run_test, ts7_checker_available, ProviderScope, TestConfig};
-    if !ts7_checker_available() {
-        eprintln!("skipped: set CODEMOD_TS_API to a TypeScript 7.0 tsc");
-        return;
-    }
-    let config = TestConfig::new(
-        "ts_callees_types_class.js",
-        "typescript/type_callees",
-        "service.ts",
-        CodemodLang::Static(SupportLang::TypeScript),
-    )
-    .with_scope(ProviderScope::WorkspaceWithTypes);
-    let result = run_test(config).await;
-    assert!(result.is_ok(), "Test failed: {:?}", result.err());
-}
-
-#[tokio::test]
-async fn test_callees_through_types_interface() {
-    use super::fixtures::{run_test, ts7_checker_available, ProviderScope, TestConfig};
-    if !ts7_checker_available() {
-        eprintln!("skipped: set CODEMOD_TS_API to a TypeScript 7.0 tsc");
-        return;
-    }
-    let config = TestConfig::new(
-        "ts_callees_types_interface.js",
-        "typescript/type_callees",
-        "service.ts",
-        CodemodLang::Static(SupportLang::TypeScript),
-    )
-    .with_scope(ProviderScope::WorkspaceWithTypes);
-    let result = run_test(config).await;
-    assert!(result.is_ok(), "Test failed: {:?}", result.err());
-}
-
-// Analyses as values: lookups, lookup(edges), crawl() and join().
-
-jssg_test! {
-    name: test_lookup_get_answers_edges_leaving_a_node,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_lookup_get.js",
-    fixture_dir: "typescript/analyses",
-    target: "client.ts",
+    name: analyses_as_values,
+    fixture: "typescript/analyses",
+    codemod: "ts_analyses.js",
+    targets: ["client.ts"],
     scope: workspace,
 }
 
 jssg_test! {
-    name: test_builtin_lookup_cannot_be_listed,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_lookup_builtin_not_listable.js",
-    fixture_dir: "typescript/analyses",
-    target: "client.ts",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_lookup_from_edges_matches_by_syntax_node,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_lookup_from_edges.js",
-    fixture_dir: "typescript/analyses",
-    target: "client.ts",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_lookup_from_edges_rejects_non_nodes,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_lookup_rejects_non_nodes.js",
-    fixture_dir: "typescript/analyses",
-    target: "client.ts",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_crawl_reaches_nodes_with_the_edge_that_reached_them,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_crawl_reaches.js",
-    fixture_dir: "typescript/analyses",
-    target: "client.ts",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_crawl_does_not_walk_past_stop_at,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_crawl_stop_at.js",
-    fixture_dir: "typescript/analyses",
-    target: "client.ts",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_crawl_rejects_a_map,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_crawl_rejects_map.js",
-    fixture_dir: "typescript/analyses",
-    target: "client.ts",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_join_links_patterns_by_captured_name,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_join_links_patterns.js",
-    fixture_dir: "typescript/analyses",
-    target: "client.ts",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_join_resolves_captures_and_falls_back_to_text,
-    language: CodemodLang::Static(SupportLang::TypeScript),
+    name: join_by,
+    fixture: "typescript/join_by",
     codemod: "ts_join_by.js",
-    fixture_dir: "typescript/join_by",
-    target: "bus.ts",
+    targets: ["bus.ts"],
     scope: workspace,
 }
 
+// Types from the TypeScript 7 checker (`types: "ts7"`). They need its `tsc`
+// binary: CODEMOD_TS_API names it (CI installs the pinned typescript@7.0).
+// Without one the test is skipped.
 jssg_test! {
-    name: test_uses_land_on_a_type_annotated_name,
-    language: CodemodLang::Static(SupportLang::TypeScript),
-    codemod: "ts_uses_typed_binding.js",
-    fixture_dir: "typescript/typed_bindings",
-    target: "input.ts",
+    name: types_from_the_checker,
+    fixture: "typescript/type_callees",
+    codemod: "ts_types.js",
+    targets: ["service.ts"],
+    scope: ts7,
 }

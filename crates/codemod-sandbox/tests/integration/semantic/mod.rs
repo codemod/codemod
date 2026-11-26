@@ -1,10 +1,12 @@
 //! Integration tests for semantic analysis providers.
 //!
-//! Tests are organized by language:
-//! - `javascript_tests`: JavaScript semantic analysis
-//! - `typescript_tests`: TypeScript semantic analysis  
-//! - `python_tests`: Python semantic analysis
-//! - `common_tests`: Tests that apply to all languages (e.g., no provider configured)
+//! One test per fixture (a small source tree under `fixtures/`). Its codemod
+//! registers named cases, one rule each, with `fixtures/codemods/spec.js`;
+//! the test runs them all and fails with every failed case by name. See
+//! `fixtures/mod.rs` for the `jssg_test!` forms.
+//!
+//! - `javascript_tests`, `typescript_tests`, `python_tests`: by language
+//! - `common_tests`: no provider configured
 
 #[macro_use]
 pub mod fixtures;

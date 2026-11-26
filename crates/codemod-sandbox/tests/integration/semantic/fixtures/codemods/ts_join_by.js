@@ -1,5 +1,8 @@
-// join() matches captures by what they resolve to where it can, and by text elsewhere.
+// join() matches captures by what they resolve to where it can, and by text
+// elsewhere. Two files each register their own `handler`.
 import { join, symbols } from "codemod:ast-grep";
+import { equal, test } from "./spec.js";
+export { run as default } from "./spec.js";
 
 const count = (lookup) => [...lookup.values()].flat().length;
 const registered = (by) =>
@@ -10,17 +13,23 @@ const registered = (by) =>
     by,
   });
 
-export default function transform() {
-  // Two files register a `handler`, each its own: text links each to both.
-  const byText = count(registered("text"));
-  const resolved = registered(undefined);
-  const edges = [...resolved].map(([site, [edge]]) => site.text() + " -> " + edge.node.text().match(/"(\w)"/)[1]);
-  const forced = count(registered(symbols("typescript").definition));
-  // An event name is a string: nothing to resolve, so its text joins.
-  const events = count(
-    join({ language: "typescript", from: { find: "emit($E)", on: "$E" }, to: { find: "on($E, $$$)", on: "$E" } }),
-  );
-  const got = { byText, resolved: count(resolved), forced, events };
-  const want = { byText: 4, resolved: 2, forced: 2, events: 1 };
-  if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(JSON.stringify({ got, edges }));
-}
+test('join by "text" links each registration to every handler of that name', () => {
+  equal(count(registered("text")), 4);
+});
+
+test("join without by resolves the captured names", () => {
+  equal(count(registered(undefined)), 2);
+});
+
+test("join by a lookup resolves with it", () => {
+  equal(count(registered(symbols("typescript").definition)), 2);
+});
+
+test("join falls back to text for a capture with nothing to resolve", () => {
+  const events = join({
+    language: "typescript",
+    from: { find: "emit($E)", on: "$E" },
+    to: { find: "on($E, $$$)", on: "$E" },
+  });
+  equal(count(events), 1);
+});

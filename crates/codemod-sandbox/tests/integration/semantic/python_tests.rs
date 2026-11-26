@@ -1,125 +1,52 @@
-//! Python semantic analysis integration tests.
-
-use ast_grep_language::SupportLang;
-use codemod_sandbox::CodemodLang;
-
-// =============================================================================
-// Single-file (File Scope) Tests
-// =============================================================================
+//! Python semantic analysis: one test per fixture.
 
 jssg_test! {
-    name: test_find_references_variable,
-    language: CodemodLang::Static(SupportLang::Python),
-    codemod: "py_find_references_variable.js",
-    fixture_dir: "python/find_references_variable",
-    target: "input.py",
+    name: one_file,
+    fixture: "python/one_file",
+    codemod: "py_one_file.js",
+    targets: ["input.py"],
+    scope: file,
 }
 
 jssg_test! {
-    name: test_find_references_function,
-    language: CodemodLang::Static(SupportLang::Python),
-    codemod: "py_find_references_function.js",
-    fixture_dir: "python/find_references_function",
-    target: "input.py",
-}
-
-jssg_test! {
-    name: test_find_references_class,
-    language: CodemodLang::Static(SupportLang::Python),
-    codemod: "py_find_references_class.js",
-    fixture_dir: "python/find_references_class",
-    target: "input.py",
-}
-
-// =============================================================================
-// Cross-file (Workspace Scope) Tests
-// =============================================================================
-
-jssg_test! {
-    name: test_cross_file_definition_workspace_scope,
-    language: CodemodLang::Static(SupportLang::Python),
-    codemod: "py_cross_file_definition.js",
-    fixture_dir: "python/cross_file_definition",
-    target: "main.py",
+    name: cross_file,
+    fixture: "python/cross_file",
+    codemod: "py_cross_file.js",
+    targets: ["main.py"],
     scope: workspace,
-}
-
-jssg_test! {
-    name: test_cross_file_references_workspace_scope,
-    language: CodemodLang::Static(SupportLang::Python),
-    codemod: "py_cross_file_references.js",
-    fixture_dir: "python/cross_file_references",
-    target: "utils.py",
     preprocess: ["main.py"],
-    scope: workspace,
 }
 
 jssg_test! {
-    name: test_cross_file_references_with_imports,
-    language: CodemodLang::Static(SupportLang::Python),
-    codemod: "py_cross_file_references_with_imports.js",
-    fixture_dir: "python/cross_file_references_with_imports",
-    target: "models.py",
-    preprocess: ["app.py"],
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_false_positive_references_with_imports,
-    language: CodemodLang::Static(SupportLang::Python),
+    name: references_only_through_imports,
+    fixture: "python/false_positive_references",
     codemod: "py_false_positive_references.js",
-    fixture_dir: "python/false_positive_references",
-    target: "app.py",
+    targets: ["app.py", "models.py"],
+    scope: workspace,
     preprocess: ["really_imports.py", "models.py"],
+}
+
+jssg_test! {
+    name: django_views_services_and_tasks,
+    fixture: "python/django_flow",
+    codemod: "py_django.js",
+    targets: ["shop/services.py", "shop/api.py"],
     scope: workspace,
 }
 
-// =============================================================================
-// Data flow and call graph (Workspace Scope)
-// =============================================================================
+jssg_test! {
+    name: fastapi,
+    fixture: "python/fastapi_flow",
+    codemod: "py_fastapi.js",
+    targets: ["app/main.py", "app/repository.py"],
+    scope: workspace,
+}
 
 jssg_test! {
-    name: test_py_sql_taint_to_parameterized_queries,
-    language: CodemodLang::Static(SupportLang::Python),
+    name: codemod_sql_taint_to_parameterized_queries,
+    fixture: "python/django_flow",
     codemod: "py_sql_taint.js",
-    fixture_dir: "python/django_flow",
     target: "shop/views.py",
     scope: workspace,
     expected_dir: "python/django_flow_expected",
-}
-
-jssg_test! {
-    name: test_py_calls_mutations_and_types,
-    language: CodemodLang::Static(SupportLang::Python),
-    codemod: "py_calls_and_mutations.js",
-    fixture_dir: "python/django_flow",
-    target: "shop/services.py",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_py_fastapi_calls_and_types,
-    language: CodemodLang::Static(SupportLang::Python),
-    codemod: "py_fastapi_flow.js",
-    fixture_dir: "python/fastapi_flow",
-    target: "app/main.py",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_py_fastapi_taint_into_text,
-    language: CodemodLang::Static(SupportLang::Python),
-    codemod: "py_fastapi_taint.js",
-    fixture_dir: "python/fastapi_flow",
-    target: "app/repository.py",
-    scope: workspace,
-}
-
-jssg_test! {
-    name: test_py_drf_views_and_celery_tasks,
-    language: CodemodLang::Static(SupportLang::Python),
-    codemod: "py_drf_celery.js",
-    fixture_dir: "python/django_flow",
-    target: "shop/api.py",
-    scope: workspace,
 }
