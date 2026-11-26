@@ -275,16 +275,14 @@ pub async fn handler(
         return Err(error);
     }
 
-    if !resolved_package.dry_run_only {
-        let asks = v1_delegate::RunAsks {
-            control: args.flags.control.is_some(),
-            env: std::env::var("CODEMOD_V1").ok(),
-        };
-        if let v1_delegate::Engine::V1 { reason } =
-            v1_delegate::detect(&resolved_package.package_dir, &workflow_path, &asks)
-        {
-            return run_on_v1(args, &resolved_package, &reason, disable_analytics).await;
-        }
+    let asks = v1_delegate::RunAsks {
+        control: args.flags.control.is_some(),
+        env: std::env::var("CODEMOD_V1").ok(),
+    };
+    if let v1_delegate::Engine::V1 { reason } =
+        v1_delegate::detect(&resolved_package.package_dir, &workflow_path, &asks)
+    {
+        return run_on_v1(args, &resolved_package, &reason, disable_analytics).await;
     }
 
     let mut params = parse_params(args.params.as_deref().unwrap_or(&[]))
@@ -519,7 +517,8 @@ async fn run_on_v1(
         package,
         registry: args.registry.clone(),
         force: args.force,
-        dry_run: args.dry_run,
+        // A Pro package may only be dry-run; codemod 1.x checks it too.
+        dry_run: args.dry_run || resolved.dry_run_only,
         params: args.params.clone().unwrap_or_default(),
         allow_dirty: args.allow_dirty,
         // codemod 1.x starts in this directory, so a relative target holds.
