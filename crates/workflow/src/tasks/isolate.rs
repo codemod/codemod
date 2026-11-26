@@ -104,6 +104,9 @@ impl StepIsolates {
                 .overlay
                 .as_ref()
                 .map(super::overlay::Overlay::pending_files),
+            // 1.x transforms could read the target with `fs` without the
+            // capability; they still can, read-only.
+            read_only_fs: self.v1,
         }
     }
 }

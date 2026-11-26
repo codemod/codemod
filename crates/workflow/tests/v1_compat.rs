@@ -329,3 +329,80 @@ nodes:
         json!(true)
     );
 }
+
+/// 1.x gave transforms an `fs` over the target without the capability.
+/// They keep reading through it; changing files through it is refused, as
+/// callbacks change files only by what they return.
+#[test]
+fn transforms_read_the_target_with_fs_but_cannot_write() {
+    let h = Harness::new();
+    h.write("src/a.ts", "OLD\n");
+    h.write("names.json", "{\"OLD\":\"NEW\"}");
+    h.bundle_file(
+        "scripts/read.ts",
+        r#"
+import fs from "fs";
+import { readFile } from "node:fs/promises";
+export default async function transform(root: any, options: any) {
+  const names = JSON.parse(fs.readFileSync(options.targetDir + "/names.json", "utf8"));
+  const again = JSON.parse(await readFile("names.json", "utf8"));
+  if (again.OLD !== names.OLD) throw new Error("relative read differs");
+  if (fs.existsSync("/etc/hosts")) throw new Error("read outside the target");
+  return root.root().text().replace("OLD", names.OLD);
+}
+"#,
+    );
+    h.bundle_file(
+        "scripts/write.ts",
+        r#"
+import { writeFileSync } from "fs";
+export default function transform() {
+  writeFileSync("other.txt", "x");
+  return null;
+}
+"#,
+    );
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: apply
+    name: Apply
+    steps:
+      - name: Read
+        js-ast-grep:
+          js_file: scripts/read.ts
+          include: ["src/**/*.ts"]
+      - name: Write
+        js-ast-grep:
+          js_file: scripts/write.ts
+          include: ["src/**/*.ts"]
+"#,
+    );
+    let error = output(&h.start_loaded(workflow, Value::Null, false)).unwrap_err();
+    assert_eq!(h.read("src/a.ts"), "NEW\n");
+    assert!(error.contains("read-only"), "{error}");
+    assert!(!h.exists("other.txt"));
+
+    // A TypeScript workflow's callbacks have no `fs` without the capability.
+    let h = Harness::new();
+    h.write("a.ts", "x\n");
+    h.bundle_file(
+        "scripts/read.ts",
+        "import fs from \"fs\";\nexport default function f() { return fs.existsSync(\"a.ts\"); }\n",
+    );
+    let report = h.start(
+        r#"
+import { forEachFile, step } from "codemod/workflow";
+import read from "./scripts/read.ts";
+
+export default async function main() {
+  await step("Read", forEachFile({ include: "a.ts" }, () => read()));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("'fs'"), "{error}");
+}

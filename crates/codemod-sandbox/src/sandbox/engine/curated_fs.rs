@@ -63,6 +63,8 @@ pub struct CuratedFsConfig {
     /// where `link` is a symlink to `/etc` would pass the lexical prefix
     /// guard and let the codemod read outside the sandbox.
     pub physical_target_dir: Option<PathBuf>,
+    /// Refuse every change (`writeFile`, `mkdir`, `unlink`): the fs only reads.
+    pub read_only: bool,
 }
 
 // `CuratedFsConfig` contains no `'js`-bound references, so the `'js` lifetime
@@ -79,7 +81,14 @@ impl CuratedFsConfig {
             fetcher: None,
             deleted_paths: Arc::new(Mutex::new(HashSet::new())),
             physical_target_dir: None,
+            read_only: false,
         }
+    }
+
+    /// Make the fs read-only: changing anything throws.
+    pub fn read_only(mut self) -> Self {
+        self.read_only = true;
+        self
     }
 
     /// Attach a fallback [`FileFetcher`] that is consulted when a read targets
@@ -594,8 +603,20 @@ fn read_file_sync<'js>(
     read_file_sync_impl(&ctx, &path, encoding)
 }
 
+/// Refuse a change when the fs is read-only.
+fn writable(ctx: &Ctx<'_>, cfg: &CuratedFsConfig, syscall: &str, path: &str) -> Result<()> {
+    if cfg.read_only {
+        return Err(Exception::throw_message(
+            ctx,
+            &format!("{syscall} '{path}': this fs is read-only; change files by returning the new text from the transform"),
+        ));
+    }
+    Ok(())
+}
+
 fn write_file_sync_impl(ctx: &Ctx<'_>, path: &str, data: String) -> Result<()> {
     let cfg = config(ctx)?;
+    writable(ctx, &cfg, "writeFile", path)?;
     let (normalized, vfs_path) = cfg.resolve(path).map_err(|e| throw_fs(ctx, e, "open"))?;
     clear_deleted(&cfg, &normalized);
     if let Some(parent) = parent_of(&normalized) {
@@ -826,6 +847,7 @@ fn readdir_sync<'js>(ctx: Ctx<'js>, path: String, options: Opt<Value<'js>>) -> R
 
 fn mkdir_sync(ctx: Ctx<'_>, path: String, options: Opt<Value<'_>>) -> Result<()> {
     let cfg = config(&ctx)?;
+    writable(&ctx, &cfg, "mkdir", &path)?;
     let (normalized, vfs_path) = cfg.resolve(&path).map_err(|e| throw_fs(&ctx, e, "mkdir"))?;
     clear_deleted(&cfg, &normalized);
     let recursive = recursive_from_options(options);
@@ -863,6 +885,7 @@ fn stat_sync<'js>(ctx: Ctx<'js>, path: String) -> Result<Object<'js>> {
 
 fn unlink_sync(ctx: Ctx<'_>, path: String) -> Result<()> {
     let cfg = config(&ctx)?;
+    writable(&ctx, &cfg, "unlink", &path)?;
     let (normalized, vfs_path) = cfg
         .resolve(&path)
         .map_err(|e| throw_fs(&ctx, e, "unlink"))?;

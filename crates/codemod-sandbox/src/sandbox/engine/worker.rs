@@ -19,6 +19,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 
+use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
 use super::execution_engine::{
     install_console_bridge, CallbackIsolate, DryRunExecutionFlag, ExecutionModeFlag, FileChange,
     JssgExecutionContext, JssgFileChanges, TargetDirectory,
@@ -97,6 +98,10 @@ pub struct WorkerOptions<R> {
     /// `jssgTransform` reads and changes files through it. Each worker has
     /// its own without it.
     pub pending_files: Option<PendingFiles>,
+    /// Codemod 1.x compatibility: when `fs` is not granted (or in a dry
+    /// run), `fs` and `fs/promises` are a read-only fs over the target
+    /// directory, where 1.x gave transforms one they could also write with.
+    pub read_only_fs: bool,
 }
 
 /// A JSSG runtime kept alive across calls. Run code in it with
@@ -135,6 +140,9 @@ impl Worker {
             .await;
 
         let fetch = options.capabilities.contains(&LlrtSupportedModules::Fetch);
+        let fs_granted =
+            options.capabilities.contains(&LlrtSupportedModules::Fs) && !options.dry_run;
+        let curated_fs = options.read_only_fs && !fs_granted;
         let mut module_builder = LlrtModuleBuilder::build();
         for capability in &options.capabilities {
             match capability {
@@ -152,8 +160,18 @@ impl Worker {
             }
         }
 
-        let (resolver, loader, globals) = module_builder.builder.build();
-        let (codemod_resolver, loader) = crate::with_codemod_modules!(loader, llm: fetch);
+        let (mut resolver, loader, globals) = module_builder.builder.build();
+        let (codemod_resolver, mut loader) = crate::with_codemod_modules!(loader, llm: fetch);
+        if curated_fs {
+            for name in ["fs", "node:fs"] {
+                resolver = resolver.add_name(name);
+                loader = loader.with_module(name, CuratedFsModule);
+            }
+            for name in ["fs/promises", "node:fs/promises"] {
+                resolver = resolver.add_name(name);
+                loader = loader.with_module(name, CuratedFsPromisesModule);
+            }
+        }
         let codemod_resolver = codemod_resolver.providing(options.codemod_modules.clone());
 
         let mut memory_resolver = BuiltinResolver::default();
@@ -214,6 +232,14 @@ impl Worker {
                 .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(TargetDirectory(target.clone()))
                     .map_err(|e| fail(format!("{e:?}")))?;
+                if curated_fs {
+                    let root: vfs::VfsPath = vfs::PhysicalFS::new(PathBuf::from("/")).into();
+                    let config = CuratedFsConfig::new(target.to_string_lossy().into_owned(), root)
+                        .with_physical_target_dir(target.clone())
+                        .read_only();
+                    ctx.store_userdata(config)
+                        .map_err(|e| fail(format!("{e:?}")))?;
+                }
                 ctx.store_userdata(llm.clone())
                     .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(hooks_for_ctx.clone())
@@ -332,6 +358,7 @@ mod tests {
             default_language: None,
             semantic_provider: None,
             pending_files: None,
+            read_only_fs: false,
         })
         .await
         .unwrap()
