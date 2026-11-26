@@ -81,8 +81,9 @@ impl Resolver for CodemodModuleResolver {
             return Err(Error::new_resolving(base, name));
         };
         let unavailable = |why: String| Err(Error::new_loading_message(name, why));
-        let provided = codemod_module(name)
-            .and_then(|module| self.provided.iter().find(|(named, _)| *named == module));
+        // By name, so a runtime may also provide a module that is not one of
+        // the codemod modules (`metrics`, for codemod 1.x packages).
+        let provided = self.provided.iter().find(|(named, _)| *named == rest);
         if let Some((_, target)) = provided {
             return Ok(target.clone());
         }

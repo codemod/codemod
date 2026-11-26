@@ -59,6 +59,17 @@ export interface JssgOptions {
   basePath?: string;
   /** Run the transform, but leave the file as it was. */
   dryRun?: boolean;
+  /**
+   * Codemod 1.x compatibility: the workflow's state, which the transform
+   * reads with `getState` from `codemod:workflow` (see js/v1.ts).
+   */
+  v1State?: Record<string, unknown>;
+}
+
+/** What js/v1.ts and its host (tasks/v1_host.rs) keep in the isolate. */
+interface V1Globals {
+  __codemodV1State?: Record<string, unknown>;
+  __codemodV1Host?: { releaseAll(): void };
 }
 
 interface Applied {
@@ -161,8 +172,16 @@ export async function jssgFile(
   options: JssgOptions = {},
 ): Promise<unknown> {
   if (!underBase(callbackFile.path, options.basePath)) return undefined;
+  const v1 = globalThis as V1Globals;
+  if (options.v1State !== undefined) v1.__codemodV1State = options.v1State;
   const file = begin(callbackFile, options.dryRun === true);
-  const applied = await apply(module, file, options);
+  let applied: Applied;
+  try {
+    applied = await apply(module, file, options);
+  } finally {
+    // Locks a 1.x transform took and did not release.
+    v1.__codemodV1Host?.releaseAll();
+  }
   if (options.dryRun) return applied.data;
   if (applied.text !== undefined) file.write(applied.text);
   if (applied.renamed !== undefined) file.rename(applied.renamed);

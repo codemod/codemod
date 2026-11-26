@@ -22,6 +22,15 @@ pub(crate) fn run(task: &TaskContext<'_>, content: Value) -> TaskResult {
         return Ok(TaskOutcome::new(json!({ "skipped": true })));
     }
     let Some(executor) = run.services.install_skill.clone() else {
+        // Codemod 1.x skipped install-skill steps in unattended runs, and
+        // 1.x packages count on that.
+        if run.v1_compat() && !run.interaction.is_interactive() {
+            task.log(format!(
+                "skipped: skills are not installed in non-interactive runs; run again with --install-skill to install {}",
+                install_skill.package
+            ));
+            return Ok(TaskOutcome::new(json!({ "skipped": true })));
+        }
         return Err(TaskError::Failed(
             "installing skills is not available in this environment".into(),
         ));

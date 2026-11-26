@@ -84,6 +84,12 @@ javascript! {
     pub(crate) fn jssg_compat_module = include_str!("js/jssg_compat.ts"), "jssg_compat.ts"
 }
 javascript! {
+    /// `codemod-internal:v1` in isolates of workflow.yaml runs: the codemod
+    /// 1.x transform APIs 2.0 removed (`codemod:metrics`, and
+    /// `codemod:workflow`'s state functions).
+    pub(crate) fn v1_module = include_str!("js/v1.ts"), "v1.ts"
+}
+javascript! {
     /// Replay-safe globals of the workflow body; a script, not a module.
     pub(crate) fn body_globals = include_str!("js/body_globals.ts"), "body_globals.ts"
 }
@@ -111,6 +117,7 @@ mod tests {
             super::isolate_workflow_module(),
             super::jssg_compat_module(),
             super::assess_module(),
+            super::v1_module(),
         ] {
             assert!(!js.is_empty());
             assert!(!js.contains("interface "), "types are left in:\n{js}");

@@ -28,6 +28,7 @@ pub(crate) mod overlay;
 mod reduce;
 mod shard;
 mod shell;
+mod v1_host;
 mod wait;
 
 pub(crate) use wait::describe as describe_duration;
