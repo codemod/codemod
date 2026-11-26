@@ -97,6 +97,8 @@ async function apply(
   }
   const language = options.language ?? file.language;
   const root: Root = language ? parse(file, { language }) : parse(file);
+  const parseError = root._jssgParseError();
+  if (parseError) throw new SyntaxError(`Cannot parse ${file.path}: ${parseError}`);
   const params = options.params ?? {};
   const transformOptions: Record<string, unknown> = {
     params,

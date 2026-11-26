@@ -172,6 +172,10 @@ pub(crate) fn failed_files(failed: usize, total: usize) -> String {
 #[derive(Debug)]
 pub(crate) enum TaskError {
     Failed(String),
+    FailedFiles {
+        message: String,
+        files: FileCount,
+    },
     /// A manual approval nobody could give now.
     AwaitingApproval(String),
     /// A manual approval was rejected: the run ends.
@@ -190,6 +194,10 @@ impl TaskError {
     pub fn to_payload(&self) -> String {
         let (name, message) = match self {
             Self::Failed(message) => ("Error", message.as_str()),
+            Self::FailedFiles { message, files } => {
+                return serde_json::json!({ "name": "Error", "message": message, "files": files })
+                    .to_string();
+            }
             Self::AwaitingApproval(message) => ("AwaitingApprovalError", message.as_str()),
             Self::Rejected(message) => ("RejectedError", message.as_str()),
             Self::Canceled => ("CanceledError", "the run was canceled"),
@@ -218,7 +226,7 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         task.run.before_write().map_err(TaskError::Failed)?;
     }
     let result = match kind.as_str() {
-        "forEachFile" => for_each_file::run(task, content).map_err(TaskError::from),
+        "forEachFile" => for_each_file::run(task, content),
         "function" => function::run(task, content).map_err(TaskError::from),
         "dependencyGraph" => dependency_graph::run(task, content).map_err(TaskError::from),
         "shell" => shell::run(task, parse(content)?),

@@ -131,6 +131,17 @@ impl<'js> SgRootRjs<'js> {
         Ok(document_source(&self.inner.grep).into_owned())
     }
 
+    /// Internal JSSG compatibility check; ordinary AST queries may inspect
+    /// a recovered tree for incomplete input.
+    #[cfg(feature = "native")]
+    #[qjs(rename = "_jssgParseError")]
+    pub fn jssg_parse_error(&self) -> Option<String> {
+        crate::utils::js_syntax::parse_error(
+            *self.inner.grep.lang(),
+            &document_source(&self.inner.grep),
+        )
+    }
+
     /// Write content to this file.
     ///
     /// This method is only valid for files obtained via `definition()` or `references()`.

@@ -140,7 +140,8 @@ impl Loader for QuickJSLoader {
     fn load<'js>(&mut self, ctx: &Ctx<'js>, name: &str) -> Result<Module<'js, module::Declared>> {
         let path = std::path::Path::new(name);
         if path.exists() && path.is_file() {
-            let source = std::fs::read_to_string(path).map_err(|_| Error::new_loading(name))?;
+            let source = std::fs::read_to_string(path)
+                .map_err(|error| Error::new_loading_message(name, error.to_string()))?;
 
             // Check if the file is a TypeScript file that needs transpilation
             let extension = path.extension().and_then(|ext| ext.to_str());
@@ -157,14 +158,30 @@ impl Loader for QuickJSLoader {
                 })?;
                 return Module::declare(ctx.clone(), name, module.as_bytes());
             }
-            if needs_transpilation {
-                let transpiled_bytes = transpiler::transpile(source, file_name.to_string())
-                    .map_err(|err| {
-                        Error::new_loading_message(name, format!("Transpilation failed: {err}"))
-                    })?;
-                Module::declare(ctx.clone(), name, transpiled_bytes.as_slice())
+            let bytes = if needs_transpilation {
+                transpiler::transpile(source, file_name.to_string()).map_err(|err| {
+                    Error::new_loading_message(name, format!("Transpilation failed: {err}"))
+                })?
             } else {
-                Module::declare(ctx.clone(), name, source.as_bytes())
+                source.into_bytes()
+            };
+            let declared = Module::declare(ctx.clone(), name, bytes.as_slice());
+            match declared {
+                Err(Error::Exception) => {
+                    let thrown = ctx.catch();
+                    if let Some(exception) = thrown.as_object() {
+                        let kind = exception.get::<_, String>("name").ok();
+                        let message = exception.get::<_, String>("message").ok();
+                        if let (Some("SyntaxError"), Some(message)) = (kind.as_deref(), message) {
+                            return Err(Error::new_loading_message(
+                                name,
+                                format!("Parse error: {message}"),
+                            ));
+                        }
+                    }
+                    Err(ctx.throw(thrown))
+                }
+                result => result,
             }
         } else {
             Err(Error::new_loading(name))

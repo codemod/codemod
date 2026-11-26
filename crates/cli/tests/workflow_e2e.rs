@@ -157,6 +157,80 @@ nodes:
 const YAML_PACKAGE_MANIFEST: &str =
     "schema_version: \"1.0\"\nname: test\nversion: 0.1.0\ndescription: test\nauthor: test\n";
 
+fn assert_file_failure(fixture: &Fixture, file: &str) -> String {
+    let output = fixture.run(&["--format", "jsonl"]);
+    let shown = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{shown}");
+    let finished = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "run_finished")
+        .unwrap_or_else(|| panic!("{shown}"));
+    assert_eq!(finished["status"], "failed", "{shown}");
+    assert_eq!(finished["steps"][0]["status"], "failed", "{shown}");
+    assert_eq!(finished["failed_files"], 1, "{shown}");
+    let error = finished["error"].as_str().unwrap();
+    assert!(error.contains(file), "{shown}");
+    error.to_owned()
+}
+
+fn assert_parse_failure(fixture: &Fixture, file: &str) {
+    let error = assert_file_failure(fixture, file);
+    assert!(error.to_ascii_lowercase().contains("parse"), "{error}");
+}
+
+#[test]
+fn a_malformed_transform_module_fails_the_workflow_step_and_counts_the_file() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.target.path().join("src/b.ts")).unwrap();
+    fixture.package_file("scripts/bad.js", "export default function transform( {;");
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import transform from "./scripts/bad.js";
+export default async function main() {
+  await step("Transform", forEachFile("src/a.ts", transform));
+}
+"#,
+    );
+    assert_parse_failure(&fixture, "bad.js");
+    assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
+}
+
+#[test]
+fn a_malformed_legacy_transform_module_fails_the_workflow_step_and_counts_the_file() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.target.path().join("src/b.ts")).unwrap();
+    fixture.package_file("scripts/bad.js", "export default function transform( {;");
+    fixture.package_file("workflow.yaml", &YAML.replace("codemod.ts", "bad.js"));
+    assert_parse_failure(&fixture, "bad.js");
+    assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
+}
+
+#[test]
+fn a_missing_legacy_transform_dependency_fails_the_step_and_counts_the_file() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.target.path().join("src/b.ts")).unwrap();
+    fixture.package_file("workflow.yaml", YAML);
+    fixture.package_file(
+        "scripts/codemod.ts",
+        r#"export { default } from "./missing.js";"#,
+    );
+    let error = assert_file_failure(&fixture, "missing.js");
+    assert!(error.contains("codemod.ts"), "{error}");
+    assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
+}
+
+#[test]
+fn a_legacy_transform_does_not_treat_malformed_input_as_a_noop() {
+    let fixture = Fixture::new();
+    fixture.target_file("src/bad.js", "foo({;\n");
+    fixture.package_file("workflow.yaml", &YAML.replace("**/*.ts", "**/*.js"));
+    assert_parse_failure(&fixture, "bad.js");
+    assert_eq!(fixture.read("src/bad.js"), "foo({;\n");
+}
+
 #[test]
 fn a_workflow_yaml_package_runs() {
     let fixture = Fixture::new();

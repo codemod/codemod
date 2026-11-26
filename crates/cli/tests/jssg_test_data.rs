@@ -43,6 +43,48 @@ fn output(run: &std::process::Output) -> String {
     )
 }
 
+#[test]
+fn jssg_test_rejects_malformed_fixture_input_even_when_the_snapshot_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        &root.join("scripts/codemod.ts"),
+        "export default () => null;",
+    );
+    write(&root.join("tests/basic/input.ts"), "foo({;\n");
+    write(&root.join("tests/basic/expected.ts"), "foo({;\n");
+    let run = jssg_test(root, &[]);
+    let shown = output(&run);
+    assert_eq!(run.status.code(), Some(1), "{shown}");
+    assert!(
+        shown.contains("input.ts") && shown.contains("Cannot parse"),
+        "{shown}"
+    );
+}
+
+#[test]
+fn jssg_test_names_a_malformed_transform_module() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(
+        &root.join("scripts/codemod.ts"),
+        r#"export { default } from "./broken.js";"#,
+    );
+    write(
+        &root.join("scripts/broken.js"),
+        "export default function transform( {;",
+    );
+    write(&root.join("tests/basic/input.ts"), "foo();\n");
+    write(&root.join("tests/basic/expected.ts"), "foo();\n");
+    let run = jssg_test(root, &[]);
+    let shown = output(&run);
+    assert_eq!(run.status.code(), Some(1), "{shown}");
+    assert!(
+        shown.contains("broken.js") && shown.contains("Parse error"),
+        "{shown}"
+    );
+}
+
 /// A case with `c.ts`, `src/a.ts` and `src/lib/b.ts`, each returning its
 /// own marker as data.
 fn nested_case(root: &Path) {

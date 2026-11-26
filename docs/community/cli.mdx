@@ -425,6 +425,8 @@ A run is unattended when you pass `--no-interactive`, when there is no terminal 
 <ResponseField name="--format <text|jsonl>" type="string">
   `jsonl` prints one JSON object per engine event (`run_started`, `step_started`, `step_progress`, `step_log`, `step_retrying`, `step_finished`, `run_finished`, ...) on stdout. `run_finished` has the run's `status`, its `error`, `failed_files` (how many files failed in all), and `partial_steps`: each step some files failed in, with its `position`, `label`, `failed_files` and `files` (how many it ran on).
 
+  If a `forEachFile` callback or a legacy `js-ast-grep` transform module cannot load, the step fails and its selected files count as failed. Legacy `js-ast-grep` also reports malformed JavaScript or TypeScript input as a file failure, not as an unchanged file.
+
   It also has `output`, what the workflow returned (or gave [`fail()`](/community/workflows/reference#failing-a-run-with-a-report)), dry runs included, and `steps`: every recorded step with its `position`, `label`, `status` and `result`. An `output` over 1 MiB as JSON is `null`, with `output_omitted: { bytes, limit }`; step results share another 1 MiB, and one that does not fit is `null` with `result_omitted`. A saved run has all of it in `workflow status --id <ID> --format json`.
 
   ```json

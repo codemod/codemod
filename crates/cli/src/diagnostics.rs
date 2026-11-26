@@ -611,8 +611,9 @@ fn javascript_module_load_path(error_text: &str) -> Option<String> {
 }
 
 fn javascript_module_load_detail(error_text: &str) -> Option<String> {
-    let marker = "Transpilation failed:";
-    let start = error_text.find(marker)?;
+    let start = ["Transpilation failed:", "Parse error:"]
+        .into_iter()
+        .find_map(|marker| error_text.find(marker))?;
     let detail = error_text[start..].trim();
     if detail.is_empty() {
         None

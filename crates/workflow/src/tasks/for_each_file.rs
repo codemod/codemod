@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use butterflow_core::execution::{self, language_globs};
 use butterflow_core::jssg_runner::{JssgFileChange, SemanticMode};
+use butterflow_state::run_store::FileCount;
 use codemod_deps::Registry;
 use codemod_sandbox::sandbox::engine::{
     ExecutionResult, FileChange, ModifiedResult, PendingFiles, TakenFile, Transaction,
@@ -33,7 +34,7 @@ use super::isolate::{self, module_name, StepIsolates};
 use super::overlay::Overlay;
 use super::reduce::{self, FinishOnDrop, Fold, InOrder, Reduce};
 use super::v1_host::{self, V1Host};
-use super::{block_on, parallel_map, TaskContext, TaskOutcome};
+use super::{block_on, parallel_map, TaskContext, TaskError, TaskOutcome, TaskResult};
 use crate::run::RunContext;
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -91,7 +92,7 @@ struct Request {
     reduce: Option<Reduce>,
 }
 
-pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome, String> {
+pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> TaskResult {
     let request: Request =
         serde_json::from_value(request).map_err(|e| format!("bad forEachFile task: {e}"))?;
     let run = task.run;
@@ -109,7 +110,8 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         &files,
         request.reduce.as_ref(),
         true,
-    )?;
+    )
+    .map_err(|message| hard_file_failure(message, files.len()))?;
     let assessed = run.assess.take(task.position);
     run.assess.finish_step(task.position);
     if let Some(usage) = &assessed {
@@ -148,13 +150,18 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     }
 
     if task.canceled() {
-        return Err("canceled".to_string());
+        return Err(TaskError::Canceled);
     }
     // A reducer that failed fails the step before anything is written; the
     // files left when it stopped are not failures of their own.
     let reduced = reduced.transpose()?;
     task.log_failures(&failures);
-    every_file_failed(&failures, total)?;
+    if let Some((path, error)) = failures.first().filter(|_| failures.len() == total) {
+        return Err(hard_file_failure(
+            format!("the callback failed on every file; first error: {path}: {error}"),
+            total,
+        ));
+    }
     planned.extend(changes::plan(task, &other_changes)?);
     let changes = changes::commit(task, &planned, run.dry_run)?;
     let failed = failures.len();
@@ -183,6 +190,20 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         result["v1"] = v1;
     }
     Ok(TaskOutcome::new(result).with_failures(failed, total))
+}
+
+fn hard_file_failure(message: String, total: usize) -> TaskError {
+    TaskError::FailedFiles {
+        message: if total > 0 {
+            format!("{}: {message}", super::failed_files(total, total))
+        } else {
+            message
+        },
+        files: FileCount {
+            failed: total,
+            total,
+        },
+    }
 }
 
 /// What became of one selected file.
@@ -294,9 +315,7 @@ fn run_callback(
     let (worker_results, reduced): (Vec<WorkerResult>, _) = std::thread::scope(|scope| {
         let cancel = &*task.cancel;
         let folding = fold.map(|fold| scope.spawn(move || fold.run(entries, cancel)));
-        let worker_results = if files.is_empty() {
-            Vec::new()
-        } else {
+        let worker_results = {
             let handles: Vec<_> = (0..workers)
                 .map(|_| {
                     let mut options = isolates.worker_options(task, selector.language.clone());
@@ -403,17 +422,6 @@ pub(crate) fn callback_outputs(
             Some((path.clone(), output))
         })
         .collect())
-}
-
-/// A `forEachFile` step fails when its callback failed on every file it
-/// ran on; when only some failed, it is partial.
-pub(crate) fn every_file_failed(failures: &[(String, String)], total: usize) -> Result<(), String> {
-    match failures.first() {
-        Some((path, error)) if failures.len() == total => Err(format!(
-            "the callback failed on every file; first error: {path}: {error}"
-        )),
-        _ => Ok(()),
-    }
 }
 
 /// The files a selector picks in the run's target, with their text, and the

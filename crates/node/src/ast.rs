@@ -111,6 +111,14 @@ impl SgRoot {
         self.inner.grep.source().to_string()
     }
 
+    #[napi(js_name = "_jssgParseError")]
+    pub fn jssg_parse_error(&self) -> Option<String> {
+        codemod_sandbox::utils::js_syntax::parse_error(
+            *self.inner.grep.lang(),
+            self.inner.grep.source(),
+        )
+    }
+
     #[napi]
     pub fn rename(&self, _path: String) -> Result<()> {
         Err(Error::from_reason(

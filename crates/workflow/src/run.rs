@@ -988,7 +988,9 @@ pub(crate) fn run_host_task(run: &Arc<RunContext>, request: &str) -> Result<Stri
                     run.interrupt(Interruption::AwaitingApproval(message.clone()))
                 }
                 // The run's halt already says so.
-                tasks::TaskError::Rejected(_) | tasks::TaskError::Failed(_) => {}
+                tasks::TaskError::Rejected(_)
+                | tasks::TaskError::Failed(_)
+                | tasks::TaskError::FailedFiles { .. } => {}
             }
             Err(error.to_payload())
         }
