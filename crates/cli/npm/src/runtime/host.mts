@@ -74,19 +74,28 @@ import type {
 import { workflowUrl } from "./transforms.mts";
 import { callbackId } from "./workflow.mts";
 
-/** A `URL` (`new URL("./workflow.ts", import.meta.url)`); only `file:` URLs are paths. */
+/**
+ * A `URL` (`new URL("./workflow.ts", import.meta.url)`); only `file:` URLs are paths.
+ * @experimental
+ */
 export interface UrlLike {
   readonly href: string;
 }
 
-/** An `AbortSignal`, or what a test environment has in its place. */
+/**
+ * An `AbortSignal`, or what a test environment has in its place.
+ * @experimental
+ */
 export interface AbortSignalLike {
   readonly aborted: boolean;
   addEventListener?(type: "abort", listener: () => void, options?: { once?: boolean }): void;
   removeEventListener?(type: "abort", listener: () => void): void;
 }
 
-/** A workflow module: what `import("./workflow.ts")` gives. */
+/**
+ * A workflow module: what `import("./workflow.ts")` gives.
+ * @experimental
+ */
 export interface WorkflowModule {
   default: (context: {
     params: Record<string, JsonValue>;
@@ -96,6 +105,7 @@ export interface WorkflowModule {
   }) => unknown;
 }
 
+/** @experimental */
 export interface HostRunOptions {
   /** The directory the workflow changes. Default: the current directory. */
   target?: string;
@@ -146,8 +156,10 @@ export interface HostRunOptions {
   decisionModel?: DecisionModelOptions;
 }
 
+/** @experimental */
 export type { DecisionModelOptions };
 
+/** @experimental */
 export interface HostStepReport {
   readonly position: number;
   readonly label: string;
@@ -158,6 +170,7 @@ export interface HostStepReport {
   readonly given: boolean;
 }
 
+/** @experimental */
 export interface HostRunReport {
   readonly runId: string;
   readonly status:
@@ -208,6 +221,7 @@ type BodyEnding =
  * any workflow on Bun) is loaded without the build's changes: imported
  * callbacks load with it and run as plain functions, and `shard`'s
  * `method.function` and `filter` fail. Give those workflows by path.
+ * @experimental
  */
 export async function runWorkflow(
   workflow: string | UrlLike | WorkflowModule,

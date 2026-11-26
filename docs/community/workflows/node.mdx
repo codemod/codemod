@@ -2,7 +2,12 @@
 title: "Run workflows from Node.js"
 sidebarTitle: "Node.js and Bun"
 description: "Run a TypeScript workflow inside your own Node.js or Bun process, to debug it, test it, or build it into a tool."
+tag: "Experimental"
 ---
+
+import Experimental from "/snippets/experimental.mdx";
+
+<Experimental />
 
 The codemod CLI runs workflows in its own sandboxed JavaScript runtime. To run a workflow inside a Node.js or Bun process instead, use `codemod/host`. The workflow's body, function steps and `forEachFile` callbacks then run in your process, so you can:
 

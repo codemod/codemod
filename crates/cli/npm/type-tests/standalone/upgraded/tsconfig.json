@@ -9,6 +9,6 @@
     "skipLibCheck": false
   },
   // What `codemod workflow upgrade` writes, with only `codemod/workflow` and
-  // `codemod/ast-grep` imported: no hand-written declarations needed.
+  // `codemod/ast-grep` imported, plus fixture types for the private compat helpers.
   "include": ["./*.ts", "./src/*.ts"]
 }

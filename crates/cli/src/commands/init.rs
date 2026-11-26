@@ -29,7 +29,7 @@ pub struct Command {
     #[arg(long)]
     project_type: Option<ProjectType>,
 
-    /// Scaffold a skill-focused package with an install-skill workflow
+    /// Scaffold a skill-focused package with an install-skill workflow (experimental)
     #[arg(long)]
     skill: bool,
 

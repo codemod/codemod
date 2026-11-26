@@ -62,6 +62,7 @@ const require = createRequire(import.meta.url);
 
 // --------------------------------------------------------------- types ---
 
+/** @experimental */
 export type JsonValue =
   | string
   | number
@@ -70,30 +71,49 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-/** File contents by path, relative to the target (`"src/a.ts"`). */
+/**
+ * File contents by path, relative to the target (`"src/a.ts"`).
+ * @experimental
+ */
 export type FileTree = { readonly [path: string]: string };
 
-/** A `URL` (`new URL("./tests", import.meta.url)`); only `file:` URLs are paths. */
+/**
+ * A `URL` (`new URL("./tests", import.meta.url)`); only `file:` URLs are paths.
+ * @experimental
+ */
 export interface UrlLike {
   readonly href: string;
 }
 
-/** A path, or a `file:` URL. */
+/**
+ * A path, or a `file:` URL.
+ * @experimental
+ */
 export type PathLike = string | UrlLike;
 
-/** An `AbortSignal`. */
+/**
+ * An `AbortSignal`.
+ * @experimental
+ */
 export interface AbortSignalLike {
   readonly aborted: boolean;
 }
 
-/** A workflow module: what `import("./workflow.ts")` gives. */
+/**
+ * A workflow module: what `import("./workflow.ts")` gives.
+ * @experimental
+ */
 export interface WorkflowModule {
   readonly default: (...args: never[]) => unknown;
 }
 
-/** A capability a transform may use beyond those codemod.yaml declares. */
+/**
+ * A capability a transform may use beyond those codemod.yaml declares.
+ * @experimental
+ */
 export type Capability = "fs" | "fetch" | "child_process";
 
+/** @experimental */
 export interface RunWorkflowOptions {
   /**
    * The files the workflow runs on: a directory or a single file (copied
@@ -139,7 +159,10 @@ export interface RunWorkflowOptions {
   decisionModel?: DecisionModelOptions;
 }
 
-/** The decision model a test run's `codemod/assess` asks. */
+/**
+ * The decision model a test run's `codemod/assess` asks.
+ * @experimental
+ */
 export interface DecisionModelOptions {
   /** `"systemone"` or `"openai"`. */
   provider?: string;
@@ -148,6 +171,7 @@ export interface DecisionModelOptions {
   baseUrl?: string;
 }
 
+/** @experimental */
 export type RunStatus =
   | "succeeded"
   | "failed"
@@ -157,6 +181,7 @@ export type RunStatus =
   | "awaiting-approval"
   | "stopped";
 
+/** @experimental */
 export interface StepRun {
   readonly position: number;
   readonly label: string;
@@ -171,12 +196,14 @@ export interface StepRun {
   readonly given: boolean;
 }
 
+/** @experimental */
 export interface LogLine {
   /** Label of the step that logged it; `null` for the workflow body. */
   readonly step: string | null;
   readonly line: string;
 }
 
+/** @experimental */
 export interface WorkflowRun {
   readonly status: RunStatus;
   /** Whether the run succeeded, or stopped at its `until` step. */
@@ -207,6 +234,7 @@ export interface WorkflowRun {
   diff(): string;
 }
 
+/** @experimental */
 export interface RunCallbackOptions {
   /**
    * The files the callback runs on: a directory or a single file (copied
@@ -229,14 +257,20 @@ export interface RunCallbackOptions {
   signal?: AbortSignalLike;
 }
 
-/** What a callback returned for one file. */
+/**
+ * What a callback returned for one file.
+ * @experimental
+ */
 export interface CallbackOutput {
   /** The file's path from the target. */
   readonly file: string;
   readonly data: JsonValue;
 }
 
-/** A file the callback threw on, or failed with `failFile`. */
+/**
+ * A file the callback threw on, or failed with `failFile`.
+ * @experimental
+ */
 export interface CallbackFailure {
   readonly path: string;
   readonly error: string;
@@ -245,6 +279,7 @@ export interface CallbackFailure {
 /**
  * A `runCallback` run: a `WorkflowRun` without steps, which fails when the
  * callback failed on any file.
+ * @experimental
  */
 export interface CallbackRun extends WorkflowRun {
   /** What the callback returned, by file, in path order; files it returned nothing for are left out. */
@@ -252,6 +287,7 @@ export interface CallbackRun extends WorkflowRun {
   readonly failures: readonly CallbackFailure[];
 }
 
+/** @experimental */
 export interface Fixture {
   /** The fixture's directory, relative to the fixtures directory (`"renames/default-export"`). */
   readonly name: string;
@@ -264,6 +300,7 @@ export interface Fixture {
   readonly params: Record<string, JsonValue>;
 }
 
+/** @experimental */
 export interface AssertTreeOptions {
   /** Ignore whitespace at the ends of lines and of files. */
   ignoreWhitespace?: boolean;
@@ -326,6 +363,7 @@ interface Launcher {
  * `assertTree`, which fails when the run did not succeed. Rejects when the
  * workflow cannot run at all (for example it does not build), or when an
  * `until` or `given` label matches no step.
+ * @experimental
  */
 export async function runWorkflow(
   workflow: PathLike | WorkflowModule,
@@ -381,6 +419,7 @@ export async function runWorkflow(
  *
  * Resolves for every outcome: the run failed when the callback failed on any
  * file (`run.failures`). Rejects when the callback cannot run at all.
+ * @experimental
  */
 export async function runCallback(
   callback: PathLike,
@@ -674,6 +713,7 @@ function codemodBinary(): string {
  * `expected/` directories, or `input.<ext>` and `expected.<ext>` files (the
  * layouts `codemod jssg test` reads), and optionally `params.json`. Groups of
  * fixtures may be nested.
+ * @experimental
  */
 export function fixtures(dir: PathLike): Fixture[] {
   const root = toPath(dir);
@@ -760,6 +800,7 @@ function readParams(dir: string): Record<string, JsonValue> {
  *
  * Line endings are compared as `\n`. With `CODEMOD_UPDATE_FIXTURES=1`, an
  * expected directory or file is rewritten to match `actual` instead.
+ * @experimental
  */
 export function assertTree(
   actual: WorkflowRun | PathLike | FileTree,

@@ -12,6 +12,7 @@
  * package's `codemod/*` exports. Code that imports `codemod/*` needs none of this.
  *
  * @module
+ * @experimental
  */
 
 import module from "node:module";
@@ -19,6 +20,7 @@ import module from "node:module";
 import { CODEMOD_MODULES, resolveCodemodModule } from "./runtime/modules.mts";
 import { isYamlUrl, loadWorkflow, loadYaml } from "./runtime/transforms.mts";
 
+/** @experimental */
 export { resolveCodemodModule };
 
 /** What this file uses of Bun's `Bun` global. */

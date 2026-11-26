@@ -23,12 +23,14 @@ import { fileURLToPath } from "node:url";
 
 import { resolveCodemodModule } from "./runtime/modules.mts";
 
+/** @experimental */
 export interface CodemodVitePlugin {
   name: "codemod";
   enforce: "pre";
   resolveId(id: string): string | null;
 }
 
+/** @experimental */
 export function codemod(): CodemodVitePlugin {
   return {
     name: "codemod",
@@ -40,4 +42,5 @@ export function codemod(): CodemodVitePlugin {
   };
 }
 
+/** @experimental */
 export default codemod;

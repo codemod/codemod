@@ -2,7 +2,12 @@
 title: "Sharding"
 sidebarTitle: "Sharding"
 description: "Split a large migration into groups of files, each applied and reviewed on its own."
+tag: "Experimental"
 ---
+
+import Experimental from "/snippets/experimental.mdx";
+
+<Experimental />
 
 The `shard` task splits a large migration into groups of files ("shards"), for example one per directory or per code owner. You then run the migration once per shard, typically opening one pull request each.
 
@@ -176,6 +181,8 @@ Custom shard functions receive the same value as `previousShards` and can implem
 A workflow keeps no state between runs, so pass the earlier result in yourself, for example as a parameter: `previous: params.previousShards`.
 
 ## From workflow.yaml
+
+YAML `shard` behavior is stable; the TypeScript `shard(...)` signature is experimental.
 
 `codemod workflow upgrade` turns a YAML `shard` step into a `shard(...)` call that gives the same shards:
 

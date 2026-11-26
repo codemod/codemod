@@ -1,0 +1,33 @@
+---
+title: "Codemod API stability"
+description: "Choose APIs based on their compatibility guarantees in Codemod 2.x."
+---
+
+Use stable APIs when a workflow or tool needs to keep working across Codemod 2.x releases. Experimental APIs are available now, but their contracts may change.
+
+| Tier | Compatibility |
+| --- | --- |
+| Stable | No breaking changes in 2.x. A deprecation warns for at least one minor release before removal in 3.0 or later. |
+| Experimental | May break in a minor release, never in a patch. Breaking changes are noted in the [workflow changelog](/community/workflows/changelog). Pin an exact Codemod version if you rely on these APIs. |
+| Internal | No compatibility promise. Do not depend on these APIs directly. |
+
+Look for `@experimental` in TypeScript, an **Experimental** badge or callout in the docs, and `(experimental)` in CLI help. The first time a CLI run uses an experimental API, it emits a notice on stderr in text mode or an `experimental` event on the [JSONL event stream](/community/workflows/control).
+
+## Stable in 2.0
+
+- Workflow APIs: `step`, `fail`, `StepError`, `WorkflowFailure`, `WorkflowContext` and parameters, `forEachFile` and its reducer, `astGrep`, `approval` and question IDs, `shell`, and nested `codemod()`.
+- JSSG: `codemod/ast-grep` parsing, `SgRoot` and `SgNode` (apart from the semantic APIs), `jssgTransform`, and `codemod/runtime` helpers.
+- CLI: `run`, `workflow run/resume/status/list/cancel/validate/upgrade`, `resume --approve`, `jssg run/test`, `publish`, `search`, `login/logout/whoami`, and `init --no-interactive` for workflow packages.
+- Automation: `--control stdio`, the `codemod/protocol` v1 JSONL protocol, `status` and `list` with `--format json`, and exit codes `0`, `1`, `2`, and `3`, including `fail({ exitCode })`.
+- Compatibility: YAML `shard` behavior and on-the-fly upgrades when running 1.x packages. The TypeScript emitted by the translator is not a stable API.
+
+## Experimental in 2.0
+
+- Workflow APIs: `http()`, `agent`, `installSkill`, `sleep`, `waitForEvent`, and the TypeScript `shard(...)` signature.
+- Semantic APIs: `definition()` and `references()`.
+- Package APIs: `codemod/assess`, `codemod/llm`, `codemod/deps`, `codemod/git`, `codemod/testing`, `codemod/host`, `codemod/vite`, and `codemod/register`.
+- CLI: `workflow attach`, `inspect` (including its JSON output), `send`, `ai`, `mcp`, package skills, `--managed-git`, and the launcher.
+
+## Internal
+
+Translation helpers and the layout of run-store files are internal. Codemod can read its run store across releases in the same major version; use the CLI and its JSON output rather than reading the files directly.

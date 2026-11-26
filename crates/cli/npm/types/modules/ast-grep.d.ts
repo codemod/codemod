@@ -68,6 +68,7 @@ declare module "codemod:ast-grep" {
      * @param options.resolveExternal - If false, stop at import statements without
      *   attempting to resolve the source module. Default: true
      * @returns An object with the definition node, its root, and kind, or null
+     * @experimental
      */
     definition(options?: DefinitionOptions): DefinitionResult<M> | null;
 
@@ -86,6 +87,7 @@ declare module "codemod:ast-grep" {
      * In workspace scope mode, it searches the entire workspace.
      *
      * @returns An array of file references, each with a root and nodes
+     * @experimental
      */
     references(): Array<FileReferences<M>>;
   }
@@ -407,11 +409,13 @@ declare module "codemod:ast-grep" {
    * - 'local': Definition is in the same file (local variable, function, class, etc.)
    * - 'import': Definition traced to an import statement but module couldn't be resolved
    * - 'external': Definition resolved to a different file in the workspace
+   * @experimental
    */
   export type DefinitionKind = "local" | "import" | "external";
 
   /**
    * Options for definition lookup.
+   * @experimental
    */
   export interface DefinitionOptions {
     /**
@@ -422,6 +426,7 @@ declare module "codemod:ast-grep" {
     resolveExternal?: boolean;
   }
 
+  /** @experimental */
   export interface DefinitionResult<M extends TypesMap = TypesMap> {
     /** The SgNode at the definition location */
     node: SgNode<M>;
@@ -433,6 +438,7 @@ declare module "codemod:ast-grep" {
 
   /**
    * References in a single file - contains the root and all reference nodes.
+   * @experimental
    */
   export interface FileReferences<M extends TypesMap = TypesMap> {
     /** The SgRoot for the file */

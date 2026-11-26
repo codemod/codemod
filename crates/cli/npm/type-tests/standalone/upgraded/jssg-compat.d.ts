@@ -1,3 +1,4 @@
+// Fixture declarations for private helpers emitted by the 1.x upgrade translator.
 // oxlint-disable triple-slash-reference
 /// <reference path="workflow.d.ts" />
 

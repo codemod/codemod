@@ -4,6 +4,8 @@ sidebarTitle: "Reference"
 description: "The workflow.ts API: steps, per-file callbacks, tasks, and resuming runs."
 ---
 
+import Experimental from "/snippets/experimental.mdx";
+
 A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow`, `codemod/git`, `codemod/deps` and `codemod/assess`, and what else a workflow can import.
 
 ## Complete example
@@ -414,6 +416,8 @@ Callbacks kept in files and YAML rule files are imported, relative to the workfl
 
 ### Git steps
 
+<Experimental />
+
 `branch`, `commit` and `pullRequest` come from `codemod/git`:
 
 ```ts
@@ -441,6 +445,8 @@ for (const current of shards) {
 Steps without git can still run in parallel, before or after. Separate checkouts per shard are planned as an explicit API.
 
 ### Dependencies
+
+<Experimental />
 
 `dependencyGraph`, `registry` and `semver` come from `codemod/deps`. `dependencyGraph` reads the target's `yarn.lock` (Yarn 1 and Yarn 2+), `pnpm-lock.yaml` (lockfile 6.0 and later), `package-lock.json` and `npm-shrinkwrap.json` (v1, v2 and v3), `bun.lock`, `Cargo.lock`, `uv.lock`, `poetry.lock` and `Pipfile.lock`, with each workspace's `package.json`, `Cargo.toml`, `pyproject.toml` or `Pipfile` for declared ranges and dependency kinds. A Yarn 1 project's workspaces are the directories its root `package.json`'s `workspaces` globs match. Bun's binary `bun.lockb` and Go lockfiles are not read.
 
@@ -502,6 +508,8 @@ const moment = await step(dependencyGraph((g) => {
 
 ### `registry` and `semver`
 
+<Experimental />
+
 `registry.npm(name)`, `registry.cargo(name)` and `registry.pypi(name)` resolve to `{ ecosystem, name, versions }`, oldest first, with each release's `dependencies`, `peerDependencies` and `optionalDependencies`. PyPI lists dependencies per file rather than per release, so PyPI releases have none, and `releases({ accepting })` on a Python package throws. They work inside a function step or a `forEachFile` or `dependencyGraph` callback, and in the files those import, so the answer is recorded with the step and a resumed run does not ask again; in the workflow body they reject. Canceling the run, or a step's `timeout`, stops a lookup in progress. Each package is fetched once per run, and lookups started together are fetched together:
 
 ```ts
@@ -557,6 +565,8 @@ If a `codemod()` step resolves a preview-only registry package during an apply r
 
 ### HTTP requests
 
+<Experimental />
+
 Callbacks have no network. A workflow that needs one declares the request as a step with `http()`, from `codemod/workflow`. The response is the step's result: it is recorded with the run, so a resumed run gets it back without sending the request again.
 
 ```ts
@@ -583,6 +593,8 @@ await step("Notify", http({ url: params.hook, method: "POST", json: { tag } }));
 The result is `{ status, statusText, ok, url, headers, body, json? }`: `url` is where it ended after redirects, header names are lower case, `body` is the text (up to 10 MiB; base64 with `bodyEncoding: "base64"` when it is not UTF-8), and `json` is the parsed body when the response says it is JSON. The URL, method, headers and body are the step's content: change one and the step runs again on resume.
 
 ### Coding agents
+
+<Experimental />
 
 Some adapters check the installed agent’s help output to detect supported options. That check has its own timeout and falls back to defaults if the help command does not finish.
 
@@ -654,6 +666,8 @@ Without `agent`, the step uses:
 Otherwise the prompt is printed as instructions and nothing runs.
 
 ## Assessing files with `codemod/assess`
+
+<Experimental />
 
 `assess(file, { questions })` asks a decision model typed questions about a file, inside a `forEachFile` callback or a function step, so AI judgments and ast-grep analysis happen in the same pass. Before it asks, the engine gathers the file's context itself: the files it imports, followed through re-exports, so the model does not spend tokens looking for them.
 
@@ -844,6 +858,8 @@ Each approval has a **question id** that stays the same across resumes: `approva
 **Rejecting an approval ends the run.** The run is `rejected`: steps running alongside are stopped, nothing after the approval runs, and what earlier steps changed **stays changed** (commit or stash before a run you may reject, or use `git` to undo it). A rejected run is over: `workflow resume` refuses it unless you pass `--force`, which asks the rejected approval again. Stopping a run with Ctrl-C instead leaves it `paused`, to resume; `workflow cancel` ends it as `canceled`, which also takes `--force` to resume.
 
 ## Waiting
+
+<Experimental />
 
 Both of these are steps: they appear in the run's steps, and a finished wait is not repeated on resume.
 
