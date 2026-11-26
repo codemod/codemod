@@ -540,14 +540,14 @@ impl<'s> Builder<'s> {
                 self.statements(&with.body);
             }
             Stmt::Match(match_stmt) => {
-                self.expr(&match_stmt.subject);
+                let subject = self.expr(&match_stmt.subject);
                 for case in &match_stmt.cases {
+                    self.bind_pattern(&case.pattern, subject, FlowEdgeKind::Assign);
                     if let Some(guard) = &case.guard {
                         self.expr(guard);
                     }
                     self.statements(&case.body);
                 }
-                self.skip("match-pattern");
             }
             Stmt::Raise(raise) => {
                 if let Some(exc) = &raise.exc {
@@ -1058,16 +1058,7 @@ impl<'s> Builder<'s> {
                 let index = self.describe(range, FlowNodeKind::Expression, None);
                 self.edge(value, index, FlowEdgeKind::Alias);
                 if let Expr::Name(name) = &*named.target {
-                    // `(x := v)` binds in the enclosing function.
-                    let binding = match self.resolve(name.id.as_str()) {
-                        Some(binding) => binding,
-                        None => self.declare_one(Declaration {
-                            name: name.id.to_string(),
-                            range: name.range,
-                            kind: FlowNodeKind::Variable,
-                            import: None,
-                        }),
-                    };
+                    let binding = self.walrus_binding(name);
                     self.edge(value, binding, FlowEdgeKind::Assign);
                 }
                 index
@@ -1190,6 +1181,95 @@ impl<'s> Builder<'s> {
         }
         self.scopes.pop();
         index
+    }
+
+    /// What `(x := v)` binds: `x` in the enclosing function (or class or
+    /// module), also from inside a comprehension, whose own names it skips.
+    fn walrus_binding(&mut self, name: &ast::ExprName) -> u32 {
+        let home = self
+            .scopes
+            .iter()
+            .rposition(|scope| scope.kind != ScopeKind::Comprehension)
+            .expect("a scope");
+        let comprehensions = self.scopes.split_off(home + 1);
+        let id = name.id.as_str();
+        let scope = &self.scopes[home];
+        let declared_elsewhere =
+            scope.globals.contains(id) || scope.globals.contains(&format!("\0nonlocal:{id}"));
+        let binding = match scope.names.get(id) {
+            Some(binding) => *binding,
+            None if declared_elsewhere => match self.resolve(id) {
+                Some(binding) => binding,
+                None => self.describe(name.range, FlowNodeKind::Global, Some(id)),
+            },
+            None => self.declare_one(Declaration {
+                name: id.to_string(),
+                range: name.range,
+                kind: FlowNodeKind::Variable,
+                import: None,
+            }),
+        };
+        self.scopes.extend(comprehensions);
+        binding
+    }
+
+    /// Bind the names a `case` pattern captures to the part of the subject
+    /// each one matches, and read the values and classes it compares with.
+    fn bind_pattern(&mut self, pattern: &ast::Pattern, subject: u32, kind: FlowEdgeKind) {
+        let capture = |builder: &mut Self, name: &ast::Identifier, kind: FlowEdgeKind| {
+            if let Some(binding) = builder.resolve(name.as_str()) {
+                builder.edge(subject, binding, kind);
+            }
+        };
+        match pattern {
+            ast::Pattern::MatchValue(value) => {
+                self.expr(&value.value);
+            }
+            ast::Pattern::MatchSingleton(_) => {}
+            ast::Pattern::MatchSequence(sequence) => {
+                for part in &sequence.patterns {
+                    self.bind_pattern(part, subject, FlowEdgeKind::Element);
+                }
+            }
+            ast::Pattern::MatchMapping(mapping) => {
+                for key in &mapping.keys {
+                    self.expr(key);
+                }
+                for part in &mapping.patterns {
+                    self.bind_pattern(part, subject, FlowEdgeKind::Element);
+                }
+                if let Some(rest) = &mapping.rest {
+                    capture(self, rest, FlowEdgeKind::Capture);
+                }
+            }
+            ast::Pattern::MatchClass(class) => {
+                self.expr(&class.cls);
+                for part in &class.arguments.patterns {
+                    self.bind_pattern(part, subject, FlowEdgeKind::Element);
+                }
+                for keyword in &class.arguments.keywords {
+                    self.bind_pattern(&keyword.pattern, subject, FlowEdgeKind::Element);
+                }
+            }
+            ast::Pattern::MatchStar(star) => {
+                if let Some(name) = &star.name {
+                    capture(self, name, FlowEdgeKind::Capture);
+                }
+            }
+            ast::Pattern::MatchAs(as_pattern) => {
+                if let Some(inner) = &as_pattern.pattern {
+                    self.bind_pattern(inner, subject, kind);
+                }
+                if let Some(name) = &as_pattern.name {
+                    capture(self, name, kind);
+                }
+            }
+            ast::Pattern::MatchOr(or) => {
+                for alternative in &or.patterns {
+                    self.bind_pattern(alternative, subject, kind);
+                }
+            }
+        }
     }
 
     fn lambda(&mut self, lambda: &ast::ExprLambda) -> u32 {
@@ -1380,6 +1460,60 @@ fn target_declarations(target: &Expr, out: &mut Vec<Declaration>) {
     }
 }
 
+/// The names a `case` pattern captures.
+fn pattern_declarations(pattern: &ast::Pattern, out: &mut Vec<Declaration>) {
+    let name = |out: &mut Vec<Declaration>, name: &ast::Identifier| {
+        out.push(Declaration {
+            name: name.to_string(),
+            range: name.range,
+            kind: FlowNodeKind::Variable,
+            import: None,
+        })
+    };
+    match pattern {
+        ast::Pattern::MatchValue(_) | ast::Pattern::MatchSingleton(_) => {}
+        ast::Pattern::MatchSequence(sequence) => {
+            for part in &sequence.patterns {
+                pattern_declarations(part, out);
+            }
+        }
+        ast::Pattern::MatchMapping(mapping) => {
+            for part in &mapping.patterns {
+                pattern_declarations(part, out);
+            }
+            if let Some(rest) = &mapping.rest {
+                name(out, rest);
+            }
+        }
+        ast::Pattern::MatchClass(class) => {
+            for part in &class.arguments.patterns {
+                pattern_declarations(part, out);
+            }
+            for keyword in &class.arguments.keywords {
+                pattern_declarations(&keyword.pattern, out);
+            }
+        }
+        ast::Pattern::MatchStar(star) => {
+            if let Some(star_name) = &star.name {
+                name(out, star_name);
+            }
+        }
+        ast::Pattern::MatchAs(as_pattern) => {
+            if let Some(inner) = &as_pattern.pattern {
+                pattern_declarations(inner, out);
+            }
+            if let Some(as_name) = &as_pattern.name {
+                name(out, as_name);
+            }
+        }
+        ast::Pattern::MatchOr(or) => {
+            for alternative in &or.patterns {
+                pattern_declarations(alternative, out);
+            }
+        }
+    }
+}
+
 /// The names a block binds, in order of their first binding site, without
 /// looking into nested functions and classes (but binding their names).
 fn collect_declarations(
@@ -1442,6 +1576,7 @@ fn collect_declarations(
             }
             Stmt::Match(match_stmt) => {
                 for case in &match_stmt.cases {
+                    pattern_declarations(&case.pattern, out);
                     collect_declarations(&case.body, in_class, out, globals);
                 }
             }
@@ -1594,5 +1729,43 @@ mod tests {
                 MutationKind::Update
             ]
         );
+    }
+
+    /// Where the value assigned to a name comes from: the text of each node
+    /// with an edge into its binding.
+    fn sources(flow: &FileFlow, source: &str, name: &str) -> Vec<String> {
+        let binding = binding(flow, name);
+        flow.in_edges[binding as usize]
+            .iter()
+            .map(|(from, _)| {
+                let range = flow.nodes[*from as usize].range;
+                source[range.start as usize..range.end as usize].to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_case_capture_is_bound_to_the_match_subject() {
+        let source = "def handle(event):\n    match event:\n        case {\"user\": user}:\n            save(user)\n        case other:\n            log(other)\n";
+        let flow = build_file_flow(source).unwrap();
+        assert_eq!(sources(&flow, source, "user"), vec!["event"]);
+        assert_eq!(sources(&flow, source, "other"), vec!["event"]);
+        assert!(flow.skipped.is_empty());
+    }
+
+    #[test]
+    fn a_walrus_in_a_comprehension_binds_in_the_enclosing_function() {
+        let source = "def first_big(items):\n    if any((hit := item) > 10 for item in items):\n        return hit\n";
+        let flow = build_file_flow(source).unwrap();
+        let hit = binding(&flow, "hit");
+        let read = flow
+            .nodes
+            .iter()
+            .rposition(|n| !n.binding && n.name.as_deref() == Some("hit"))
+            .unwrap();
+        assert!(flow.out_edges[hit as usize]
+            .iter()
+            .any(|(to, e)| *to as usize == read && *e == FlowEdgeKind::Read));
+        assert_eq!(sources(&flow, source, "hit"), vec!["item"]);
     }
 }
