@@ -337,3 +337,62 @@ export default async function transform(root: any, options: any) {
         "const x = 'NEW';\n"
     );
 }
+
+/// A transform reads the target with `fs`, but writes through it only with
+/// `--allow-fs`; without it the file fails with an error naming the flag.
+#[test]
+fn jssg_run_fs_writes_need_allow_fs() {
+    let package = TempDir::new().unwrap();
+    let target = TempDir::new().unwrap();
+    write(
+        package.path(),
+        "codemod.ts",
+        r#"
+import fs from "fs";
+
+export default function transform(root: any) {
+  const text = fs.readFileSync(root.filename(), "utf-8");
+  fs.writeFileSync(`${root.filename()}.bak`, text);
+  return null;
+}
+"#,
+    );
+    write(target.path(), "a.ts", "const a = 1;\n");
+    let run = |extra: &[&str]| {
+        let script = package.path().join("codemod.ts");
+        let mut args = vec![
+            "jssg",
+            "run",
+            script.to_str().unwrap(),
+            "--language",
+            "typescript",
+            "--target",
+            target.path().to_str().unwrap(),
+            "--allow-dirty",
+            "--no-interactive",
+        ];
+        args.extend_from_slice(extra);
+        Command::new(env!("CARGO_BIN_EXE_codemod"))
+            .args(&args)
+            .env("DISABLE_ANALYTICS", "true")
+            .output()
+            .expect("failed to run codemod")
+    };
+
+    let output = run(&[]);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("fs.writeFileSync needs the fs capability"),
+        "{}",
+        text(&output)
+    );
+    assert!(text(&output).contains("--allow-fs"), "{}", text(&output));
+    assert!(!target.path().join("a.ts.bak").exists());
+
+    let output = run(&["--allow-fs"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        fs::read_to_string(target.path().join("a.ts.bak")).unwrap(),
+        "const a = 1;\n"
+    );
+}

@@ -339,6 +339,10 @@ impl DryRunDiskFetcher {
     }
 }
 
+/// What a write through `fs` says when the transform was not given the
+/// `fs` capability; `{name}` is the function called.
+pub const FS_WRITE_NEEDS_CAPABILITY: &str = "{name} needs the fs capability to write files: pass --allow-fs, or add \"fs\" to capabilities in codemod.yaml";
+
 fn seed_dry_run_current_file(
     root: &vfs::VfsPath,
     _target_directory: &Path,
@@ -402,6 +406,13 @@ where
     // Track whether the caller opted into llrt's real-disk fs capability
     // so we know whether to install the curated fs below instead.
     let mut fs_capability_enabled = false;
+    // Without the `fs` capability the curated fs only reads: writes need
+    // `--allow-fs`, as `child_process` needs `--allow-child-process`. A dry
+    // run granted `fs` writes to memory.
+    let fs_granted = options
+        .capabilities
+        .as_ref()
+        .is_some_and(|capabilities| capabilities.contains(&LlrtSupportedModules::Fs));
     let llm_capability_enabled = options
         .capabilities
         .as_ref()
@@ -558,6 +569,11 @@ where
                 // so the resolver can reject paths that traverse a symlink.
                 CuratedFsConfig::new(target_dir.clone(), physical_root)
                     .with_physical_target_dir(std::path::PathBuf::from(&target_dir))
+            };
+            let cfg = if fs_granted {
+                cfg
+            } else {
+                cfg.read_only(FS_WRITE_NEEDS_CAPABILITY)
             };
             ctx.store_userdata(cfg)
                 .map_err(|e| ExecutionError::Runtime {
@@ -1309,6 +1325,74 @@ export default async function transform() {
             .is_empty());
     }
 
+    /// Without the `fs` capability a transform reads the target but cannot
+    /// write, in a run or a dry run; the error names the flag.
+    #[tokio::test]
+    async fn test_fs_writes_need_the_fs_capability() {
+        let codemod_content = r#"
+import fs from "fs";
+
+export default function transform(root, options) {
+  const read = fs.readFileSync(root.filename(), "utf-8");
+  const tries = [
+    () => fs.writeFileSync(`${options.targetDir}/App.js.bak`, read),
+    () => fs.mkdirSync(`${options.targetDir}/dir`),
+    () => fs.unlinkSync(root.filename()),
+  ];
+  return tries.map((attempt) => {
+    try { attempt(); return "wrote"; } catch (error) { return `${error.code}: ${error.message}`; }
+  }).join("\n");
+}
+        "#
+        .trim();
+        for dry_run in [false, true] {
+            let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+            let target_dir = temp_dir.path().join("repo");
+            fs::create_dir_all(&target_dir).unwrap();
+            let file_path = target_dir.join("App.js");
+            fs::write(&file_path, "const config = true;").unwrap();
+            let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+            let options = JssgExecutionOptions {
+                script_path: &codemod_path,
+                resolver,
+                language: js_lang(),
+                file_path: &file_path,
+                content: "const config = true;",
+                selector_config: None,
+                params: None,
+                matrix_values: None,
+                capabilities: None,
+                semantic_provider: None,
+                llm_request_handler: None,
+                runtime_event_callback: None,
+                cancellation_flag: None,
+                test_mode: false,
+                dry_run,
+                target_directory: &target_dir,
+                pending_files: None,
+            };
+            let result = execute_codemod_with_quickjs(options).await.unwrap();
+            let ExecutionResult::Modified(modified) = result.primary else {
+                panic!("expected a result, got {:?}", result.primary);
+            };
+            let lines: Vec<&str> = modified.content.lines().collect();
+            assert_eq!(lines.len(), 3, "{}", modified.content);
+            for (line, name) in lines
+                .iter()
+                .zip(["writeFileSync", "mkdirSync", "unlinkSync"])
+            {
+                assert!(
+                    line.starts_with(&format!("EROFS: fs.{name} needs the fs capability")),
+                    "{line}"
+                );
+                assert!(line.contains("--allow-fs"), "{line}");
+            }
+            assert!(!target_dir.join("App.js.bak").exists());
+            assert!(!target_dir.join("dir").exists());
+            assert!(file_path.exists());
+        }
+    }
+
     #[tokio::test]
     async fn test_dry_run_curated_fs_does_not_mutate_disk() {
         let codemod_content = r#"
@@ -1362,7 +1446,8 @@ export default function transform(root, options) {
             selector_config: None,
             params: None,
             matrix_values: None,
-            capabilities: None,
+            // Granted: a dry run writes to memory instead of the disk.
+            capabilities: Some([LlrtSupportedModules::Fs].into_iter().collect()),
             semantic_provider: None,
             llm_request_handler: None,
             runtime_event_callback: None,

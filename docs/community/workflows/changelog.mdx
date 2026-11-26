@@ -32,6 +32,7 @@ Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://
   const latest = (await step("Latest", http(url))).json;
   ```
 - **`--allow-fs`, `--allow-fetch` and `--allow-child-process` do nothing** for workflow runs. They are accepted with a warning; `capabilities` in `codemod.yaml` and in a `forEachFile` selector are ignored (the step's log says so). The launcher no longer shows capability toggles.
+- **`codemod jssg run` and `codemod jssg test`: `fs` writes need `--allow-fs`.** Without it a transform's `fs` reads the target but `writeFileSync`, `mkdirSync` and `unlinkSync` fail with `EROFS` and a message naming the flag, as `child_process` needs `--allow-child-process`. Before, writes inside the target worked with no flag. See [Security & Capabilities](/community/jssg/security).
 - **The Node.js host enforces the same rules** (`codemod/host`, `codemod/testing`), and replays the body's clock and random numbers as the CLI does, so a test that passes does not fail under the CLI. See [the Node.js host](/community/workflows/node#how-it-differs-from-the-cli).
 
 **New**
