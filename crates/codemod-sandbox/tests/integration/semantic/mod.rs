@@ -12,4 +12,5 @@ pub mod fixtures;
 mod common_tests;
 mod javascript_tests;
 mod python_tests;
+mod summaries_tests;
 mod typescript_tests;

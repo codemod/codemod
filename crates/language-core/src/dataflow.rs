@@ -157,8 +157,11 @@ str_enum! {
         JsxAttribute => "jsx-attribute",
         /// The value is a JSX child.
         JsxChild => "jsx-child",
-        /// The value is returned from the function.
+        /// The value is returned from the function. Across calls: a call's
+        /// result comes from the callee's returned value.
         Return => "return",
+        /// Across calls: an argument is the callee's parameter.
+        Parameter => "parameter",
     }
 }
 
@@ -196,6 +199,26 @@ pub struct FlowOptions {
     /// callers, a return to its call sites). More are cut and `truncated` is
     /// set. None: the provider's default (16).
     pub max_callers: Option<u32>,
+    /// Answer the steps one edge away only, each with `depth` 1, without
+    /// walking further. `max_depth`, `stop_at` and `interprocedural` are
+    /// ignored. Default: false.
+    pub one_hop: bool,
+    /// With `one_hop`: follow values across calls to workspace functions in
+    /// the provider's scope, using each callee's summary (see
+    /// [`crate::FlowStep::crossing`]). Default: false.
+    pub across_calls: bool,
+}
+
+/// Which way a step crosses a call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Crossing {
+    /// Into the callee: an argument to its parameter, or (backward) a call's
+    /// result to the callee's returned values.
+    Into,
+    /// Out of the function to its callers: a returned value to each call
+    /// site, or (backward) a parameter to each caller's argument.
+    Out,
 }
 
 impl Default for FlowOptions {
@@ -207,6 +230,8 @@ impl Default for FlowOptions {
             stop_at: KindSet::default(),
             interprocedural: false,
             max_callers: None,
+            one_hop: false,
+            across_calls: false,
         }
     }
 }
@@ -236,6 +261,19 @@ pub struct FlowStep {
     /// file: its index in the result's `files`. None means this step's file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_file: Option<u32>,
+    /// One-hop answers only: the value is reported here but does not go on
+    /// through this node. A store into the heap, a value returned (it goes
+    /// on at the call sites, not at the function), or an argument of a
+    /// workspace function whose summary says the call's result does not
+    /// carry it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stop: bool,
+    /// One-hop answers with `across_calls` only: the step goes into a callee
+    /// or out to a caller. A walk that has gone into a callee should not
+    /// go out of it again: the value comes back through the call it went in
+    /// by, which the call's own step already covers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crossing: Option<Crossing>,
 }
 
 /// Steps in one file, with its content so callers can build a syntax tree.

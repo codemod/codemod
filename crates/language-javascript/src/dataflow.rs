@@ -777,6 +777,7 @@ impl<'s, 'a> Builder<'s, 'a> {
             let mut index = None;
             let mut import = None;
             let mut value_span = None;
+            let mut rest = false;
             match nodes.kind(declaration) {
                 AstKind::FormalParameter(parameter) => {
                     kind = FlowNodeKind::Parameter;
@@ -792,6 +793,7 @@ impl<'s, 'a> Builder<'s, 'a> {
                     if let AstKind::FormalParameters(parameters) = nodes.parent_kind(declaration) {
                         kind = FlowNodeKind::Parameter;
                         index = Some(parameters.items.len() as u32);
+                        rest = true;
                     }
                 }
                 AstKind::ImportSpecifier(specifier) => {
@@ -846,6 +848,9 @@ impl<'s, 'a> Builder<'s, 'a> {
             self.flow.nodes[binding as usize].index = index;
             self.flow.nodes[binding as usize].binding = true;
             self.binding_by_symbol[symbol.index()] = binding;
+            if rest {
+                self.flow.variadic.insert(binding, Variadic::Positional);
+            }
 
             if let Some((name, namespace)) = import {
                 if let AstKind::ImportDeclaration(import_declaration) =
@@ -1426,6 +1431,19 @@ impl<'s, 'a> Builder<'s, 'a> {
         };
 
         let mut args = Vec::with_capacity(arguments.len());
+        let spread = arguments
+            .iter()
+            .any(|argument| matches!(argument, Argument::SpreadElement(_)));
+        let arg_names: Box<[Option<Name>]> = if spread {
+            arguments
+                .iter()
+                .map(|argument| {
+                    matches!(argument, Argument::SpreadElement(_)).then(|| self.intern("..."))
+                })
+                .collect()
+        } else {
+            Box::default()
+        };
         for argument in arguments {
             args.push(self.node(argument.span()));
             let expression = match argument {
@@ -1460,6 +1478,7 @@ impl<'s, 'a> Builder<'s, 'a> {
             callee: callee_fact,
             callee_text: callee_name,
             args: args.into_boxed_slice(),
+            arg_names,
             is_new,
             is_jsx: false,
         });
@@ -1503,6 +1522,7 @@ impl<'s, 'a> Builder<'s, 'a> {
             callee,
             callee_text,
             args: Box::default(),
+            arg_names: Box::default(),
             is_new: false,
             is_jsx: true,
         });

@@ -15,9 +15,9 @@ mod types;
 
 pub use dataflow::{
     CallEdgeKind, CallGraphDirection, CallGraphEntry, CallGraphFile, CallGraphOptions,
-    CallGraphResult, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind, FlowOptions,
-    FlowResult, FlowStep, FunctionRef, KindSet, Mutation, MutationConfidence, MutationKind,
-    MutationOptions, MutationsResult, UnparsedFile,
+    CallGraphResult, Crossing, FileFlowSteps, FlowDirection, FlowEdgeKind, FlowNodeKind,
+    FlowOptions, FlowResult, FlowStep, FunctionRef, KindSet, Mutation, MutationConfidence,
+    MutationKind, MutationOptions, MutationsResult, UnparsedFile,
 };
 pub use entry_points::{
     declared_entry_points, glob_matches, EntryPoint, EntryPointRule, FunctionEntry,

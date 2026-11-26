@@ -6,6 +6,7 @@
 pub mod facts;
 pub mod once;
 pub mod query;
+pub mod summary;
 
 pub use facts::*;
 pub use query::{CallerIndex, CallerIndexSlot, FlowHost, QueryKind};

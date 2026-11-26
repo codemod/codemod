@@ -1770,8 +1770,16 @@ impl<'js> SgNodeRjs<'js> {
                     "stopAt",
                     "interprocedural",
                     "maxCallers",
+                    "oneHop",
+                    "acrossCalls",
                 ],
             )? {
+                if let Some(one_hop) = opts.get::<_, Option<bool>>("oneHop")? {
+                    flow_options.one_hop = one_hop;
+                }
+                if let Some(across) = opts.get::<_, Option<bool>>("acrossCalls")? {
+                    flow_options.across_calls = across;
+                }
                 if let Some(through_calls) = opts.get::<_, Option<bool>>("throughCalls")? {
                     flow_options.through_calls = through_calls;
                 }
@@ -1845,6 +1853,14 @@ impl<'js> SgNodeRjs<'js> {
                 object.set("index", or_null(&ctx, step.index)?)?;
                 object.set("depth", step.depth)?;
                 object.set("boundary", step.boundary)?;
+                if step.stop {
+                    object.set("stop", true)?;
+                }
+                match step.crossing {
+                    Some(language_core::Crossing::Into) => object.set("crossing", "into")?,
+                    Some(language_core::Crossing::Out) => object.set("crossing", "out")?,
+                    None => {}
+                }
                 result.set(index, object)?;
             }
             for (object, from) in links {

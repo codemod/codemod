@@ -87,6 +87,13 @@ pub trait FlowHost: Sync {
         Vec::new()
     }
     /// `path` as answers show it: relative to the workspace root, with `/`.
+    /// File scope: nothing outside the queried file is in scope, so a
+    /// cross-call step never leaves it. Prototype for one-hop cross-call
+    /// data flow.
+    fn single_file(&self) -> bool {
+        false
+    }
+
     fn relative_path(&self, path: &Path) -> String {
         path.to_string_lossy().replace('\\', "/")
     }
@@ -158,6 +165,9 @@ pub fn data_flow(
     range: ByteRange,
     options: FlowOptions,
 ) -> FlowResult {
+    if options.one_hop {
+        return crate::summary::one_hop(host, path, range, options);
+    }
     if options.interprocedural {
         return data_flow_interprocedural(host, path, range, options);
     }
@@ -249,6 +259,8 @@ pub fn data_flow(
                         ),
                     from: reached_by,
                     from_file: None,
+                    stop: false,
+                    crossing: None,
                 });
                 Some(steps.len() as u32 - 1)
             };
@@ -1853,7 +1865,7 @@ fn file_calls(
 /// Holds the [CallerIndex] between queries. Built once: threads that ask
 /// while it is being built wait for that build (see [`BuildOnce`]).
 #[derive(Default)]
-pub struct CallerIndexSlot(BuildOnce<CallerIndex>);
+pub struct CallerIndexSlot(BuildOnce<CallerIndex>, crate::summary::SummaryCache);
 
 impl CallerIndexSlot {
     fn get_or_build(&self, host: &dyn FlowHost) -> Arc<CallerIndex> {
@@ -1862,6 +1874,17 @@ impl CallerIndexSlot {
 
     pub fn clear(&self) {
         self.0.clear();
+        self.1.clear();
+    }
+
+    /// Function summaries kept between queries, cleared with the table.
+    pub(crate) fn summaries(&self) -> &crate::summary::SummaryCache {
+        &self.1
+    }
+
+    /// Build the table now (prototype measurement: its one-off cost).
+    pub fn warm(&self, host: &dyn FlowHost) {
+        let _ = self.get_or_build(host);
     }
 }
 
@@ -1871,6 +1894,62 @@ impl std::fmt::Debug for CallerIndexSlot {
             .field("built", &self.0.get().is_some())
             .finish()
     }
+}
+
+/// The calls of a function (in file scope, only those in its own file),
+/// as (calling file, call index, how). Callbacks are left out: the function
+/// is passed, not called, there.
+pub(crate) fn call_sites_of(
+    host: &dyn FlowHost,
+    path: &Path,
+    function: u32,
+) -> Vec<(PathBuf, u32, CallEdgeKind)> {
+    if host.single_file() {
+        let Some(flow) = host.flow(path) else {
+            return Vec::new();
+        };
+        let mut sites = Vec::new();
+        for (call_index, call) in flow.calls.iter().enumerate() {
+            if call.is_jsx {
+                continue;
+            }
+            for (target, f, via) in call_targets(host, path, &flow, call) {
+                if target == path && f == function && via != CallEdgeKind::Callback {
+                    sites.push((path.to_path_buf(), call_index as u32, via));
+                    break;
+                }
+            }
+        }
+        return sites;
+    }
+    let index = match host.caller_index() {
+        Some(slot) => slot.get_or_build(host),
+        None => Arc::new(CallerIndex::build(host)),
+    };
+    let Some(key) = index.key_for(host, &(path.to_path_buf(), Some(function))) else {
+        return Vec::new();
+    };
+    let mut sites = Vec::new();
+    for (file_id, call_index, via) in index.calls_to(host, &key) {
+        if via == CallEdgeKind::Callback {
+            continue;
+        }
+        let site = &index.paths[file_id as usize];
+        let Some(flow) = host.flow(site) else {
+            continue;
+        };
+        // The table is a snapshot: skip a call the file no longer has.
+        let expected = index
+            .sites
+            .get(site)
+            .and_then(|sites| sites.calls.get(call_index as usize))
+            .map(|(range, _)| *range);
+        if flow.calls.get(call_index as usize).map(|c| c.range) != expected {
+            continue;
+        }
+        sites.push((site.clone(), call_index, via));
+    }
+    sites
 }
 
 /// The function `key` stands for, as the callers walk reports it.
@@ -2142,6 +2221,8 @@ impl<'h> Walk<'h> {
             from: from.map(|(_, step)| step),
             from_file: from
                 .and_then(|(from_file, _)| (from_file != file).then_some(from_file as u32)),
+            stop: false,
+            crossing: None,
         };
         target.steps.push(step);
         let at = target.steps.len() as u32 - 1;
@@ -2461,7 +2542,7 @@ fn data_flow_interprocedural(
     }
 }
 
-fn is_boundary(kind: FlowNodeKind) -> bool {
+pub(crate) fn is_boundary(kind: FlowNodeKind) -> bool {
     matches!(
         kind,
         FlowNodeKind::Parameter

@@ -429,6 +429,10 @@ impl FlowHost for LightweightAnalyzer {
     fn caller_index(&self) -> Option<&CallerIndexSlot> {
         None
     }
+
+    fn single_file(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

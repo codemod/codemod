@@ -10,7 +10,7 @@
 use language_core::{ByteRange, FlowEdgeKind, FlowNodeKind, MutationConfidence, MutationKind};
 use language_flow::{
     Adjacency, CallFact, CalleeFact, FileFlow, FlowNode, FunctionFact, ImportFact, MutationFact,
-    Name,
+    Name, Variadic,
 };
 use ruff_python_ast::visitor::source_order::{self, SourceOrderVisitor, TraversalSignal};
 use ruff_python_ast::{self as ast, AnyNodeRef, Expr, Stmt};
@@ -159,7 +159,10 @@ impl<'s> Builder<'s> {
     fn new(source: &'s str) -> Self {
         Builder {
             source,
-            flow: FileFlow::default(),
+            flow: FileFlow {
+                bound_self: true,
+                ..FileFlow::default()
+            },
             out_edges: Vec::new(),
             in_edges: Vec::new(),
             by_span: FxHashMap::default(),
@@ -788,6 +791,31 @@ impl<'s> Builder<'s> {
         all
     }
 
+    /// Positions of `*args` and `**kwargs` in [`Self::parameters`]' order.
+    fn variadic_positions(parameters: &ast::Parameters) -> [(Option<usize>, Variadic); 2] {
+        let positional = parameters.posonlyargs.len() + parameters.args.len();
+        let vararg = parameters.vararg.as_ref().map(|_| positional);
+        let kwarg = parameters
+            .kwarg
+            .as_ref()
+            .map(|_| positional + usize::from(vararg.is_some()) + parameters.kwonlyargs.len());
+        [(vararg, Variadic::Positional), (kwarg, Variadic::Keywords)]
+    }
+
+    /// Marks the binding at `position` as variadic, if it is.
+    fn mark_variadic(
+        &mut self,
+        binding: u32,
+        position: usize,
+        variadic: &[(Option<usize>, Variadic); 2],
+    ) {
+        for (at, kind) in variadic {
+            if *at == Some(position) {
+                self.flow.variadic.insert(binding, *kind);
+            }
+        }
+    }
+
     fn function_def(&mut self, function: &ast::StmtFunctionDef) {
         let class_node = self.class_scope();
         let parent = self.function();
@@ -856,6 +884,7 @@ impl<'s> Builder<'s> {
                 callee: CalleeFact::Node(callee),
                 callee_text,
                 args: vec![node].into_boxed_slice(),
+                arg_names: Box::default(),
                 is_new: false,
                 is_jsx: false,
             });
@@ -866,6 +895,7 @@ impl<'s> Builder<'s> {
 
         // Defaults and annotations are evaluated where the function is defined.
         let parameters = Self::parameters(&function.parameters);
+        let variadic = Self::variadic_positions(&function.parameters);
         let mut evaluated = Vec::with_capacity(parameters.len());
         for (parameter, default) in &parameters {
             let default = default.map(|d| self.expr(d));
@@ -892,6 +922,7 @@ impl<'s> Builder<'s> {
                 import: None,
             });
             self.flow.nodes[binding as usize].index = Some(position as u32);
+            self.mark_variadic(binding, position, &variadic);
             if let Some(default) = default {
                 self.edge(default, binding, FlowEdgeKind::Assign);
             }
@@ -1341,6 +1372,11 @@ impl<'s> Builder<'s> {
             .as_deref()
             .map(Self::parameters)
             .unwrap_or_default();
+        let variadic = lambda
+            .parameters
+            .as_deref()
+            .map(Self::variadic_positions)
+            .unwrap_or([(None, Variadic::Positional), (None, Variadic::Keywords)]);
         let defaults: Vec<Option<u32>> = parameters
             .iter()
             .map(|(_, default)| default.map(|d| self.expr(d)))
@@ -1354,6 +1390,7 @@ impl<'s> Builder<'s> {
                 import: None,
             });
             self.flow.nodes[binding as usize].index = Some(position as u32);
+            self.mark_variadic(binding, position, &variadic);
             if let Some(default) = default {
                 self.edge(default, binding, FlowEdgeKind::Assign);
             }
@@ -1441,6 +1478,32 @@ impl<'s> Builder<'s> {
             .iter()
             .chain(call.arguments.keywords.iter().map(|k| &k.value))
             .collect();
+        // Keyword and unpacked arguments, by position in `args`.
+        let named = call
+            .arguments
+            .args
+            .iter()
+            .any(|a| matches!(a, Expr::Starred(_)))
+            || !call.arguments.keywords.is_empty();
+        let arg_names: Box<[Option<Name>]> = if named {
+            let positional = call.arguments.args.iter().map(|a| match a {
+                Expr::Starred(_) => Some("*"),
+                _ => None,
+            });
+            let keywords = call
+                .arguments
+                .keywords
+                .iter()
+                .map(|k| Some(k.arg.as_ref().map_or("**", |name| name.as_str())));
+            positional
+                .chain(keywords)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|name| name.map(|name| self.intern(name)))
+                .collect()
+        } else {
+            Box::default()
+        };
         for argument in argument_exprs {
             let value = self.expr(argument);
             self.edge(value, call_node, FlowEdgeKind::Argument);
@@ -1474,6 +1537,7 @@ impl<'s> Builder<'s> {
             callee,
             callee_text,
             args: args.into_boxed_slice(),
+            arg_names,
             is_new: false,
             is_jsx: false,
         });

@@ -49,6 +49,15 @@ pub enum Accessor {
     Set,
 }
 
+/// What a variadic parameter collects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Variadic {
+    /// `...rest`, `*args`: the positional arguments past the others.
+    Positional,
+    /// `**kwargs`: the keyword arguments no other parameter takes.
+    Keywords,
+}
+
 /// What a call calls, as far as one module can tell.
 #[derive(Debug, Clone)]
 pub enum CalleeFact {
@@ -67,6 +76,11 @@ pub struct CallFact {
     pub callee: CalleeFact,
     pub callee_text: Name,
     pub args: Box<[u32]>,
+    /// How each argument is passed, by position in `args`, when any is not
+    /// plain positional: `Some(name)` for a keyword argument (Python
+    /// `f(x=1)`), `Some("*")` / `Some("**")` for unpacking, `Some("...")` for
+    /// a spread. Empty when every argument is positional.
+    pub arg_names: Box<[Option<Name>]>,
     pub is_new: bool,
     pub is_jsx: bool,
 }
@@ -152,6 +166,12 @@ pub struct FileFlow {
     pub declared_types: FxHashMap<u32, Name>,
     /// Function index -> the decorators written on it, as written.
     pub decorators: FxHashMap<u32, Vec<Name>>,
+    /// Parameter bindings that collect the rest of the arguments: `...rest`,
+    /// `*args` (positional) and `**kwargs` (keywords).
+    pub variadic: FxHashMap<u32, Variadic>,
+    /// A method's first parameter is the object it is called on (Python's
+    /// `self`), so a method call's arguments start at its second parameter.
+    pub bound_self: bool,
     /// Syntax the builder saw but does not model, by what it is. Values that
     /// pass through it are not connected to where they go. Used to measure
     /// coverage; queries do not read it.

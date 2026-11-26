@@ -98,6 +98,20 @@ impl Builtin {
     }
 }
 
+/// Whether a `sources` / `uses` edge crosses a call: into a callee (an
+/// argument to its parameter, a call to its returned values), or out of a
+/// function to its callers (a returned value to the call sites, a parameter
+/// to the callers' arguments).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Crossing {
+    Into,
+    Out,
+}
+
+/// Whether `dataflow(lang)` follows values across calls when no
+/// `interprocedural` option is given.
+const ACROSS_CALLS_BY_DEFAULT: bool = false;
+
 /// Edges stored for one node: the node and its edge objects.
 #[derive(Trace, Clone)]
 struct Stored<'js> {
@@ -112,6 +126,10 @@ struct Stored<'js> {
 pub struct Lookup<'js> {
     #[qjs(skip_trace)]
     builtin: Option<(Builtin, Family)>,
+    /// `sources` and `uses`: follow values across calls (with function
+    /// summaries), as `dataflow(lang, { interprocedural })` asked.
+    #[qjs(skip_trace)]
+    across_calls: bool,
     /// What the entries hold: edges, a crawl's result, or entry points'
     /// reasons. Only edges can be crawled.
     #[qjs(skip_trace)]
@@ -141,6 +159,7 @@ impl<'js> Lookup<'js> {
     fn builtin(kind: Builtin, family: Family) -> Self {
         Self {
             builtin: Some((kind, family)),
+            across_calls: false,
             shape: Shape::Edges,
             entries: Vec::new(),
             index: HashMap::new(),
@@ -150,6 +169,7 @@ impl<'js> Lookup<'js> {
     fn stored(entries: Vec<Stored<'js>>, index: HashMap<String, usize>, shape: Shape) -> Self {
         Self {
             builtin: None,
+            across_calls: false,
             shape,
             entries,
             index,
@@ -181,12 +201,27 @@ impl<'js> Lookup<'js> {
     /// The edges leaving `node`: an array (or the type, for `typeOf`), or
     /// undefined when there are none.
     fn edges(&self, ctx: &Ctx<'js>, node: &Value<'js>) -> Result<Value<'js>> {
+        Ok(self.edges_crossing(ctx, node)?.0)
+    }
+
+    /// [`Self::edges`], and for each edge whether it steps into a callee or
+    /// out to a function's callers (`sources` and `uses` across calls), for
+    /// `crawl` to match calls with. Empty when no edge crosses a call.
+    fn edges_crossing(
+        &self,
+        ctx: &Ctx<'js>,
+        node: &Value<'js>,
+    ) -> Result<(Value<'js>, Vec<Option<Crossing>>)> {
+        let mut crossings = Vec::new();
         let Some((kind, family)) = self.builtin else {
             let key = key_of(ctx, node, self.what())?;
-            return Ok(match self.index.get(&key) {
-                Some(&i) => self.entries[i].value.clone(),
-                None => Value::new_undefined(ctx.clone()),
-            });
+            return Ok((
+                match self.index.get(&key) {
+                    Some(&i) => self.entries[i].value.clone(),
+                    None => Value::new_undefined(ctx.clone()),
+                },
+                crossings,
+            ));
         };
         let class = as_node(ctx, node, kind.name())?;
         let sg = class.borrow();
@@ -230,25 +265,37 @@ impl<'js> Lookup<'js> {
                 }
             }
             Builtin::Sources | Builtin::Uses => {
+                // One hop, answered directly; across calls when on.
+                let options = Object::new(ctx.clone())?;
+                options.set("oneHop", true)?;
+                options.set("acrossCalls", self.across_calls)?;
+                let options = Opt(Some(options.into_value()));
                 let found = if kind == Builtin::Sources {
                     renamed(
                         ctx,
-                        sg.flows_from(ctx.clone(), Opt(None)),
+                        sg.flows_from(ctx.clone(), options),
                         "flowsFrom()",
                         kind,
                     )?
                 } else {
-                    renamed(ctx, sg.flows_to(ctx.clone(), Opt(None)), "flowsTo()", kind)?
+                    renamed(ctx, sg.flows_to(ctx.clone(), options), "flowsTo()", kind)?
                 };
                 for step in array_items(&found)? {
                     let step: Object = step.get()?;
-                    if step.get::<_, Option<u32>>("depth")? != Some(1) {
-                        continue;
-                    }
                     let edge = Object::new(ctx.clone())?;
                     for field in ["node", "kind", "via", "name", "index", "boundary"] {
                         edge.set(field, step.get::<_, Value>(field)?)?;
                     }
+                    if step.get::<_, Option<bool>>("stop")? == Some(true) {
+                        edge.set("stop", true)?;
+                    }
+                    crossings.push(
+                        match step.get::<_, Option<String>>("crossing")?.as_deref() {
+                            Some("into") => Some(Crossing::Into),
+                            Some("out") => Some(Crossing::Out),
+                            _ => None,
+                        },
+                    );
                     push(edge)?;
                 }
             }
@@ -290,17 +337,20 @@ impl<'js> Lookup<'js> {
             }
             Builtin::TypeOf => {
                 let found = renamed(ctx, sg.type_info(ctx.clone()), "typeInfo()", kind)?;
-                return Ok(if found.is_null() {
-                    Value::new_undefined(ctx.clone())
-                } else {
-                    found
-                });
+                return Ok((
+                    if found.is_null() {
+                        Value::new_undefined(ctx.clone())
+                    } else {
+                        found
+                    },
+                    crossings,
+                ));
             }
         }
         if edges.is_empty() {
-            return Ok(Value::new_undefined(ctx.clone()));
+            return Ok((Value::new_undefined(ctx.clone()), crossings));
         }
-        edges.into_js(ctx)
+        Ok((edges.into_js(ctx)?, crossings))
     }
 
     fn list(&self, ctx: &Ctx<'js>, method: &str) -> Result<&[Stored<'js>]> {
@@ -664,14 +714,49 @@ pub(crate) fn call_graph_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Object<
     )
 }
 
-/// `dataflow(lang)`: `{ sources, uses }`.
-pub(crate) fn dataflow_rjs<'js>(ctx: Ctx<'js>, lang: String) -> Result<Object<'js>> {
+/// `dataflow(lang, { interprocedural })`: `{ sources, uses }`. With
+/// `interprocedural`, values are followed across calls, using each called
+/// function's summary of what it returns and stores.
+pub(crate) fn dataflow_rjs<'js>(
+    ctx: Ctx<'js>,
+    lang: String,
+    options: Opt<Value<'js>>,
+) -> Result<Object<'js>> {
     let family = family_of(&ctx, "dataflow", &lang)?;
-    pair(
-        &ctx,
-        family,
-        &[("sources", Builtin::Sources), ("uses", Builtin::Uses)],
-    )
+    let mut across_calls = ACROSS_CALLS_BY_DEFAULT;
+    match options.0 {
+        None => {}
+        Some(value) if value.is_undefined() || value.is_null() => {}
+        Some(value) => {
+            let Some(object) = value.into_object() else {
+                return Err(Exception::throw_type(
+                    &ctx,
+                    "dataflow(lang, options): options must be an object",
+                ));
+            };
+            for key in object.keys::<String>() {
+                let key = key?;
+                if key != "interprocedural" {
+                    return Err(Exception::throw_type(
+                        &ctx,
+                        &format!(
+                            "dataflow(lang, options): unknown option `{key}`; expected `interprocedural`"
+                        ),
+                    ));
+                }
+            }
+            if let Some(on) = object.get::<_, Option<bool>>("interprocedural")? {
+                across_calls = on;
+            }
+        }
+    }
+    let object = Object::new(ctx.clone())?;
+    for (name, kind) in [("sources", Builtin::Sources), ("uses", Builtin::Uses)] {
+        let mut lookup = Lookup::builtin(kind, family);
+        lookup.across_calls = across_calls;
+        object.set(name, Class::instance(ctx.clone(), lookup)?)?;
+    }
+    Ok(object)
 }
 
 /// `symbols(lang)`: the `definition`, `references`, `imports` and
@@ -1243,7 +1328,12 @@ fn crawl<'js>(
 
     let mut entries: Vec<Stored<'js>> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
-    let mut queue: VecDeque<(String, Value<'js>)> = VecDeque::new();
+    // A node is walked on from at most twice: before and after the crawl
+    // stepped into a callee. Once inside a callee, the crawl does not step
+    // out to the callee's other callers: the value comes back to the call
+    // it went in by, through that call's own `argument` edge.
+    let mut walked: HashSet<(String, bool)> = HashSet::new();
+    let mut queue: VecDeque<(String, Value<'js>, bool)> = VecDeque::new();
     let mut nodes = Nodes::default();
     for node in starts {
         let key = key_of(ctx, &node, "crawl(lookups, start)")?;
@@ -1258,33 +1348,45 @@ fn crawl<'js>(
             node: node.clone(),
             value: Value::new_null(ctx.clone()),
         });
-        queue.push_back((key, node));
+        walked.insert((key.clone(), false));
+        queue.push_back((key, node, false));
     }
-    while let Some((key, node)) = queue.pop_front() {
+    while let Some((key, node, inside)) = queue.pop_front() {
         if stop.contains(&key) {
             continue;
         }
         for lookup in &walk {
-            let edges = lookup.edges(ctx, &node)?;
-            for edge in array_items(&edges)? {
+            let (edges, crossings) = lookup.edges_crossing(ctx, &node)?;
+            for (at, edge) in array_items(&edges)?.into_iter().enumerate() {
+                let crossing = crossings.get(at).copied().flatten();
+                if inside && crossing == Some(Crossing::Out) {
+                    continue;
+                }
                 let edge: Object = edge.get()?;
                 let target: Value = edge.get("node")?;
                 let target_key = key_of(ctx, &target, "crawl()")?;
-                if index.contains_key(&target_key) {
+                if !index.contains_key(&target_key) {
+                    let reached = Object::new(ctx.clone())?;
+                    for prop in edge.props::<String, Value>() {
+                        let (name, value) = prop?;
+                        reached.set(name, value)?;
+                    }
+                    reached.set("from", node.clone())?;
+                    index.insert(target_key.clone(), entries.len());
+                    entries.push(Stored {
+                        node: target.clone(),
+                        value: reached.into_value(),
+                    });
+                }
+                // `stop: true`: the value ends here (stored, returned, or
+                // passed to a call whose result doesn't carry it).
+                if edge.get::<_, Option<bool>>("stop")? == Some(true) {
                     continue;
                 }
-                let reached = Object::new(ctx.clone())?;
-                for prop in edge.props::<String, Value>() {
-                    let (name, value) = prop?;
-                    reached.set(name, value)?;
+                let inside = inside || crossing == Some(Crossing::Into);
+                if walked.insert((target_key.clone(), inside)) {
+                    queue.push_back((target_key, target, inside));
                 }
-                reached.set("from", node.clone())?;
-                index.insert(target_key.clone(), entries.len());
-                entries.push(Stored {
-                    node: target.clone(),
-                    value: reached.into_value(),
-                });
-                queue.push_back((target_key, target));
             }
         }
     }

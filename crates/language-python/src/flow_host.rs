@@ -693,6 +693,10 @@ impl FlowHost for PyFlow {
         Some(&self.callers)
     }
 
+    fn single_file(&self) -> bool {
+        self.root.is_none()
+    }
+
     /// `repo.save()` the values left unresolved (`repo` is a parameter, a
     /// field, a call's result): the workspace methods ty says `save` is.
     fn typed_method_targets(
