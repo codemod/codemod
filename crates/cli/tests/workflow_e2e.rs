@@ -932,6 +932,18 @@ export default async function main() {
         "{}",
         text(&output)
     );
+    // Said once, on the step's line; the run's ending only names the step.
+    assert_eq!(
+        text(&output).matches("uncommitted changes").count(),
+        1,
+        "{}",
+        text(&output)
+    );
+    assert!(
+        text(&output).contains("The run failed: step 'Replace var' failed (see above)"),
+        "{}",
+        text(&output)
+    );
     assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
 
     let output = run_strict(&fixture, &["--allow-dirty"]);

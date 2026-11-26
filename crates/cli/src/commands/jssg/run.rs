@@ -484,10 +484,16 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let seconds = duration_ms / 1000.0;
     println!("✨ Done in {seconds:.3}s");
 
-    let collected_errors = execution_errors
+    // A file that could not be written is tried again after each later file
+    // and at the end: report its error once.
+    let mut seen = std::collections::HashSet::new();
+    let collected_errors: Vec<String> = execution_errors
         .lock()
         .map(|errors| errors.clone())
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|error| seen.insert(error.clone()))
+        .collect();
     if !collected_errors.is_empty() {
         return Err(anyhow::anyhow!("{}", collected_errors.join("\n\n")));
     }

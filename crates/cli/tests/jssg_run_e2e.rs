@@ -160,6 +160,27 @@ fn jssg_run_drops_a_failed_files_changes_to_other_files() {
     );
 }
 
+/// A file that can't be written fails the run, and says so once.
+#[cfg(unix)]
+#[test]
+fn jssg_run_reports_a_write_error_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new(&[("src/ro.ts", "const ro = 'OLD';\n")]);
+    let ro = fixture.target.path().join("src/ro.ts");
+    fs::set_permissions(&ro, fs::Permissions::from_mode(0o444)).unwrap();
+    let output = fixture.run(&[]);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert_eq!(
+        text(&output)
+            .matches("Failed to write modified file")
+            .count(),
+        1,
+        "{}",
+        text(&output)
+    );
+    assert_eq!(fixture.read("src/ro.ts"), "const ro = 'OLD';\n");
+}
+
 /// A dry run writes nothing, and shows the shared file's diff with every
 /// file's change.
 #[test]

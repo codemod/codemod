@@ -714,6 +714,11 @@ pub(crate) fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumabl
             );
         }
         Ending::Failed(error) => {
+            // A failed step's error is already on its `✗` line.
+            let error = match failed_step(error) {
+                Some(label) => format!("step '{label}' failed (see above)"),
+                None => error.clone(),
+            };
             eprintln!(
                 "\n{} {error}{}",
                 style("The run failed:").red().bold(),
@@ -730,6 +735,14 @@ pub(crate) fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumabl
     if let Some(line) = output_summary(outcome.report.ending.output(), &run.id, resumable) {
         eprintln!("{line}");
     }
+}
+
+/// The label of the step a run's error says failed (`StepError: step 'x'
+/// failed: …`, as the engine reports a failed step), whose own line already
+/// showed the error.
+fn failed_step(error: &str) -> Option<&str> {
+    let rest = error.strip_prefix("StepError: step '")?;
+    rest.find("' failed: ").map(|end| &rest[..end])
 }
 
 /// How much of a run's output the text format shows.
