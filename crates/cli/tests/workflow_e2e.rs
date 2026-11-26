@@ -96,6 +96,37 @@ fn text(output: &Output) -> String {
     )
 }
 
+#[test]
+fn inspect_marks_step_kinds_it_cannot_determine_statically() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { step, sleep, approval } from "codemod/workflow";
+export default async function main({ params }) {
+  throw new Error("inspect must not run the workflow");
+  await step("Wait", sleep(1));
+  await step("Choose", params.wait ? sleep(1) : approval("Continue?"));
+}
+"#,
+    );
+    let workflow = fixture.package.path().join("workflow.ts");
+    let args = ["workflow", "inspect", "-w", workflow.to_str().unwrap()];
+    let output = fixture.codemod(&[&args[..], &["--format", "json"]].concat());
+    assert!(output.status.success(), "{}", text(&output));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["steps"],
+        serde_json::json!([
+            { "label": "Wait", "kind": "sleep" },
+            { "label": "Choose", "kind": "dynamic" },
+        ])
+    );
+    let output = fixture.codemod(&args);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("Choose (dynamic)"));
+}
+
 /// The run id from `workflow list`, most recent first.
 fn latest_run_id(fixture: &Fixture) -> String {
     let output = fixture.codemod(&["workflow", "list"]);

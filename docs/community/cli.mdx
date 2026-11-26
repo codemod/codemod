@@ -724,7 +724,7 @@ Describe a workflow without running it: what a setup form needs.
 npx codemod workflow inspect -w <workflow.ts|workflow.yaml|directory> [--format json]
 ```
 
-`json` prints `workflow`, `language`, `params` (each declared param's `name`, `type` as written, `optional`, `description` from its doc comment, and `default` from an `@default` tag), `modules` (what it imports), `capabilities` (always empty: callbacks get none), `requestedCapabilities` (what its `codemod.yaml` asks for, which is ignored), `uses` (whether it has `http`, `approval`, `agent`, `shell`, `git`, `codemod`, `install_skill`, `wait` and `assess` calls) and `steps`: each `step(...)` call in the source, with its `label` when it is a string and its `kind`. A step in a loop is listed once.
+`json` prints `workflow`, `language`, `params` (each declared param's `name`, `type` as written, `optional`, `description` from its doc comment, and `default` from an `@default` tag), `modules` (what it imports), `capabilities` (always empty: callbacks get none), `requestedCapabilities` (what its `codemod.yaml` asks for, which is ignored), `uses` (whether it has `http`, `approval`, `agent`, `shell`, `git`, `codemod`, `install_skill`, `wait` and `assess` calls) and `steps`: each `step(...)` call in the source, with its `label` when it is a string and its `kind`. A step in a loop is listed once. If `inspect` can't tell which task the step will run from its source, its `kind` is `"dynamic"`; `inspect` does not evaluate the workflow to find out.
 
 **`workflow send`**
 
