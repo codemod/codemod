@@ -189,11 +189,19 @@ pub async fn handler(
     let download_progress_bar = Some(download_progress_bar());
     let registry_client = create_registry_client(args.registry.clone())?;
     let registry_url = registry_client.config.default_registry.clone();
-    println!(
-        "{} 🔍 Resolving package from registry: {} ...",
-        style("[1/2]").bold().dim(),
-        registry_url
-    );
+    if butterflow_core::registry::is_local_source(&args.package) {
+        println!(
+            "{} 📁 Using local package: {}",
+            style("[1/2]").bold().dim(),
+            args.package
+        );
+    } else {
+        println!(
+            "{} 🔍 Resolving package from registry: {} ...",
+            style("[1/2]").bold().dim(),
+            registry_url
+        );
+    }
     let resolved_package = match registry_client
         .resolve_package(
             &args.package,

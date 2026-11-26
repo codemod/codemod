@@ -435,6 +435,13 @@ fn codemod_run_where_some_files_failed_exits_2() {
         "{}",
         text(&output)
     );
+    // A local directory is not looked up in the registry.
+    assert!(
+        text(&output).contains(&format!("Using local package: {package}"))
+            && !text(&output).contains("from registry"),
+        "{}",
+        text(&output)
+    );
 }
 
 #[test]
