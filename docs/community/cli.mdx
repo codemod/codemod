@@ -952,7 +952,7 @@ Initialize a new Codemod package project.
 npx codemod init [PATH] [options]
 ```
 
-In interactive mode, `codemod init` prompts you to choose between a `jssg codemod`, `multi-step workflow`, or `agent skill codemod`.
+In interactive mode, `codemod init` prompts you to choose between a `jssg codemod`, `multi-step workflow`, or `agent skill codemod`. Without a terminal to ask on, or in CI, it behaves as `--no-interactive`: the values come from flags.
 
 An `ast-grep-js` or `hybrid` package keeps its workflow in `src/workflow.ts`, with its transform there as a [`forEachFile`](/community/workflows/reference#foreachfileselector-callback) callback that parses each file with `parse(file, { language })` and rewrites it. A `hybrid` package also has shell scripts in `src/scripts/`, which the workflow runs as ``shell`${import.meta.dirname}/scripts/setup.sh` ``, and ast-grep rules in `src/rules/`. Its tests are in `tests/workflow.test.ts`, which runs the workflow on each fixture in `tests/fixtures` with `node:test`; the `test` script runs them.
 

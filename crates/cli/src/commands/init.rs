@@ -75,7 +75,7 @@ pub struct Command {
 }
 
 const INIT_AFTER_HELP: &str = "\
-Non-interactive mode (--no-interactive) requires:
+Non-interactive mode (--no-interactive, no terminal to ask on, or CI) requires:
   PATH, --language, --description, --author, --license
   --project-type                  for workflow packages (omit with --skill)
   --package-manager               for workflow packages (any --project-type, including legacy
@@ -280,11 +280,15 @@ static CHECKMARK: Emoji<'_, '_> = Emoji("✓ ", "");
 
 pub fn handler(args: &Command) -> Result<()> {
     let git_repository_url = args.git_repository_url.clone();
+    // No terminal to ask on (or CI): behave as --no-interactive.
+    let no_interactive = !crate::utils::interactive::is_interactive(args.no_interactive);
 
-    let (project_path, project_name, git_repository_url) = if args.no_interactive {
+    let (project_path, project_name, git_repository_url) = if no_interactive {
         let project_path = match args.path.clone() {
             Some(path) => path,
-            None => return Err(anyhow!("Path argument is required")),
+            None => return Err(anyhow!(
+                "Path argument is required without a terminal to ask on (or with --no-interactive)"
+            )),
         };
 
         let project_name = match args.name.clone() {
@@ -333,7 +337,7 @@ pub fn handler(args: &Command) -> Result<()> {
         ));
     }
 
-    let config = if args.no_interactive {
+    let config = if no_interactive {
         let package_behavior = package_behavior_from_flags(args)?;
 
         let project_type = if package_behavior.includes_workflow() {
