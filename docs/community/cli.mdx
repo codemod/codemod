@@ -508,14 +508,17 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
   The CLI creates parent directories as needed and overwrites the file with the current run's data.
 </ResponseField>
 
-**Exit codes** (`workflow run`, `workflow resume`, `codemod <package>`):
+#### Exit codes
+
+`workflow run`, `workflow resume` and `codemod <package>` exit with:
 
 | Code | Meaning |
 | ---- | ------- |
-| `0` | The run finished, or is waiting for an approval. |
+| `0` | The run finished. |
 | `1` | The run failed, was paused (Ctrl-C), canceled, or rejected at an approval. Also: a dry run reached an approval nobody could answer (a dry run is not saved, so it cannot wait; pass `--approve`, or drive it with `--control stdio`). |
 | `2` | The run finished, but some files failed. The other files' changes were written (in a dry run, nothing was), and the output ends with how many failed. A resumed run counts the files that failed in steps it reused. Also: the workflow called [`fail()`](/community/workflows/reference#failing-a-run-with-a-report) (the run is `failed`, and keeps its output). |
-| other | The workflow called `fail(message, { exitCode })` with that code (1 to 125). |
+| `3` | The run is waiting for input: it stopped at an approval nobody could answer (`--no-interactive`, CI, or answered "later"). It is saved; the last line names the command that continues it, `codemod workflow resume --id <ID> --approve <QUESTION_ID>`. |
+| other | The workflow called `fail(message, { exitCode })` with that code (1 to 125). A workflow that passes `3` exits like a waiting run: check `workflow status` to tell them apart. |
 
 **`workflow resume`**
 

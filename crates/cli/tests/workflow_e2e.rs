@@ -446,7 +446,7 @@ export default async function main() {
     );
 
     let output = fixture.run(&[]);
-    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
     assert!(
         text(&output).contains("Waiting for approval"),
         "{}",

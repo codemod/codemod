@@ -383,7 +383,7 @@ fn closing_stdin_pauses_the_run() {
 fn a_canceled_run_is_resumed_only_with_force() {
     let fixture = Fixture::new(TWO_APPROVALS);
     let output = fixture.run(&["--format", "jsonl"]);
-    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
     let id = run_id(&events(&output));
 
     let canceled = fixture.codemod(&["workflow", "cancel", "--id", &id]);
@@ -431,7 +431,7 @@ fn resume_approves_only_the_question_it_names() {
         "approval:1",
         "--no-interactive",
     ]);
-    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
     assert!(
         text(&output).contains("--approve approval:3"),
         "{}",
@@ -453,6 +453,31 @@ fn resume_approves_only_the_question_it_names() {
     ]);
     assert!(output.status.success(), "{}", text(&output));
     assert_eq!(fixture.status(&id)["status"], "succeeded");
+}
+
+#[test]
+fn a_run_waiting_for_an_approval_exits_3_with_the_command_that_continues_it() {
+    let fixture = Fixture::new(TWO_APPROVALS);
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    let shown = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        shown.contains("codemod workflow resume --id") && shown.contains("--approve approval:1"),
+        "{shown}"
+    );
+
+    // JSONL: stdout stays events; one line on stderr says how to go on.
+    let output = fixture.run(&["--format", "jsonl"]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    let id = run_id(&events(&output));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "codemod workflow resume --id {id} --approve approval:1"
+        )),
+        "{stderr}"
+    );
+    assert_eq!(fixture.status(&id)["status"], "awaiting-approval");
 }
 
 #[test]

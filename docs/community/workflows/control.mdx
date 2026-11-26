@@ -81,7 +81,7 @@ Questions come one at a time. When one is answered, or closed because the run st
 
 **A run paused at a question still waits for it.** When you `stop` or close stdin while a `question` is open, the run is `paused`, and `run_finished` (and `workflow status --format json`) keep that question's `question` id and `awaiting` message. The approval step is `awaiting-approval`, not `canceled`. Resume it with `workflow resume --id <ID> --approve <question id>` to give that approval, or without `--approve` to be asked again.
 
-**A rejected approval ends the run.** Nothing after it runs, steps running alongside stop, and what earlier steps changed stays changed. The process exits with `1`, as it does for `paused` and `canceled`; `run_finished` has the status.
+**A rejected approval ends the run.** Nothing after it runs, steps running alongside stop, and what earlier steps changed stays changed. The process exits with `1`, as it does for `paused` and `canceled`, and with `3` for `awaiting-approval` (see [exit codes](/community/cli#exit-codes)); `run_finished` has the status.
 
 A dry run with a control channel waits at its questions like a real run, and `approve` lets it go on and report its diff. Without one, a dry run that reaches an approval exits with `1`: it is not saved, so it cannot wait to be resumed.
 

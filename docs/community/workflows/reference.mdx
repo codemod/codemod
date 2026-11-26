@@ -160,7 +160,7 @@ An `astGrep` step also rejects a `basePath` that resolves outside the target.
 - The callback may be async: `async (file) => { ... }`.
 - Return a value to collect it; returned values become `result.outputs`, in path order. Return nothing to collect nothing.
 - A callback that throws fails only that file; the error appears in `result.failures`, and the file and its error are logged under the step.
-- When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again. A run with a partial step exits with code 2 when it finishes (see [exit codes](/community/cli#codemod-workflow)); a `codemod(...)` step is partial when files failed in the codemod it ran.
+- When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again. A run with a partial step exits with code 2 when it finishes (see [exit codes](/community/cli#exit-codes)); a `codemod(...)` step is partial when files failed in the codemod it ran.
 - When the callback fails on every file it ran on, the step fails, with the first file's error.
 - To count what a callback found, return it: outputs are values, so add them up after the step, or give a [reducer](#reducing-outputs) that adds them up as files finish.
 
@@ -785,7 +785,7 @@ export default async function main({ params }: { params: { team?: string } }) {
 `await step(approval("Ship it?"))` asks before continuing.
 
 - In the launcher, `y` approves, `n` rejects, and `l` stops the run there to resume later. In a plain interactive terminal, answering **No** stops the run there to resume later.
-- With `--no-interactive`, the run stops at the approval, waiting, and exits successfully. Continue it with `codemod workflow resume --id <run-id> --approve <question-id>` to give that approval only (the run stops at the next one), or `--approve` alone to give it and every later one. Pass `--approve` to `workflow run` to approve everything up front.
+- With `--no-interactive`, the run stops at the approval, waiting, and exits with code 3 (see [exit codes](/community/cli#exit-codes)), so a CI job does not pass with the run half done. Continue it with `codemod workflow resume --id <run-id> --approve <question-id>` to give that approval only (the run stops at the next one), or `--approve` alone to give it and every later one. Pass `--approve` to `workflow run` to approve everything up front.
 - A dry run is not saved, so it cannot wait: one that reaches an approval stops, exits with code 1 and says to pass `--approve`.
 - With [`--control stdio`](/community/workflows/control), the run asks the program driving it and waits for the answer, dry runs included.
 

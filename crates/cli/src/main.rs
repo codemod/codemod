@@ -438,6 +438,13 @@ async fn main() {
             }
             exit_with_code(workflow_exec::EXIT_FAILED_FILES);
         }
+        if let Some(waiting) = error.downcast_ref::<workflow_exec::WaitingForInput>() {
+            // The text output already showed the question and the command.
+            if waiting.quiet {
+                eprintln!("{waiting}");
+            }
+            exit_with_code(workflow_exec::EXIT_WAITING);
+        }
         if let Some(failed) = error.downcast_ref::<workflow_exec::FailedByWorkflow>() {
             exit_with_code(failed.exit_code);
         }

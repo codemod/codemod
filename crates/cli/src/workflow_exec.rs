@@ -308,10 +308,20 @@ impl ExecOutcome {
         }
     }
 
-    /// Like [`Self::ended`], but a run that finished with failed files is
-    /// an error too: [`FinishedWithFailedFiles`], exit code 2.
+    /// Like [`Self::ended`], but a run that waits for an approval is an
+    /// error too ([`WaitingForInput`], exit code 3), and so is one that
+    /// finished with failed files ([`FinishedWithFailedFiles`], exit code 2).
     pub fn result(&self) -> Result<()> {
         self.ended()?;
+        if matches!(self.report.ending, Ending::AwaitingApproval(_)) {
+            let run = &self.report.run;
+            return Err(WaitingForInput {
+                run_id: run.id.clone(),
+                question: run.question.clone(),
+                quiet: self.format == OutputFormat::Jsonl,
+            }
+            .into());
+        }
         match self.failed_files() {
             0 => Ok(()),
             failed => Err(FinishedWithFailedFiles {
@@ -327,6 +337,47 @@ impl ExecOutcome {
 /// The exit code of a run that finished, but with some files failed. A run
 /// that failed outright exits with 1.
 pub const EXIT_FAILED_FILES: i32 = 2;
+
+/// The exit code of a run that stopped to wait for input (an approval):
+/// it is saved, and `workflow resume` continues it. Not 0, so a CI job does
+/// not pass with half a migration done; not 1, which is a failure.
+pub const EXIT_WAITING: i32 = 3;
+
+/// A run stopped to wait for an approval. The CLI exits with
+/// [`EXIT_WAITING`]; the text output already said how to go on.
+#[derive(Debug)]
+pub struct WaitingForInput {
+    pub run_id: String,
+    /// The question it waits for (`approval:3`).
+    pub question: Option<String>,
+    /// The output is JSONL, where `run_finished` already says it.
+    pub quiet: bool,
+}
+
+impl WaitingForInput {
+    /// The command that gives the approval and continues the run.
+    pub fn resume_command(&self) -> String {
+        match &self.question {
+            Some(question) => format!(
+                "codemod workflow resume --id {} --approve {question}",
+                self.run_id
+            ),
+            None => format!("codemod workflow resume --id {} --approve", self.run_id),
+        }
+    }
+}
+
+impl std::fmt::Display for WaitingForInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "waiting for input (exit code {EXIT_WAITING}); continue with: {}",
+            self.resume_command()
+        )
+    }
+}
+
+impl std::error::Error for WaitingForInput {}
 
 /// A run finished, but some of its files failed. The CLI ends its output
 /// with this and exits with [`EXIT_FAILED_FILES`].

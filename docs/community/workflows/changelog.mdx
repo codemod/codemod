@@ -20,6 +20,17 @@ To turn a `workflow.yaml` package into `workflow.ts`, run `npx codemod@alpha wor
 Dates are the npm publish dates (UTC). Each release is also on [GitHub](https://github.com/codemod/codemod/releases), tagged `cli-2.0.0-alpha.N`.
 
 <Update label="2.0.0-alpha.10" description="Unreleased">
+**Breaking changes**
+
+- **A run waiting for an approval exits `3`**. Before, `workflow run --no-interactive` (and `workflow resume`, `codemod <package>`) exited `0` when the run stopped at an approval, so a CI job passed with the migration half done. Now it exits `3`, apart from `1` (failed) and `2` (failed files, `fail()`), and ends with the command that continues it. See [exit codes](/community/cli#exit-codes).
+
+  ```
+  Waiting for approval: Go on?
+    Approve it and go on with: codemod workflow resume --id <ID> --approve approval:1
+  $ echo $?
+  3
+  ```
+
 **Fixes**
 
 - **A run paused at an approval keeps its question.** Before, closing a control channel's stdin or sending `stop` while an approval was open left a `paused` run with `question: null`, and the approval step `canceled`. Now `run_finished` and `workflow status` keep `question` (`approval:1`) and `awaiting`, the step stays `awaiting-approval`, and `workflow resume --approve approval:1` gives it.
