@@ -574,8 +574,13 @@ mod tests {
             translated.source
         );
         assert!(translated.files.is_empty());
-        assert!(translated.warnings.iter().any(|w| w.contains("scripts/helper.ts imports fs: 2.0 callbacks get no writable fs")));
-        assert!(translated.warnings.iter().any(|w| w.contains("scripts/codemod.ts imports child_process: 2.0 callbacks cannot start processes")));
+        assert!(translated
+            .warnings
+            .iter()
+            .any(|w| w.contains("scripts/helper.ts imports fs: 2.0 callbacks get no writable fs")));
+        assert!(translated.warnings.iter().any(|w| w.contains(
+            "scripts/codemod.ts imports child_process: 2.0 callbacks cannot start processes"
+        )));
     }
 
     #[test]

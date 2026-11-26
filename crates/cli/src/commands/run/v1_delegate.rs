@@ -98,8 +98,7 @@ pub(crate) fn with_refusal_hint(
             Err(anyhow!("{error}\n{}", v1_hint(package)))
         }
         Ok(outcome) => {
-            let ending_refused =
-                matches!(&outcome.report.ending, Ending::Failed(error) if compatibility_refusal(error));
+            let ending_refused = matches!(&outcome.report.ending, Ending::Failed(error) if compatibility_refusal(error));
             let steps_refused = outcome.report.steps.iter().any(|step| {
                 step.error.as_deref().is_some_and(compatibility_refusal)
                     || (step.failed_files() > 0

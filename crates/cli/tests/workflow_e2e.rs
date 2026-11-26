@@ -123,6 +123,9 @@ nodes:
           include: ["src/**/*.ts"]
 "#;
 
+const YAML_PACKAGE_MANIFEST: &str =
+    "schema_version: \"1.0\"\nname: test\nversion: 0.1.0\ndescription: test\nauthor: test\n";
+
 #[test]
 fn a_workflow_yaml_package_runs() {
     let fixture = Fixture::new();
@@ -199,6 +202,7 @@ nodes:
     assert!(!fixture.target.path().join("ran.txt").exists());
 
     let package = fixture.package.path().to_str().unwrap();
+    fixture.package_file("codemod.yaml", YAML_PACKAGE_MANIFEST);
     let output = fixture.codemod(&["run", package, "--no-interactive"]);
     assert_eq!(output.status.code(), Some(1), "{}", text(&output));
     assert_eq!(text(&output).matches("codemod run --v1").count(), 1);
@@ -211,6 +215,7 @@ nodes:
 #[test]
 fn a_legacy_fs_write_points_to_v1_without_running_it() {
     let fixture = Fixture::new();
+    fixture.package_file("codemod.yaml", YAML_PACKAGE_MANIFEST);
     fixture.package_file("workflow.yaml", YAML);
     fixture.package_file(
         "scripts/codemod.ts",
