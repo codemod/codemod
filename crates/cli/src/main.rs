@@ -482,14 +482,19 @@ async fn run_cli() -> Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or(default_log_filter));
 
     let invocation_opt_out = effective_disable_analytics(&cli)
-        || matches!(std::env::var("DISABLE_ANALYTICS").as_deref(), Ok("true" | "1"));
+        || matches!(
+            std::env::var("DISABLE_ANALYTICS").as_deref(),
+            Ok("true" | "1")
+        );
     if let Some(Commands::Telemetry(args)) = &cli.command {
         return commands::telemetry::handler(args, invocation_opt_out);
     }
     if !matches!(&cli.command, Some(Commands::Mcp(_)))
         && !matches!(
             &cli.command,
-            Some(Commands::Workflow(WorkflowArgs { command: WorkflowCommands::Harness(_) }))
+            Some(Commands::Workflow(WorkflowArgs {
+                command: WorkflowCommands::Harness(_)
+            }))
         )
     {
         commands::telemetry::maybe_print_notice();
@@ -506,65 +511,66 @@ async fn run_cli() -> Result<()> {
     }
 
     let mut person_traits_task = None;
-    let telemetry_sender: TelemetrySenderMutex = if let Some(storage) = storage.filter(|_| !saved_opt_out) {
-        let config = storage.load_config()?;
+    let telemetry_sender: TelemetrySenderMutex =
+        if let Some(storage) = storage.filter(|_| !saved_opt_out) {
+            let config = storage.load_config()?;
 
-        let auth = storage.get_auth_for_registry(&config.default_registry)?;
+            let auth = storage.get_auth_for_registry(&config.default_registry)?;
 
-        let distinct_id = auth
-            .as_ref()
-            .map(|auth| auth.user.id.clone())
-            .unwrap_or_else(|| {
-                storage
-                    .get_or_create_anonymous_telemetry_id()
-                    .unwrap_or_else(|error| {
-                        log::debug!("Failed to persist anonymous telemetry id: {error}");
-                        uuid::Uuid::new_v4().to_string()
-                    })
-            });
+            let distinct_id = auth
+                .as_ref()
+                .map(|auth| auth.user.id.clone())
+                .unwrap_or_else(|| {
+                    storage
+                        .get_or_create_anonymous_telemetry_id()
+                        .unwrap_or_else(|error| {
+                            log::debug!("Failed to persist anonymous telemetry id: {error}");
+                            uuid::Uuid::new_v4().to_string()
+                        })
+                });
 
-        let options = TelemetrySenderOptions {
-            distinct_id,
-            cloud_role: "CLI".to_string(),
-        };
+            let options = TelemetrySenderOptions {
+                distinct_id,
+                cloud_role: "CLI".to_string(),
+            };
 
-        let posthog = PostHogSender::new(options.clone())
-            .await
-            .inspect_err(|error| log::debug!("Failed to initialize PostHog telemetry: {error}"))
-            .ok();
-        let scarf = ScarfSender::new(options)
-            .inspect_err(|error| log::debug!("Failed to initialize Scarf telemetry: {error}"))
-            .ok();
+            let posthog = PostHogSender::new(options.clone())
+                .await
+                .inspect_err(|error| log::debug!("Failed to initialize PostHog telemetry: {error}"))
+                .ok();
+            let scarf = ScarfSender::new(options)
+                .inspect_err(|error| log::debug!("Failed to initialize Scarf telemetry: {error}"))
+                .ok();
 
-        // Person traits go to PostHog directly, never through the composite:
-        // Scarf would put the email in a URL query string. Anonymous
-        // installs have no traits and are never aliased to a user.
-        // Opt-out is resolved before this spawn (including implicit-run flag order).
-        if let (Some(posthog), Some(auth)) = (&posthog, auth) {
-            let posthog = posthog.clone();
-            person_traits_task = Some(tokio::spawn(async move {
-                person_telemetry::sync_person_traits(&storage, &posthog, &auth.user).await;
-            }));
-        }
-
-        // PostHog is the primary backend; Scarf is best-effort alongside it.
-        // If PostHog fails to initialize, Scarf can still carry telemetry
-        // on its own rather than disabling telemetry entirely.
-        match (posthog, scarf) {
-            (Some(posthog), scarf) => {
-                let mut sender = CompositeSender::new(Arc::new(posthog));
-                if let Some(scarf) = scarf {
-                    sender = sender.with_secondary(Arc::new(scarf));
-                }
-                let sender: Box<dyn TelemetrySender + Send + Sync> = Box::new(sender);
-                Arc::new(sender)
+            // Person traits go to PostHog directly, never through the composite:
+            // Scarf would put the email in a URL query string. Anonymous
+            // installs have no traits and are never aliased to a user.
+            // Opt-out is resolved before this spawn (including implicit-run flag order).
+            if let (Some(posthog), Some(auth)) = (&posthog, auth) {
+                let posthog = posthog.clone();
+                person_traits_task = Some(tokio::spawn(async move {
+                    person_telemetry::sync_person_traits(&storage, &posthog, &auth.user).await;
+                }));
             }
-            (None, Some(scarf)) => Arc::new(Box::new(scarf)),
-            (None, None) => Arc::new(Box::new(NullSender {})),
-        }
-    } else {
-        Arc::new(Box::new(NullSender {}))
-    };
+
+            // PostHog is the primary backend; Scarf is best-effort alongside it.
+            // If PostHog fails to initialize, Scarf can still carry telemetry
+            // on its own rather than disabling telemetry entirely.
+            match (posthog, scarf) {
+                (Some(posthog), scarf) => {
+                    let mut sender = CompositeSender::new(Arc::new(posthog));
+                    if let Some(scarf) = scarf {
+                        sender = sender.with_secondary(Arc::new(scarf));
+                    }
+                    let sender: Box<dyn TelemetrySender + Send + Sync> = Box::new(sender);
+                    Arc::new(sender)
+                }
+                (None, Some(scarf)) => Arc::new(Box::new(scarf)),
+                (None, None) => Arc::new(Box::new(NullSender {})),
+            }
+        } else {
+            Arc::new(Box::new(NullSender {}))
+        };
 
     telemetry_sender.initialize_panic_telemetry().await;
 

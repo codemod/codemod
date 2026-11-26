@@ -51,7 +51,7 @@ pub(crate) fn maybe_print_notice() {
 
     match TokenStorage::new().and_then(|storage| storage.claim_telemetry_notice()) {
         Ok(true) => eprintln!(
-            "Codemod collects CLI usage (commands, versions, platform and run results), linked to your account when signed in. Turn it off with DO_NOT_TRACK=1 or codemod telemetry off."
+            "Codemod collects CLI usage (commands, versions, platform and run results) and may include your account email when signed in. Turn it off with DO_NOT_TRACK=1 or codemod telemetry off."
         ),
         Ok(false) => {}
         Err(error) => log::debug!("Failed to record the telemetry notice: {error}"),
@@ -70,7 +70,10 @@ fn suppress_notice(args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> bool {
         if (format_value && matches!(arg.as_ref(), "json" | "jsonl" | "yaml"))
             || matches!(arg.as_ref(), "--no-interactive" | "--control" | "--jsonl")
             || arg.starts_with("--control=")
-            || matches!(arg.as_ref(), "--format=json" | "--format=jsonl" | "--format=yaml")
+            || matches!(
+                arg.as_ref(),
+                "--format=json" | "--format=jsonl" | "--format=yaml"
+            )
         {
             return true;
         }
@@ -95,7 +98,12 @@ mod tests {
         ] {
             assert!(suppress_notice(flags));
         }
-        assert!(!suppress_notice(["--format", "text", "--", "--no-interactive"]));
+        assert!(!suppress_notice([
+            "--format",
+            "text",
+            "--",
+            "--no-interactive"
+        ]));
     }
 
     #[test]

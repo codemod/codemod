@@ -166,7 +166,9 @@ pub async fn handler(args: &Command) -> Result<()> {
         if args.format == TextOrJson::Json {
             println!("{}", status_json(&registry_url, None));
         }
-        return Err(anyhow!("Browser login requires an interactive terminal. Pass --api-key to log in without one."));
+        return Err(anyhow!(
+            "Browser login requires an interactive terminal. Pass --api-key to log in without one."
+        ));
     }
 
     // Start OIDC login flow

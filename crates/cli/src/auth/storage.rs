@@ -251,7 +251,11 @@ impl TokenStorage {
 
     fn create_marker(&self, name: &str) -> Result<bool> {
         let path = self.config_dir.join(name);
-        match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
             Ok(_) => Ok(true),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
             Err(error) => Err(error).with_context(|| format!("Failed to create {path:?}")),

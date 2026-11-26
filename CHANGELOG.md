@@ -7,6 +7,7 @@ The 2.0 alphas are tagged `cli-2.0.0-alpha.N` and published to npm under the `al
 ## [cli-2.0.0-alpha.11] - Unreleased
 
 - *(cli)* A one-time interactive telemetry notice explains what is collected and how to opt out; `codemod telemetry on|off|status` manages the saved setting.
+- *(cli)* `login`, `whoami`, and `publish` support `--format json`. In CI, browser login is disabled; use `login --api-key`. All stable commands are checked with stdin closed.
 
 ## [cli-2.0.0-alpha.10] - Unreleased
 
