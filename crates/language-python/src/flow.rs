@@ -12,7 +12,8 @@ use language_flow::{
     Adjacency, CallFact, CalleeFact, FileFlow, FlowNode, FunctionFact, ImportFact, MutationFact,
     Name,
 };
-use ruff_python_ast::{self as ast, Expr, Stmt};
+use ruff_python_ast::visitor::source_order::{self, SourceOrderVisitor, TraversalSignal};
+use ruff_python_ast::{self as ast, AnyNodeRef, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
@@ -121,6 +122,9 @@ struct Scope {
     globals: FxHashSet<String>,
     /// The class node, for a class body.
     class_node: Option<u32>,
+    /// In a function: the names its nested functions, lambdas, classes and
+    /// generators use, which see the name's latest value whenever they run.
+    captured: FxHashSet<String>,
 }
 
 /// A name a scope binds, from its first binding site.
@@ -145,6 +149,10 @@ struct Builder<'s> {
     scopes: Vec<Scope>,
     /// `self` and `cls` parameters: their reads are `this`.
     self_bindings: FxHashSet<u32>,
+    /// The statement being visited runs once, in order, in a function body.
+    straight_line: bool,
+    /// The assignment being bound replaces the name's value from here on.
+    rebinding: bool,
 }
 
 impl<'s> Builder<'s> {
@@ -158,6 +166,8 @@ impl<'s> Builder<'s> {
             names: FxHashSet::default(),
             scopes: Vec::new(),
             self_bindings: FxHashSet::default(),
+            straight_line: false,
+            rebinding: false,
         }
     }
 
@@ -305,6 +315,7 @@ impl<'s> Builder<'s> {
             names: HashMap::new(),
             globals: FxHashSet::default(),
             class_node,
+            captured: FxHashSet::default(),
         });
     }
 
@@ -380,6 +391,7 @@ impl<'s> Builder<'s> {
     }
 
     fn statement(&mut self, statement: &Stmt) {
+        let straight_line = std::mem::take(&mut self.straight_line);
         match statement {
             Stmt::FunctionDef(function) => self.function_def(function),
             Stmt::ClassDef(class) => self.class_def(class),
@@ -435,9 +447,11 @@ impl<'s> Builder<'s> {
             }
             Stmt::Assign(assign) => {
                 let value = self.expr(&assign.value);
+                self.rebinding = straight_line;
                 for target in &assign.targets {
                     self.bind_target(target, value, FlowEdgeKind::Assign, assign.range);
                 }
+                self.rebinding = false;
             }
             Stmt::AugAssign(assign) => {
                 let value = self.expr(&assign.value);
@@ -660,7 +674,7 @@ impl<'s> Builder<'s> {
     fn bind_target(&mut self, target: &Expr, value: u32, kind: FlowEdgeKind, whole: TextRange) {
         match target {
             Expr::Name(name) => {
-                let Some(binding) = self.resolve(name.id.as_str()) else {
+                let Some(mut binding) = self.resolve(name.id.as_str()) else {
                     return;
                 };
                 // A class attribute's value is stored in the class.
@@ -669,7 +683,6 @@ impl<'s> Builder<'s> {
                 } else {
                     kind
                 };
-                self.edge(value, binding, kind);
                 // The first assignment declares the name; later ones rebind it.
                 if self.flow.nodes[binding as usize].range != range_of(name.range) {
                     self.mutation(
@@ -679,7 +692,11 @@ impl<'s> Builder<'s> {
                         MutationConfidence::Definite,
                         None,
                     );
+                    if self.replaces_value(name.id.as_str()) {
+                        binding = self.new_version(name);
+                    }
                 }
+                self.edge(value, binding, kind);
             }
             Expr::Attribute(attribute) => {
                 let node = self.attribute_target(attribute);
@@ -890,7 +907,13 @@ impl<'s> Builder<'s> {
             }
         }
         self.declare_block(&function.body);
-        self.statements(&function.body);
+        let captured = captured_names(&function.body);
+        self.scopes.last_mut().expect("a scope").captured = captured;
+        for statement in &function.body {
+            self.straight_line = true;
+            self.statement(statement);
+        }
+        self.straight_line = false;
         self.scopes.pop();
     }
 
@@ -1183,6 +1206,32 @@ impl<'s> Builder<'s> {
         index
     }
 
+    /// Whether an assignment to `name` here replaces its value for every
+    /// later read: it runs once, in order, in the function that owns the
+    /// name, and nothing that could run later reads the name.
+    fn replaces_value(&self, name: &str) -> bool {
+        let Some(scope) = self.scopes.last() else {
+            return false;
+        };
+        self.rebinding
+            && scope.kind == ScopeKind::Function
+            && scope.names.contains_key(name)
+            && !scope.captured.contains(name)
+            && !scope.globals.contains(name)
+    }
+
+    /// A fresh binding of `name` at this assignment: later reads see it,
+    /// not the values assigned before.
+    fn new_version(&mut self, name: &ast::ExprName) -> u32 {
+        let binding = self.describe(name.range, FlowNodeKind::Variable, Some(name.id.as_str()));
+        let node = &mut self.flow.nodes[binding as usize];
+        node.kind = FlowNodeKind::Variable;
+        node.binding = true;
+        let scope = self.scopes.last_mut().expect("a scope");
+        scope.names.insert(name.id.to_string(), binding);
+        binding
+    }
+
     /// What `(x := v)` binds: `x` in the enclosing function (or class or
     /// module), also from inside a comprehension, whose own names it skips.
     fn walrus_binding(&mut self, name: &ast::ExprName) -> u32 {
@@ -1458,6 +1507,47 @@ fn target_declarations(target: &Expr, out: &mut Vec<Declaration>) {
         Expr::Starred(starred) => target_declarations(&starred.value, out),
         _ => {}
     }
+}
+
+/// The names used inside a function's nested functions, lambdas, classes
+/// and generator expressions: code that may run after the name is
+/// reassigned.
+fn captured_names(body: &[Stmt]) -> FxHashSet<String> {
+    struct Finder {
+        depth: u32,
+        names: FxHashSet<String>,
+    }
+    fn deferred(node: AnyNodeRef<'_>) -> bool {
+        matches!(
+            node,
+            AnyNodeRef::StmtFunctionDef(_)
+                | AnyNodeRef::StmtClassDef(_)
+                | AnyNodeRef::ExprLambda(_)
+                | AnyNodeRef::ExprGenerator(_)
+        )
+    }
+    impl<'a> SourceOrderVisitor<'a> for Finder {
+        fn enter_node(&mut self, node: AnyNodeRef<'a>) -> TraversalSignal {
+            if deferred(node) {
+                self.depth += 1;
+            }
+            if let (true, AnyNodeRef::ExprName(name)) = (self.depth > 0, node) {
+                self.names.insert(name.id.to_string());
+            }
+            TraversalSignal::Traverse
+        }
+        fn leave_node(&mut self, node: AnyNodeRef<'a>) {
+            if deferred(node) {
+                self.depth -= 1;
+            }
+        }
+    }
+    let mut finder = Finder {
+        depth: 0,
+        names: FxHashSet::default(),
+    };
+    source_order::walk_body(&mut finder, body);
+    finder.names
 }
 
 /// The names a `case` pattern captures.
@@ -1767,5 +1857,55 @@ mod tests {
             .iter()
             .any(|(to, e)| *to as usize == read && *e == FlowEdgeKind::Read));
         assert_eq!(sources(&flow, source, "hit"), vec!["item"]);
+    }
+
+    /// The values assigned to the variable that `callee`'s first argument
+    /// reads.
+    fn values_read_by(flow: &FileFlow, source: &str, callee: &str) -> Vec<String> {
+        let call = flow
+            .calls
+            .iter()
+            .find(|c| &*c.callee_text == callee)
+            .unwrap();
+        let read = call.args[0] as usize;
+        let (binding, _) = flow.in_edges[read]
+            .iter()
+            .find(|(_, edge)| *edge == FlowEdgeKind::Read)
+            .unwrap();
+        flow.in_edges[*binding as usize]
+            .iter()
+            .map(|(from, _)| flow.nodes[*from as usize].range)
+            .map(|r| source[r.start as usize..r.end as usize].to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_read_after_a_reassignment_sees_only_the_new_value() {
+        let source = "def search(request):\n    q = request.GET[\"q\"]\n    q = clean(q)\n    cursor.execute(q)\n";
+        let flow = build_file_flow(source).unwrap();
+        assert_eq!(
+            values_read_by(&flow, source, "cursor.execute"),
+            vec!["clean(q)"]
+        );
+    }
+
+    #[test]
+    fn a_reassignment_inside_a_branch_keeps_both_values() {
+        let source = "def search(request, safe):\n    q = request.GET[\"q\"]\n    if safe:\n        q = clean(q)\n    cursor.execute(q)\n";
+        let flow = build_file_flow(source).unwrap();
+        assert_eq!(
+            values_read_by(&flow, source, "cursor.execute"),
+            vec!["request.GET[\"q\"]", "clean(q)"]
+        );
+    }
+
+    #[test]
+    fn a_name_a_nested_function_reads_keeps_every_value() {
+        let source = "def search(request):\n    q = request.GET[\"q\"]\n    run = lambda: cursor.execute(q)\n    q = clean(q)\n    run()\n";
+        let flow = build_file_flow(source).unwrap();
+        assert_eq!(
+            values_read_by(&flow, source, "cursor.execute"),
+            vec!["request.GET[\"q\"]", "clean(q)"]
+        );
     }
 }
