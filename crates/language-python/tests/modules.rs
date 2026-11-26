@@ -141,6 +141,17 @@ fn an_absolute_import_resolves_under_a_src_layout() {
 }
 
 #[test]
+fn a_module_inside_a_package_does_not_shadow_a_library_of_the_same_name() {
+    let ws = Ws::new(&[
+        ("shop/__init__.py", ""),
+        ("shop/celery.py", ""),
+        ("shop/orders/__init__.py", ""),
+        ("shop/orders/tasks.py", "from celery import shared_task\n"),
+    ]);
+    assert_eq!(ws.resolve("shop/orders/tasks.py", "celery"), None);
+}
+
+#[test]
 fn a_relative_import_resolves_against_the_importing_package() {
     let ws = Ws::new(SHOP);
     assert_eq!(

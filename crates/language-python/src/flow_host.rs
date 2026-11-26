@@ -434,27 +434,30 @@ impl PyFlow {
         self.root.as_deref()
     }
 
-    /// Places an absolute module name is looked up from.
+    /// Places an absolute module name is looked up from, as `sys.path`
+    /// has them: the workspace root, its `src/`, and the directory that
+    /// holds the file's top-level package (the file's own directory for a
+    /// script outside any package). Never a directory inside a package, so
+    /// `shopfloor/celery.py` does not shadow `celery` for
+    /// `shopfloor/orders/tasks.py`.
     fn search_roots(&self, from: &Path) -> Vec<PathBuf> {
         let mut roots = Vec::new();
         if let Some(root) = &self.root {
             roots.push(root.clone());
             roots.push(root.join("src"));
         }
-        let mut current = from.parent();
-        let mut steps = 0;
-        while let Some(dir) = current {
-            if steps > 12 {
+        let mut base = from.parent();
+        while let Some(dir) = base {
+            let at_root = self.root.as_deref().is_some_and(|root| dir == root);
+            if at_root || !dir.join("__init__.py").is_file() {
                 break;
             }
-            if !roots.iter().any(|r| r == dir) {
-                roots.push(dir.to_path_buf());
+            base = dir.parent();
+        }
+        if let Some(base) = base {
+            if !roots.iter().any(|r| r == base) {
+                roots.push(base.to_path_buf());
             }
-            if self.root.as_deref().is_some_and(|root| dir == root) {
-                break;
-            }
-            current = dir.parent();
-            steps += 1;
         }
         roots
     }
