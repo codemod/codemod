@@ -219,6 +219,20 @@ impl RuffSemanticProvider {
         })
     }
 
+    /// Module queries (see [`crate::modules`]), reading through the snapshot.
+    fn modules(
+        &self,
+        operation: &str,
+    ) -> SemanticResult<
+        crate::modules::Modules<'_, impl Fn(&Path) -> Option<std::sync::Arc<str>> + Sync + '_>,
+    > {
+        crate::modules::Modules::new(
+            &self.flow,
+            |path: &Path| self.read_file(path).ok(),
+            operation,
+        )
+    }
+
     /// Get the virtual filesystem root used by this provider.
     pub fn fs_root(&self) -> &VfsPath {
         &self.fs_root
@@ -326,6 +340,41 @@ impl SemanticProvider for RuffSemanticProvider {
     ) -> SemanticResult<MutationsResult> {
         let content = self.read_file(file_path)?;
         self.flow.mutations(file_path, &content, range, options)
+    }
+
+    fn resolve_module(&self, from_file: &Path, specifier: &str) -> SemanticResult<Option<PathBuf>> {
+        Ok(self
+            .modules("resolveModule")?
+            .resolve_module(from_file, specifier))
+    }
+
+    fn resolve_export(
+        &self,
+        module_path: &Path,
+        export_name: &str,
+    ) -> SemanticResult<Option<DefinitionResult>> {
+        Ok(self
+            .modules("resolveExport")?
+            .resolve_export(module_path, export_name))
+    }
+
+    fn specifier_for(
+        &self,
+        from_file: &Path,
+        target: &Path,
+        options: &language_core::SpecifierOptions,
+    ) -> SemanticResult<Option<String>> {
+        Ok(self
+            .modules("specifierFor")?
+            .specifier_for(from_file, target, options))
+    }
+
+    fn importers(&self, target: &Path) -> SemanticResult<language_core::ImportersResult> {
+        Ok(self.modules("importers")?.importers(target))
+    }
+
+    fn public_specifiers(&self, file: &Path) -> SemanticResult<Vec<String>> {
+        Ok(self.modules("publicSpecifiers")?.public_specifiers(file))
     }
 
     fn snapshot_content(&self, file_path: &Path) -> Option<std::sync::Arc<str>> {

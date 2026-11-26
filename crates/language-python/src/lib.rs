@@ -42,6 +42,7 @@ mod db;
 mod error;
 pub mod flow;
 mod flow_host;
+mod modules;
 mod provider;
 mod ty;
 

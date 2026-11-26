@@ -3669,6 +3669,7 @@ dependencies = [
  "language-flow",
  "log",
  "parking_lot",
+ "rayon",
  "ruff_db",
  "ruff_notebook",
  "ruff_python_ast",
