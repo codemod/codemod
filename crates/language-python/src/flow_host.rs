@@ -223,6 +223,13 @@ impl PyFlow {
     pub fn type_of(&self, path: &Path, content: &str, range: ByteRange) -> Option<String> {
         self.update(path, content);
         let path = self.canonical(path);
+        // `x` of `f(x=1)` is not a value: no type, not the call's.
+        if self
+            .flow(&path)
+            .is_some_and(|flow| flow.is_not_value(range))
+        {
+            return None;
+        }
         if let Some(found) = self.ty.as_ref().and_then(|ty| ty.type_at(&path, range)) {
             return Some(found);
         }

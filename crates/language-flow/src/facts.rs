@@ -152,6 +152,10 @@ pub struct FileFlow {
     pub declared_types: FxHashMap<u32, Name>,
     /// Function index -> the decorators written on it, as written.
     pub decorators: FxHashMap<u32, Vec<Name>>,
+    /// Names written among values that are not values themselves, as
+    /// (start, end): the `x` of a Python `f(x=1)`. Value queries answer
+    /// nothing for them instead of answering for what is around them.
+    pub not_values: FxHashSet<(u32, u32)>,
     /// Syntax the builder saw but does not model, by what it is. Values that
     /// pass through it are not connected to where they go. Used to measure
     /// coverage; queries do not read it.
@@ -161,6 +165,11 @@ pub struct FileFlow {
 }
 
 impl FileFlow {
+    /// Whether `range` is a name that is not a value (see `not_values`).
+    pub fn is_not_value(&self, range: ByteRange) -> bool {
+        self.not_values.contains(&(range.start, range.end))
+    }
+
     /// The node with exactly this range.
     pub fn exact(&self, range: ByteRange) -> Option<u32> {
         let key = (range.start, range.end);
@@ -176,6 +185,9 @@ impl FileFlow {
     /// The node for a syntax range: the exact one, else the tightest node
     /// around it, else the widest node inside it.
     pub fn locate(&self, range: ByteRange) -> Option<u32> {
+        if self.is_not_value(range) {
+            return None;
+        }
         if let Some(found) = self.exact(range) {
             return Some(found);
         }
@@ -227,6 +239,7 @@ impl FileFlow {
             + lists(&self.class_methods)
             + lists(&self.class_fields)
             + map(self.model_edges.capacity(), 8)
+            + map(self.not_values.capacity(), 8)
             + names.iter().map(|name| name.len() + 16).sum::<usize>()
     }
 

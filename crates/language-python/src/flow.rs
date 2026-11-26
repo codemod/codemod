@@ -941,6 +941,11 @@ impl<'s> Builder<'s> {
                 }
             }
             for keyword in arguments.keywords.iter() {
+                if let Some(name) = &keyword.arg {
+                    self.flow
+                        .not_values
+                        .insert((name.range.start().to_u32(), name.range.end().to_u32()));
+                }
                 self.expr(&keyword.value);
             }
         }
@@ -1434,6 +1439,14 @@ impl<'s> Builder<'s> {
             }
         }
 
+        // `x` of `f(x=1)` names a parameter; it is not a value.
+        for keyword in call.arguments.keywords.iter() {
+            if let Some(name) = &keyword.arg {
+                self.flow
+                    .not_values
+                    .insert((name.range.start().to_u32(), name.range.end().to_u32()));
+            }
+        }
         let mut args = Vec::new();
         let argument_exprs: Vec<&Expr> = call
             .arguments

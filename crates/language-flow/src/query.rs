@@ -114,6 +114,11 @@ pub fn applicable(
     let Some(flow) = host.flow(&path) else {
         return Ok(());
     };
+    // A name that is not a value (`x` of `f(x=1)`): no answer, rather than
+    // the answer for the call around it.
+    if flow.is_not_value(range) && !matches!(kind, QueryKind::Callers) {
+        return Ok(());
+    }
     let not = |reason: &str| {
         Err(SemanticError::NotApplicable {
             reason: reason.to_string(),

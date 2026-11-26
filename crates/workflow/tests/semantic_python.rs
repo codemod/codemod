@@ -275,3 +275,46 @@ export default async function main() {
         ])
     );
 }
+
+const KEYWORD_CALL: &str = r#"
+import { step, forEachFile } from "codemod/workflow";
+import { parse, ANALYSIS } from "codemod/ast-grep";
+export default async function main() {
+  const found = await step(forEachFile({ include: "app.py" }, (file) => {
+    const name = parse(file).root().find({ rule: { kind: "keyword_argument" } }).field("name");
+    return [name.text(), ANSWER];
+  }));
+  return found.outputs;
+}
+"#;
+
+fn keyword_call() -> Harness {
+    let h = Harness::new();
+    h.write(
+        "app.py",
+        "def make(limit) -> int:\n    return limit\n\ntotal = make(limit=1)\n",
+    );
+    h
+}
+
+#[test]
+fn a_keyword_arguments_name_has_no_data_flow() {
+    let report = keyword_call().start(
+        &KEYWORD_CALL
+            .replace("ANALYSIS", "dataflow")
+            .replace("ANSWER", "dataflow(\"python\").uses.get(name) ?? null"),
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([["limit", null]]));
+}
+
+#[test]
+fn a_keyword_arguments_name_has_no_type() {
+    let report = keyword_call().start(
+        &KEYWORD_CALL
+            .replace("ANALYSIS", "types")
+            .replace("ANSWER", "types(\"python\").typeOf.get(name) ?? null"),
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([["limit", null]]));
+}
