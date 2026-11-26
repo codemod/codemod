@@ -1319,15 +1319,21 @@ export default async function main() {
   },
 );
 
-test("node: process.env can be read inside a run, not changed", HOSTS.node, async () => {
+test("node: callbacks get an empty environment but keep cwd and argv", HOSTS.node, async () => {
   const path = join(
     scratch({
       "workflow.ts": `
 import { step } from "codemod/workflow";
 export default async function main() {
-  const path = await step("Read", () => typeof process.env.PATH);
+  const host = await step("Read", () => ({
+    path: typeof process.env.PATH,
+    hasPath: "PATH" in process.env,
+    keys: Object.keys(process.env),
+    cwd: process.cwd(),
+    argv: process.argv,
+  }));
   await step("Write", () => { process.env.CODEMOD_GUARD_TEST = "x"; });
-  return path;
+  return host;
 }
 `,
     }),
@@ -1335,7 +1341,13 @@ export default async function main() {
   );
   const result = await run(path, { target: {}, host: "node" });
   assert.equal(result.status, "failed");
-  assert.equal(result.step("Read").result, "string");
+  assert.deepEqual(result.step("Read").result, {
+    path: "undefined",
+    hasPath: false,
+    keys: [],
+    cwd: process.cwd(),
+    argv: process.argv,
+  });
   assert.match(result.error, /process\.env cannot be changed in workflow callbacks/);
   assert.equal(process.env.CODEMOD_GUARD_TEST, undefined);
   // Outside a run it changes as ever.
@@ -1427,7 +1439,8 @@ export default async function main({ params }: { params: { url: string } }) {
         report.events.filter((e) => e.event === "run_log").map((e) => JSON.parse(e.line));
       const started = Date.now();
 
-      const first = await runOnHost(path, { ...options, approve: false });
+      // Not approved as a whole, so the run stops at "Go"; its request is.
+      const first = await runOnHost(path, { ...options, approve: false, approved: ["http:0"] });
       assert.equal(first.status, "awaiting-approval", first.error ?? undefined);
       assert.equal(server.hits, 1);
       const fetched = first.steps.find((s) => s.label === "Fetch");

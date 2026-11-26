@@ -17,6 +17,28 @@ pub enum Approval {
     PullRequest { title: String, branch: String },
     /// An interrupted step may already have had external effects.
     InterruptedStep { label: String, position: u64 },
+    /// An `agent(...)` step is about to hand its prompt to a coding agent
+    /// (or to the built-in one, at `endpoint`): with full autonomy the agent
+    /// edits files and runs commands without asking.
+    #[serde(rename_all = "camelCase")]
+    Agent {
+        /// The agent's label ("Claude Code", "the built-in agent").
+        agent: String,
+        prompt: String,
+        /// `"full"` or `"read-only"`.
+        autonomy: String,
+        /// Where the built-in agent sends the prompt and its API key.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+    },
+    /// An `http(...)` step is about to send a request. `env` names the
+    /// environment variables its headers read.
+    HttpRequest {
+        method: String,
+        url: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        env: Vec<String>,
+    },
     /// The run is about to change the target for the first time, and the
     /// target has uncommitted changes (or is not in a git repository).
     #[serde(rename_all = "camelCase")]
@@ -38,6 +60,9 @@ impl Approval {
             Approval::Capabilities { .. } => format!("capabilities:{step}"),
             Approval::PullRequest { .. } => format!("pull-request:{step}"),
             Approval::InterruptedStep { position, .. } => format!("interrupted-step:{position}"),
+            // `agent:<step>` is the question that picks the agent.
+            Approval::Agent { .. } => format!("agent-run:{step}"),
+            Approval::HttpRequest { .. } => format!("http:{step}"),
             Approval::UncommittedChanges { .. } => "uncommitted-changes".to_string(),
         }
     }
@@ -55,6 +80,37 @@ impl Approval {
             }
             Approval::InterruptedStep { label, position } => {
                 format!("Step {position} ({label}) may already have run. Rerun it or skip it?")
+            }
+            Approval::Agent {
+                agent,
+                prompt,
+                autonomy,
+                endpoint,
+            } => {
+                let access = if autonomy == "read-only" {
+                    "read-only"
+                } else {
+                    "it edits files and runs commands without asking"
+                };
+                let at = endpoint
+                    .as_ref()
+                    .map(|endpoint| format!(" at {endpoint}"))
+                    .unwrap_or_default();
+                format!(
+                    "Run {agent}{at} ({access}) with this prompt: {}?",
+                    excerpt(prompt, PROMPT_EXCERPT)
+                )
+            }
+            Approval::HttpRequest { method, url, env } => {
+                if env.is_empty() {
+                    format!("Send {method} {url}?")
+                } else {
+                    format!(
+                        "Send {method} {url}, with the environment variable{} {} in its headers?",
+                        if env.len() == 1 { "" } else { "s" },
+                        env.join(", ")
+                    )
+                }
             }
             Approval::UncommittedChanges {
                 path,
@@ -78,6 +134,36 @@ impl Approval {
         }
     }
 
+    /// What `--approve=<scope>` names it by: `shell`, `agent`, `http`,
+    /// `pull-request`, and `approval` for manual approvals. `None` for what
+    /// `--approve` never gives.
+    pub fn scope(&self) -> Option<&'static str> {
+        match self {
+            Approval::Manual { .. } => Some("approval"),
+            Approval::ShellCommand { .. } => Some("shell"),
+            Approval::Agent { .. } => Some("agent"),
+            Approval::HttpRequest { .. } => Some("http"),
+            Approval::PullRequest { .. } => Some("pull-request"),
+            Approval::Capabilities { .. }
+            | Approval::UncommittedChanges { .. }
+            | Approval::InterruptedStep { .. } => None,
+        }
+    }
+
+    /// A step that runs or sends something asks it: a shell command, a
+    /// coding agent, a request, a pull request. An unattended run of the
+    /// person's own workflow does these without asking
+    /// ([`Ask::trusted`]); a registry package's need `--approve`.
+    pub fn runs_or_sends(&self) -> bool {
+        matches!(
+            self,
+            Approval::ShellCommand { .. }
+                | Approval::Agent { .. }
+                | Approval::HttpRequest { .. }
+                | Approval::PullRequest { .. }
+        )
+    }
+
     /// Whether `--approve` gives it. Capabilities are granted up front, and
     /// writing over uncommitted changes takes `--allow-dirty`.
     pub fn given_by_approve_all(&self) -> bool {
@@ -88,6 +174,20 @@ impl Approval {
                 | Approval::InterruptedStep { .. }
         )
     }
+}
+
+/// How much of an agent's prompt a question shows.
+const PROMPT_EXCERPT: usize = 300;
+
+/// The first `limit` characters of `text` on one line, with `…` when cut.
+pub fn excerpt(text: &str, limit: usize) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= limit {
+        return line;
+    }
+    let mut cut: String = line.chars().take(limit).collect();
+    cut.push('…');
+    cut
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +216,12 @@ pub struct Ask {
     /// Set when the asking step must stop (the run was canceled from
     /// elsewhere): a host waiting for an answer gives up then.
     pub stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// The step is of the person's own workflow (a local file or directory
+    /// they ran), not of a package from a registry, nor of a registry package
+    /// nested in theirs. With nobody to ask, what such a step runs or sends
+    /// ([`Approval::runs_or_sends`]) goes ahead; a host that can ask still
+    /// asks.
+    pub trusted: bool,
 }
 
 impl Ask {
@@ -150,8 +256,10 @@ pub trait Interaction: Send + Sync {
     }
 }
 
-/// Answers without asking: manual approvals are deferred, capability
-/// requests denied, and shell commands and pull requests allowed.
+/// Answers without asking: manual approvals are deferred, and everything
+/// else is refused: capability requests, and what a workflow would do to the
+/// machine or send from it (shell commands, coding agents, HTTP requests,
+/// pull requests). `approve_all` gives the latter and manual approvals.
 pub struct NonInteractive {
     /// Treat approvals as given (`--approve`, or pro dry runs). Capabilities
     /// are the exception: they are granted up front, never by a blanket yes.
@@ -163,14 +271,21 @@ impl Interaction for NonInteractive {
         false
     }
 
+    fn ask(&self, ask: &Ask, approval: &Approval) -> Decision {
+        if ask.trusted && approval.runs_or_sends() {
+            return Decision::Approved;
+        }
+        self.approve(approval)
+    }
+
     fn approve(&self, approval: &Approval) -> Decision {
-        match approval {
-            Approval::InterruptedStep { .. } => Decision::Deferred,
-            Approval::Capabilities { .. } | Approval::UncommittedChanges { .. } => Decision::Denied,
-            Approval::Manual { .. } if !self.approve_all => Decision::Deferred,
-            Approval::Manual { .. }
-            | Approval::ShellCommand { .. }
-            | Approval::PullRequest { .. } => Decision::Approved,
+        // Nobody is here to see what a package's workflow is about to run:
+        // without `--approve`, a registry package must not get to run
+        // commands or send requests on a CI machine.
+        if self.approve_all && approval.given_by_approve_all() {
+            Decision::Approved
+        } else {
+            approval.unanswered()
         }
     }
 }
@@ -226,11 +341,106 @@ mod tests {
             Decision::Deferred
         );
         assert_eq!(none.approve(&capabilities()), Decision::Denied);
+        for approval in [
+            Approval::ShellCommand {
+                command: "ls".into(),
+            },
+            Approval::PullRequest {
+                title: "Update".into(),
+                branch: "update".into(),
+            },
+            Approval::Agent {
+                agent: "Claude Code".into(),
+                prompt: "Migrate".into(),
+                autonomy: "full".into(),
+                endpoint: None,
+            },
+            Approval::HttpRequest {
+                method: "POST".into(),
+                url: "https://example.com/".into(),
+                env: vec!["TOKEN".into()],
+            },
+        ] {
+            // What a package would run or send is never done unattended
+            // without `--approve`.
+            assert_eq!(none.approve(&approval), Decision::Denied, "{approval:?}");
+            assert_eq!(
+                NonInteractive { approve_all: true }.approve(&approval),
+                Decision::Approved,
+                "{approval:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unattended_run_of_ones_own_workflow_runs_its_steps() {
+        let none = NonInteractive { approve_all: false };
+        let own = Ask {
+            trusted: true,
+            ..Ask::default()
+        };
+        let shell = Approval::ShellCommand {
+            command: "ls".into(),
+        };
+        let http = Approval::HttpRequest {
+            method: "GET".into(),
+            url: "https://example.com/".into(),
+            env: Vec::new(),
+        };
+        for approval in [&shell, &http] {
+            assert_eq!(none.ask(&own, approval), Decision::Approved);
+            // A package's steps, and a registry package nested in one's own.
+            assert_eq!(none.ask(&Ask::default(), approval), Decision::Denied);
+        }
+        // Trust is not an answer to a manual approval, nor a capability.
+        let manual = Approval::Manual {
+            message: "go?".into(),
+        };
+        assert_eq!(none.ask(&own, &manual), Decision::Deferred);
+        assert_eq!(none.ask(&own, &capabilities()), Decision::Denied);
+        assert_eq!(shell.scope(), Some("shell"));
+        assert_eq!(http.scope(), Some("http"));
+        assert_eq!(capabilities().scope(), None);
+    }
+
+    #[test]
+    fn agent_and_http_questions_say_what_would_run() {
+        let agent = Approval::Agent {
+            agent: "the built-in agent".into(),
+            prompt: format!("Do\n  this {}", "x".repeat(400)),
+            autonomy: "full".into(),
+            endpoint: Some("https://llm.example".into()),
+        };
+        assert_eq!(agent.question_id(Some("2")), "agent-run:2");
+        let prompt = agent.prompt();
+        assert!(
+            prompt.starts_with("Run the built-in agent at https://llm.example (it edits files and runs commands without asking) with this prompt: Do this xxx"),
+            "{prompt}"
+        );
+        assert!(prompt.ends_with("…?"), "{prompt}");
         assert_eq!(
-            none.approve(&Approval::ShellCommand {
-                command: "ls".into()
-            }),
-            Decision::Approved
+            serde_json::to_value(&agent).unwrap()["kind"],
+            serde_json::json!("agent")
+        );
+
+        let http = Approval::HttpRequest {
+            method: "POST".into(),
+            url: "https://example.com/hook".into(),
+            env: vec!["GITHUB_TOKEN".into()],
+        };
+        assert_eq!(http.question_id(Some("0")), "http:0");
+        assert_eq!(
+            http.prompt(),
+            "Send POST https://example.com/hook, with the environment variable GITHUB_TOKEN in its headers?"
+        );
+        assert_eq!(
+            serde_json::to_value(&http).unwrap(),
+            serde_json::json!({
+                "kind": "http-request",
+                "method": "POST",
+                "url": "https://example.com/hook",
+                "env": ["GITHUB_TOKEN"],
+            })
         );
     }
 }

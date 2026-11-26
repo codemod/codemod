@@ -1375,3 +1375,60 @@ fn missing_current_directory_is_reported_without_panicking() {
     assert!(text(&output).contains("the current directory is unavailable"));
     assert!(!text(&output).contains("panicked"));
 }
+
+const TOUCH: &str = r#"
+import { shell, step } from "codemod/workflow";
+export default async function main() {
+  await step("Touch", shell("echo hi > touched.txt"));
+}
+"#;
+
+/// A workflow file the person names is theirs: unattended, its shell steps
+/// run without `--approve`. So does a local directory given to `codemod run`.
+/// (A package from the registry needs `--approve`: see
+/// `crates/workflow/tests/trust.rs`.)
+#[test]
+fn ones_own_workflow_runs_its_shell_steps_unattended() {
+    let fixture = Fixture::new();
+    fixture.package_file("workflow.ts", TOUCH);
+    let output = fixture.run(&[]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(fixture.target.path().join("touched.txt").exists());
+
+    let fixture = Fixture::new();
+    fixture.package_file("workflow.ts", TOUCH);
+    fixture.package_file(
+        "codemod.yaml",
+        "schema_version: \"1.0\"\nname: touch\nversion: 0.1.0\ndescription: touch\nauthor: test\nworkflow: workflow.ts\n",
+    );
+    let package = fixture.package.path().to_str().unwrap();
+    let target = fixture.target.path().to_str().unwrap();
+    let output = fixture.codemod(&[
+        "run",
+        package,
+        "--target",
+        target,
+        "--no-interactive",
+        "--allow-dirty",
+    ]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(fixture.target.path().join("touched.txt").exists());
+}
+
+/// `--approve=<kinds>` names kinds of approval; an unknown one is an error
+/// before anything runs.
+#[test]
+fn approve_takes_kinds_of_approval() {
+    let fixture = Fixture::new();
+    fixture.package_file("workflow.ts", TOUCH);
+    let output = fixture.run(&["--approve=shell,http"]);
+    assert!(output.status.success(), "{}", text(&output));
+
+    let output = fixture.run(&["--approve=everything"]);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(
+        text(&output).contains("--approve=everything: unknown kind of approval"),
+        "{}",
+        text(&output)
+    );
+}

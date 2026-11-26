@@ -174,7 +174,7 @@ const reformatted = formatted.stdout?.split("\n").filter(Boolean) ?? [];
 console.log(`Prettier reformatted ${reformatted.length} files`);
 ```
 
-A command that exits with an error fails the step, unless you pass `{ allowFailure: true }` and check `exitCode` yourself. A dry run skips shell steps, so `stdout` can be missing there. In an interactive run, the CLI asks before running each command.
+A command that exits with an error fails the step, unless you pass `{ allowFailure: true }` and check `exitCode` yourself. A dry run skips shell steps, so `stdout` can be missing there. In an interactive run, the CLI asks before running each command; an unattended run (`--no-interactive`, CI) of your own workflow runs them, and one of a registry package only with `--approve`.
 
 ## 4. Add a decision and an approval
 

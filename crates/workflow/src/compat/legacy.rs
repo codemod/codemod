@@ -61,7 +61,14 @@ pub(crate) fn rewrite(workflow: &mut Workflow, bundle: &Path) -> Result<Rewrites
         let entry = normalize(&bundle.join(&js.js_file));
         let mut uses_metrics = false;
         js.capabilities = None;
-        for file in closure(&entry) {
+        let files = match closure(&entry, &bundle) {
+            Ok(files) => files,
+            Err(reason) => {
+                problems.push(reason);
+                continue;
+            }
+        };
+        for file in files {
             let Ok(text) = std::fs::read_to_string(&file) else {
                 continue;
             };
@@ -238,13 +245,25 @@ fn jssg_steps_mut(workflow: &mut Workflow) -> Vec<&mut UseJSAstGrep> {
 }
 
 /// The module and the package files it imports, relatively.
-fn closure(entry: &Path) -> Vec<PathBuf> {
+fn closure(entry: &Path, bundle: &Path) -> Result<Vec<PathBuf>, String> {
+    let root = bundle.canonicalize().map_err(|e| e.to_string())?;
     let mut seen = BTreeSet::new();
     let mut order = Vec::new();
     let mut queue = vec![entry.to_path_buf()];
     while let Some(file) = queue.pop() {
         if seen.len() > 500 || !seen.insert(file.clone()) {
             continue;
+        }
+        if file.exists()
+            && !file
+                .canonicalize()
+                .map_err(|e| e.to_string())?
+                .starts_with(&root)
+        {
+            return Err(format!(
+                "transform source leaves the workflow directory: {}",
+                file.display()
+            ));
         }
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
@@ -258,7 +277,7 @@ fn closure(entry: &Path) -> Vec<PathBuf> {
         );
         order.push(file);
     }
-    order
+    Ok(order)
 }
 
 fn imports_metrics(text: &str) -> bool {

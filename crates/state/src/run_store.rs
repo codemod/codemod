@@ -173,6 +173,12 @@ pub struct RunSettings {
     /// it yet. A resume checks then.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub check_uncommitted: bool,
+    /// The workflow is the person's own (a local file or directory they
+    /// named), not a package from a registry: an unattended run does what
+    /// its steps run and send without `--approve`. Recorded, so a resumed
+    /// run of a registry package does not become trusted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub trusted: bool,
 }
 
 /// How an execution of a run ended, as far as the record goes.
@@ -743,8 +749,25 @@ impl LocalStore {
         &self.root
     }
 
-    fn run_dir(&self, run_id: &str) -> PathBuf {
-        self.root.join(run_id)
+    fn run_dir(&self, run_id: &str) -> StoreResult<PathBuf> {
+        Self::validate_component(run_id)?;
+        let path = self.root.join(run_id);
+        if path.is_symlink() {
+            return Err(StoreError::NotFound(run_id.into()));
+        }
+        Ok(path)
+    }
+
+    fn validate_component(value: &str) -> StoreResult<()> {
+        if value.is_empty()
+            || value.starts_with('.')
+            || value.ends_with('.')
+            || value.contains(['/', '\\', ':'])
+            || value.chars().any(char::is_control)
+        {
+            return Err(StoreError::NotFound(value.into()));
+        }
+        Ok(())
     }
 
     fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> StoreResult<Option<T>> {
@@ -785,21 +808,21 @@ impl LocalStore {
             path: path.to_path_buf(),
             source,
         };
-        static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let temporary = path.with_extension(format!("{}-{n}.tmp", std::process::id()));
-        let publish = || {
-            let mut file = fs::File::create(&temporary)?;
-            file.write_all(bytes)?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temporary, path)
-        };
-        if let Err(source) = publish() {
-            let _ = fs::remove_file(&temporary);
-            return Err(io(source));
-        }
+        let parent = path.parent().expect("run-store files have a directory");
+        let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(io)?;
+        temporary.write_all(bytes).map_err(io)?;
+        temporary.as_file().sync_all().map_err(io)?;
+        temporary.persist(path).map_err(|error| io(error.error))?;
         Self::sync_parent(path).map_err(io)
+    }
+
+    fn private_file_options() -> fs::OpenOptions {
+        let mut options = fs::OpenOptions::new();
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        // Windows does not need a Unix mode, but shares the rest of the options.
+        options.create(true);
+        options
     }
 
     fn sync_parent(path: &Path) -> std::io::Result<()> {
@@ -824,7 +847,11 @@ impl LocalStore {
         if let Some(parent) = path.parent() {
             Self::create_dir_durable(parent)?;
         }
-        match fs::create_dir(path) {
+        let mut dirs = fs::DirBuilder::new();
+        dirs.recursive(false);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
+        match dirs.create(path) {
             Ok(()) => Self::sync_parent(path),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {
                 Ok(())
@@ -873,8 +900,7 @@ impl LocalStore {
     /// append-only access, so truncating a crash tail also works on Windows.
     fn open_append_log(path: &Path) -> std::io::Result<fs::File> {
         use std::io::{Seek as _, SeekFrom};
-        let mut file = fs::OpenOptions::new()
-            .create(true)
+        let mut file = Self::private_file_options()
             .truncate(false)
             .read(true)
             .write(true)
@@ -886,13 +912,12 @@ impl LocalStore {
 
     /// The run's lock file, opened; `None` when the run does not exist.
     fn lock_file(&self, run_id: &str) -> StoreResult<Option<(PathBuf, fs::File)>> {
-        let dir = self.run_dir(run_id);
+        let dir = self.run_dir(run_id)?;
         if !dir.join("run.json").exists() {
             return Ok(None);
         }
         let path = dir.join("lock");
-        match fs::OpenOptions::new()
-            .create(true)
+        match Self::private_file_options()
             .truncate(false)
             .write(true)
             .open(&path)
@@ -969,11 +994,11 @@ impl LocalStore {
 impl RunStore for LocalStore {
     fn put_run(&self, run: &RunRecord) -> StoreResult<()> {
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
-        Self::write_json(&self.run_dir(&run.id).join("run.json"), run)
+        Self::write_json(&self.run_dir(&run.id)?.join("run.json"), run)
     }
 
     fn get_run(&self, run_id: &str) -> StoreResult<Option<RunRecord>> {
-        Self::read_json(&self.run_dir(run_id).join("run.json"))
+        Self::read_json(&self.run_dir(run_id)?.join("run.json"))
     }
 
     fn list_runs(&self, limit: usize) -> StoreResult<Vec<RunRecord>> {
@@ -1043,7 +1068,7 @@ impl RunStore for LocalStore {
     fn put_step(&self, run_id: &str, step: &StepRecord) -> StoreResult<()> {
         use std::io::Write as _;
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = self.run_dir(run_id);
+        let dir = self.run_dir(run_id)?;
         let path = dir.join("steps.jsonl");
         let io = |source| StoreError::Io {
             path: path.clone(),
@@ -1069,7 +1094,7 @@ impl RunStore for LocalStore {
 
     fn load_steps(&self, run_id: &str) -> StoreResult<Vec<StepRecord>> {
         use std::io::BufRead as _;
-        let dir = self.run_dir(run_id);
+        let dir = self.run_dir(run_id)?;
         let legacy: Option<Vec<StepRecord>> = Self::read_json(&dir.join("steps.json"))?;
         let mut steps: std::collections::BTreeMap<_, _> = legacy
             .unwrap_or_default()
@@ -1132,8 +1157,7 @@ impl RunStore for LocalStore {
             pid: Some(std::process::id()),
             target: target.to_path_buf(),
         };
-        let mut file = fs::OpenOptions::new()
-            .create(true)
+        let mut file = Self::private_file_options()
             .truncate(false)
             .read(true)
             .write(true)
@@ -1183,15 +1207,14 @@ impl RunStore for LocalStore {
 
     #[allow(clippy::incompatible_msrv)]
     fn lock_run_state(&self, run_id: &str) -> StoreResult<Box<dyn RunLease>> {
-        let dir = self.run_dir(run_id);
+        let dir = self.run_dir(run_id)?;
         let path = dir.join("state.lock");
         let io = |source| StoreError::Io {
             path: path.clone(),
             source,
         };
         Self::create_dir_durable(&dir).map_err(io)?;
-        let file = fs::OpenOptions::new()
-            .create(true)
+        let file = Self::private_file_options()
             .truncate(false)
             .write(true)
             .open(&path)
@@ -1201,7 +1224,7 @@ impl RunStore for LocalStore {
     }
 
     fn request_cancel(&self, run_id: &str) -> StoreResult<()> {
-        let dir = self.run_dir(run_id);
+        let dir = self.run_dir(run_id)?;
         if !dir.join("run.json").exists() {
             return Err(StoreError::NotFound(run_id.to_string()));
         }
@@ -1210,11 +1233,11 @@ impl RunStore for LocalStore {
     }
 
     fn cancel_requested(&self, run_id: &str) -> StoreResult<bool> {
-        Ok(self.run_dir(run_id).join("cancel").exists())
+        Ok(self.run_dir(run_id)?.join("cancel").exists())
     }
 
     fn clear_cancel(&self, run_id: &str) -> StoreResult<()> {
-        let path = self.run_dir(run_id).join("cancel");
+        let path = self.run_dir(run_id)?.join("cancel");
         match fs::remove_file(&path) {
             Ok(()) => Self::sync_parent(&path).map_err(|source| StoreError::Io { path, source }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1223,7 +1246,7 @@ impl RunStore for LocalStore {
     }
 
     fn send_event(&self, run_id: &str, name: &str, data: &Value) -> StoreResult<()> {
-        let dir = self.run_dir(run_id);
+        let dir = self.run_dir(run_id)?;
         if !dir.join("run.json").exists() {
             return Err(StoreError::NotFound(run_id.to_string()));
         }
@@ -1232,13 +1255,16 @@ impl RunStore for LocalStore {
         static SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let sent = Utc::now().timestamp_nanos_opt().unwrap_or_default();
         let count = SENT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if !valid_event_name(name) {
+            return Err(StoreError::NotFound(name.into()));
+        }
         let file = format!("{name}@{sent:020}-{}-{count:06}.json", std::process::id());
         Self::write_json(&dir.join("events").join(file), data)
     }
 
     fn append_journal(&self, run_id: &str, line: &str) -> StoreResult<()> {
         use std::io::Write as _;
-        let dir = self.run_dir(run_id);
+        let dir = self.run_dir(run_id)?;
         if !dir.join("run.json").exists() {
             return Err(StoreError::NotFound(run_id.to_string()));
         }
@@ -1247,8 +1273,7 @@ impl RunStore for LocalStore {
             path: path.clone(),
             source,
         };
-        let mut file = fs::OpenOptions::new()
-            .create(true)
+        let mut file = Self::private_file_options()
             .append(true)
             .open(&path)
             .map_err(io)?;
@@ -1257,7 +1282,7 @@ impl RunStore for LocalStore {
 
     fn read_journal(&self, run_id: &str, cursor: u64) -> StoreResult<(Vec<String>, u64)> {
         use std::io::{Read as _, Seek as _};
-        let path = self.run_dir(run_id).join("journal.jsonl");
+        let path = self.run_dir(run_id)?.join("journal.jsonl");
         let io = |source| StoreError::Io {
             path: path.clone(),
             source,
@@ -1286,7 +1311,7 @@ impl RunStore for LocalStore {
     }
 
     fn take_event(&self, run_id: &str, name: &str) -> StoreResult<Option<Value>> {
-        let dir = self.run_dir(run_id).join("events");
+        let dir = self.run_dir(run_id)?.join("events");
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1441,6 +1466,17 @@ mod tests {
             store.append_journal("missing", "{}"),
             Err(StoreError::NotFound(_))
         ));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let run = store.run_dir("a").unwrap();
+            assert_eq!(run.metadata().unwrap().permissions().mode() & 0o077, 0);
+            for name in ["run.json", "steps.jsonl", "journal.jsonl"] {
+                let metadata = run.join(name).metadata().unwrap();
+                assert_eq!(metadata.permissions().mode() & 0o077, 0, "{name}");
+            }
+        }
 
         assert!(!store.is_held("a").unwrap());
         let lease = store.acquire("a").unwrap().expect("nothing holds the run");

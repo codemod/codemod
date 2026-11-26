@@ -13,6 +13,11 @@
 //!
 //! A read-only step does not run an agent that cannot be kept read-only:
 //! naming one fails the step, and it is not offered to pick.
+//!
+//! Before an agent starts, the run asks ([`Approval::Agent`]): the prompt is
+//! the package's, and an agent with full autonomy runs whatever commands it
+//! is told to. An unattended run refuses without `--approve`, as it does a
+//! `shell()` step.
 
 use std::path::{Path, PathBuf};
 
@@ -21,9 +26,9 @@ use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::{block_on, TaskContext, TaskError, TaskOutcome, TaskResult};
+use super::{block_on, not_approved, TaskContext, TaskError, TaskOutcome, TaskResult};
 use crate::events::Event;
-use crate::interaction::AgentChoice;
+use crate::interaction::{AgentChoice, Approval, Decision};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -102,6 +107,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             id: format!("agent:{step}"),
             step: Some(step),
             stop: Some(std::sync::Arc::clone(&task.cancel)),
+            trusted: run.trusted,
         };
         if let Some(choice) = run.interaction.pick_agent(&ask, &choices) {
             let agent = codemod_agents::find(&choice)
@@ -117,6 +123,37 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
 /// needs an agent that can be kept read-only.
 fn can_run(agent: &dyn Adapter, autonomy: Autonomy) -> bool {
     autonomy == Autonomy::Full || agent.read_only() != ReadOnly::Unsupported
+}
+
+/// Ask before an agent gets the step's prompt. `endpoint` is where the
+/// built-in agent sends it (and its API key).
+fn approve(
+    task: &TaskContext<'_>,
+    label: &str,
+    request: &Request,
+    autonomy: Autonomy,
+    endpoint: Option<&str>,
+) -> Result<(), TaskError> {
+    let approval = Approval::Agent {
+        agent: label.to_string(),
+        prompt: request.prompt.clone(),
+        autonomy: match autonomy {
+            Autonomy::Full => "full",
+            Autonomy::ReadOnly => "read-only",
+        }
+        .to_string(),
+        endpoint: endpoint.map(str::to_string),
+    };
+    match task.approve(&approval) {
+        Decision::Approved => Ok(()),
+        Decision::Denied => Err(TaskError::Failed(not_approved(
+            task,
+            &format!("running {label}"),
+        ))),
+        Decision::Deferred => Err(TaskError::AwaitingApproval(format!(
+            "approve running {label}"
+        ))),
+    }
 }
 
 fn launch(
@@ -139,6 +176,7 @@ fn launch(
             agent.executables().join(", ")
         ))
     })?;
+    approve(task, agent.label(), request, autonomy, None)?;
     let cwd = working_dir(&run.target);
     task.log(format!("running {}", agent.label()));
     let outcome = Run {
@@ -199,6 +237,13 @@ fn working_dir(target: &Path) -> PathBuf {
 }
 
 fn built_in(task: &TaskContext<'_>, request: &Request) -> TaskResult {
+    // The machine's key goes where the machine says (LLM_BASE_URL,
+    // LLM_PROVIDER), never where the workflow says.
+    if request.api_key.is_none() && (request.endpoint.is_some() || request.llm_protocol.is_some()) {
+        return Err(TaskError::Failed(
+            "the step sets the built-in agent's endpoint or llmProtocol without an apiKey: LLM_API_KEY is only sent to LLM_BASE_URL (or the provider's default). Set LLM_BASE_URL and LLM_PROVIDER for the run, or give the step its own apiKey".into(),
+        ));
+    }
     let Some(api_key) = request
         .api_key
         .clone()
@@ -218,6 +263,15 @@ fn built_in(task: &TaskContext<'_>, request: &Request) -> TaskResult {
         .clone()
         .or_else(|| std::env::var("LLM_BASE_URL").ok())
         .unwrap_or_else(|| default_endpoint(&protocol).into());
+    // The built-in agent has a shell tool and does what the model at
+    // `endpoint` says, and both the endpoint and the key may be the step's.
+    approve(
+        task,
+        "the built-in agent",
+        request,
+        Autonomy::Full,
+        Some(&endpoint),
+    )?;
     let result = block_on(execute_ai_step(ExecuteAiStepConfig {
         endpoint,
         api_key,

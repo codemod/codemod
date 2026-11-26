@@ -668,6 +668,17 @@ declare module "codemod/protocol" {
         title: string;
         branch: string;
     } | {
+        kind: "agent";
+        agent: string;
+        prompt: string;
+        autonomy: "full" | "read-only";
+        endpoint?: string;
+    } | {
+        kind: "http-request";
+        method: string;
+        url: string;
+        env?: string[];
+    } | {
         kind: "interrupted-step";
         label: string;
         position: number;

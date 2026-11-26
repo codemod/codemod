@@ -77,6 +77,7 @@ impl WriteGate {
                     id: approval.question_id(None),
                     step: None,
                     stop: Some(std::sync::Arc::clone(stop)),
+                    trusted: false,
                 };
                 match interaction.ask(&ask, &approval) {
                     Decision::Approved => Ok(()),

@@ -816,10 +816,24 @@ mod tests {
             let run = run_args(Cli::try_parse_from(&full).unwrap_or_else(|e| panic!("{e}")));
             assert_eq!(
                 format!("{run:?}").matches(": true").count(),
-                8,
-                "approve, managed_git, dry_run, no_interactive, allow_fs, allow_fetch, allow_child_process, allow_dirty: {run:?}"
+                7,
+                "managed_git, dry_run, no_interactive, allow_fs, allow_fetch, allow_child_process, allow_dirty: {run:?}"
             );
+            assert!(run.start.approve_all(), "{run:?}");
+            assert!(run.start.approve_kinds().unwrap().is_empty());
         }
+        // `--approve=<kinds>` gives some kinds of approval only; written with
+        // `=`, so a package after `--approve` is still the package.
+        let scoped = run_args(
+            Cli::try_parse_from(["codemod", "run", "--approve=shell,http", "@org/pkg"]).unwrap(),
+        );
+        assert!(!scoped.start.approve_all());
+        assert_eq!(scoped.start.approve_kinds().unwrap(), ["shell", "http"]);
+        let before_package =
+            run_args(Cli::try_parse_from(["codemod", "run", "--approve", "@org/pkg"]).unwrap());
+        assert_eq!(before_package.package, "@org/pkg");
+        assert!(before_package.start.approve_all());
+        {}
     }
 
     #[test]

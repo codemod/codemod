@@ -95,6 +95,7 @@ impl TaskContext<'_> {
             id: approval.question_id(Some(&step)),
             step: Some(step),
             stop: Some(Arc::clone(&self.cancel)),
+            trusted: self.run.trusted,
         };
         let decision = self.run.interaction.ask(&ask, approval);
         if decision == Decision::Deferred {
@@ -308,6 +309,35 @@ impl Globs {
             Self::One(glob) => vec![glob],
             Self::Many(globs) => globs,
         }
+    }
+}
+
+/// What a step says when `what` ("the shell command") was not approved. An
+/// unattended run was not asked: it says how to allow it.
+pub(crate) fn not_approved(task: &TaskContext<'_>, what: &str) -> String {
+    if task.run.interaction.is_interactive() {
+        return format!("{what} was not approved");
+    }
+    let scope = match task_scope(what) {
+        Some(scope) => format!("--approve={scope} for steps like it, or --approve"),
+        None => "--approve".to_string(),
+    };
+    format!(
+        "{what} was not approved: step '{}' is a package's, and nobody can be asked in an unattended run. Read what the package runs, then pass {scope} for everything it runs and sends (shell, agent, http and pull request steps)",
+        task.label
+    )
+}
+
+/// The `--approve=<scope>` of what a step asked to do.
+fn task_scope(what: &str) -> Option<&'static str> {
+    if what.starts_with("the shell command") {
+        Some("shell")
+    } else if what.starts_with("the request") {
+        Some("http")
+    } else if what.starts_with("running") {
+        Some("agent")
+    } else {
+        None
     }
 }
 

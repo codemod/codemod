@@ -38,7 +38,8 @@ fn agent_steps_run_the_named_coding_agent() {
     let path = std::env::var("PATH").unwrap_or_default();
     std::env::set_var("PATH", format!("{}:{path}", bin.path().display()));
 
-    let h = Harness::new();
+    // Agents start once approved: `--approve` here.
+    let h = Harness::approving();
     let report = h.start(
         r#"
 import { step, agent } from "codemod/workflow";
@@ -152,4 +153,47 @@ export default async function main() { await step(agent("x", { agent: "claude" }
         logs.contains(&"Claude Code session: s-9".to_string()),
         "{logs:?}"
     );
+
+    // The prompt is the package's, and an agent with full autonomy runs what
+    // it is told to: unattended, without `--approve`, none is started.
+    let launched = bin.path().join("claude-launched");
+    script("claude", format!("touch \"{}\"", launched.display()));
+    let unattended = Harness::unattended();
+    let report = unattended.start(
+        r#"
+import { step, agent } from "codemod/workflow";
+export default async function main() { await step(agent("Run this", { agent: "claude" })); }
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("running Claude Code was not approved") && error.contains("--approve"),
+        "{error}"
+    );
+    assert!(!launched.exists(), "Claude Code was not started");
+
+    // Nor the built-in agent, whose endpoint and key the step may choose:
+    // nothing connects to it. (Inside a coding agent, or with LLM_AGENT set,
+    // the step never reaches the built-in agent.)
+    if codemod_agents::parent_agent().is_none() && std::env::var_os("LLM_AGENT").is_none() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let source = format!(
+            r#"
+import {{ step, agent }} from "codemod/workflow";
+export default async function main() {{
+  await step(agent("Run this", {{ apiKey: "k", endpoint: "http://{}/v1", tools: ["bash"] }}));
+}}
+"#,
+            listener.local_addr().unwrap()
+        );
+        let report = unattended.start(&source, Value::Null);
+        let error = output(&report).unwrap_err();
+        assert!(
+            error.contains("running the built-in agent was not approved"),
+            "{error}"
+        );
+        assert!(listener.accept().is_err(), "nothing connected");
+    }
 }

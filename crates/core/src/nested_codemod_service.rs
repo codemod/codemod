@@ -630,11 +630,12 @@ mod tests {
         let package_name = path.strip_prefix("/api/v1/registry/packages/")?;
 
         if method == "GET" && !package_name.contains("/download/") {
-            packages.get(package_name)?;
+            let package = packages.get(package_name)?;
             return Some((
                 "200 OK",
                 "application/json",
-                package_info_response(package_name).into_bytes(),
+                package_info_response(package_name, &package_archive(&package.workflow))
+                    .into_bytes(),
             ));
         }
 
@@ -659,7 +660,8 @@ mod tests {
         None
     }
 
-    fn package_info_response(package_name: &str) -> String {
+    fn package_info_response(package_name: &str, bytes: &[u8]) -> String {
+        use sha2::Digest;
         serde_json::json!({
             "id": format!("pkg_{package_name}"),
             "name": package_name,
@@ -670,8 +672,8 @@ mod tests {
                 "1.0.0": {
                     "version": "1.0.0",
                     "description": null,
-                    "checksum": "sha256:test",
-                    "size": 1
+                    "checksum": format!("sha256:{:x}", sha2::Sha256::digest(bytes)),
+                    "size": bytes.len()
                 }
             }
         })

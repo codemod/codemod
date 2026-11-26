@@ -499,10 +499,7 @@ nodes:
 #[test]
 fn a_manual_node_waits_for_approval() {
     let store = Arc::new(MemoryStore::default());
-    let h = Harness::with(
-        store.clone(),
-        Arc::new(NonInteractive { approve_all: false }),
-    );
+    let h = Harness::with(store.clone(), Arc::new(common::FixtureInteraction));
     h.write("a.txt", "a");
     let workflow = h.workflow_file(
         "workflow.yaml",

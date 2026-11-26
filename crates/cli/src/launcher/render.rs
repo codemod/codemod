@@ -608,6 +608,8 @@ fn approval_modal(frame: &mut Frame, approval: &Approval) {
             format!("Push '{branch}' and open \"{title}\"."),
         ),
         Approval::InterruptedStep { .. } => (" Interrupted step ", approval.prompt()),
+        Approval::Agent { .. } => (" Run a coding agent? ", approval.prompt()),
+        Approval::HttpRequest { .. } => (" Send an HTTP request? ", approval.prompt()),
         Approval::UncommittedChanges {
             path,
             not_a_repository,

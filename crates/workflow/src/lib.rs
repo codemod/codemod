@@ -58,6 +58,10 @@ pub use run::{Ending, RunError, TestPlan};
 /// Services tasks call into, supplied by the host application.
 #[derive(Default)]
 pub struct Services {
+    /// The workflow a run starts is the person's own (a local file or
+    /// directory), not a package from a registry: see
+    /// [`interaction::Ask::trusted`]. `false` unless the host says so.
+    pub trusted: bool,
     /// Runtime capabilities granted to transforms up front.
     pub capabilities: HashSet<LlrtSupportedModules>,
     /// Resolves `codemod(...)` packages from the registry.

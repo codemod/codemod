@@ -187,6 +187,10 @@ pub(crate) struct RunContext {
     /// For a nested codemod: the key of the step running it, which its own
     /// steps' keys start with. `None` for the run itself.
     pub key_prefix: Option<String>,
+    /// The workflow is the person's own, not a registry package's (see
+    /// [`crate::interaction::Ask::trusted`]). A nested codemod from a local
+    /// path has its parent's; one from the registry never has it.
+    pub trusted: bool,
     /// Why the run is stopping, if it is: shared with nested codemods.
     pub halt: Arc<RunHalt>,
     /// Keeps `cancel` following the store's cancel requests; `None` for
@@ -390,6 +394,7 @@ impl RunContext {
             assess: Default::default(),
             write_gate: self.write_gate.clone(),
             key_prefix,
+            trusted: self.trusted,
             halt: Arc::clone(&self.halt),
             _cancel_watch: None,
         }
@@ -754,6 +759,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             .builder
             .build();
     let packages = OxcResolver::new(run.bundle_dir.clone(), None)
+        .and_then(|resolver| resolver.data_within(&run.package_dir))
         .map_err(|e| RunError::Runtime(format!("cannot resolve imports: {e}")))?;
     runtime.set_loader(
         (

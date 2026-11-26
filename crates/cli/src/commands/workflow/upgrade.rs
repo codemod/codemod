@@ -189,13 +189,48 @@ fn find_packages(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(packages)
 }
 
+/// Check the nearest existing ancestor as well as the final component. A
+/// dangling link is not an unused filename.
+fn require_package_path(root: &Path, path: &Path) -> Result<()> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    if absolute
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        anyhow::bail!("upgrade path must not contain '..': {}", path.display());
+    }
+    for ancestor in absolute.ancestors() {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(_) if ancestor.canonicalize()?.starts_with(root) => return Ok(()),
+            Ok(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    anyhow::bail!("upgrade path leaves the package: {}", path.display())
+}
+
 /// Convert one package's workflow files and point its codemod.yaml at them.
 fn upgrade_package(package_dir: &Path, conversions: &[Conversion], args: &Command) -> Result<()> {
     // Translate everything first: a workflow that cannot be converted must
     // not leave the package half upgraded.
+    let root = package_dir.canonicalize()?;
+    require_package_path(&root, &package_dir.join("codemod.yaml"))?;
+    for conversion in conversions {
+        require_package_path(&root, &conversion.yaml)?;
+        require_package_path(&root, &conversion.typescript)?;
+    }
     let mut translated = Vec::new();
     for conversion in conversions {
-        translated.push(upgrade_file(&conversion.yaml).map_err(|e| anyhow!(e))?);
+        let translation = upgrade_file(&conversion.yaml).map_err(|e| anyhow!(e))?;
+        for (path, _) in &translation.files {
+            require_package_path(&root, path)?;
+        }
+        translated.push(translation);
     }
     if args.dry_run {
         for (conversion, translation) in conversions.iter().zip(&translated) {

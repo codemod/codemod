@@ -184,12 +184,18 @@ function install(real: RealGlobals): void {
   // ESM named imports of the built-in modules see the wrappers too.
   if (typeof syncBuiltinESMExports === "function") syncBuiltinESMExports();
 
-  // `process.env`: read, not changed (a step takes its variables).
+  // No ambient environment in callbacks. Outside them keep the normal
+  // process environment, with writes guarded for the rest of the run too.
   const env = process.env;
   const refuseEnv = () => refuse("process.env");
+  const inCallback = () => scope()?.site === "callback";
   try {
     process.env = new Proxy(env, {
-      get: (target, key) => target[key as string],
+      get: (target, key) => (inCallback() ? undefined : Reflect.get(target, key)),
+      has: (target, key) => !inCallback() && Reflect.has(target, key),
+      ownKeys: (target) => (inCallback() ? [] : Reflect.ownKeys(target)),
+      getOwnPropertyDescriptor: (target, key) =>
+        inCallback() ? undefined : Reflect.getOwnPropertyDescriptor(target, key),
       set(target, key, value) {
         refuseEnv();
         target[key as string] = value as string;
