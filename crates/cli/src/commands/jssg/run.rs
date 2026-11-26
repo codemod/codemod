@@ -24,6 +24,7 @@ use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
 use log::{debug, error, warn};
 use semantic_factory::LazySemanticProvider;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -228,6 +229,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     // Always collect diffs so we can offer report interactively
     let diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>> = Some(Arc::new(Mutex::new(Vec::new())));
     let execution_errors = Mutex::new(Vec::<String>::new());
+    let recovered = AtomicUsize::new(0);
     let target_directory_for_report = target_directory.clone();
 
     // Every file's text goes through `pending`, so a file changed by several
@@ -339,8 +341,14 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
             let outcome = match result {
                 Ok(CodemodOutput {
-                    primary, secondary, ..
+                    primary,
+                    secondary,
+                    recovered_syntax,
+                    ..
                 }) => {
+                    if recovered_syntax {
+                        recovered.fetch_add(1, Ordering::Relaxed);
+                    }
                     let mut file_renames = Vec::new();
                     if let ExecutionResult::Modified(modified) = primary {
                         taken.set(modified.content);
@@ -406,6 +414,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     // the run failed.
     if let Err(error) = executed {
         anyhow::bail!("{error}");
+    }
+    let recovered = recovered.load(Ordering::Relaxed);
+    if recovered > 0 {
+        eprintln!("{recovered} files had syntax errors; transformed with error recovery");
     }
 
     // Every file is done: apply what is left (everything, in a dry run).

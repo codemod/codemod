@@ -7,6 +7,7 @@ use semantic_factory::LazySemanticProvider;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
@@ -264,6 +265,8 @@ async fn handler_impl(args: &Command) -> Result<()> {
     let case_hook = data_case_hook(shared_data.clone(), args.update_snapshots);
     let semantic_provider: Option<Arc<dyn SemanticProvider>> =
         Some(Arc::new(LazySemanticProvider::file_scope()));
+    let recovered = Arc::new(AtomicUsize::new(0));
+    let recovered_for_test = Arc::clone(&recovered);
     let execution_fn = Box::new(
         move |request: ExecutionRequest, capabilities: Option<HashSet<LlrtSupportedModules>>| {
             let codemod_path = codemod_path_clone.clone();
@@ -279,6 +282,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
             let semantic_provider = semantic_provider.clone();
             let shared_data = shared_data.clone();
             let runtime_event_output = runtime_event_output.clone();
+            let recovered = Arc::clone(&recovered_for_test);
 
             Box::pin(async move {
                 let logical_input_path = logical_input_path.unwrap_or_else(|| input_path.clone());
@@ -394,6 +398,9 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     execute_codemod_with_quickjs(options)
                         .await
                         .map(|output: CodemodOutput| {
+                            if output.recovered_syntax {
+                                recovered.fetch_add(1, Ordering::Relaxed);
+                            }
                             data = output.data;
                             map_execution_result(output.primary, input_code)
                         })
@@ -433,6 +440,10 @@ async fn handler_impl(args: &Command) -> Result<()> {
         )
         .await?;
 
+    let recovered = recovered.load(Ordering::Relaxed);
+    if recovered > 0 {
+        eprintln!("{recovered} files had syntax errors; transformed with error recovery");
+    }
     if !summary.is_success() {
         std::process::exit(1);
     }

@@ -288,12 +288,25 @@ fn a_missing_legacy_transform_dependency_fails_the_step_and_counts_the_file() {
 }
 
 #[test]
-fn a_legacy_transform_does_not_treat_malformed_input_as_a_noop() {
+fn a_legacy_transform_rewrites_a_target_with_syntax_errors() {
     let fixture = Fixture::new();
-    fixture.target_file("src/bad.js", "foo({;\n");
+    fixture.target_file("src/bad.js", "var a = 1;\nfoo({;\n");
+    fixture.target_file("src/also-bad.js", "var b = 2;\nfoo({;\n");
     fixture.package_file("workflow.yaml", &YAML.replace("**/*.ts", "**/*.js"));
-    assert_parse_failure(&fixture, "bad.js");
-    assert_eq!(fixture.read("src/bad.js"), "foo({;\n");
+    let output = fixture.run(&["--format", "jsonl"]);
+    let shown = text(&output);
+    assert!(output.status.success(), "{shown}");
+    let summary: Vec<_> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|event| event["event"] == "step_log")
+        .filter(|event| {
+            event["line"] == "2 files had syntax errors; transformed with error recovery"
+        })
+        .collect();
+    assert_eq!(summary.len(), 1, "{shown}");
+    assert_eq!(fixture.read("src/bad.js"), "let a = 1;\nfoo({;\n");
+    assert_eq!(fixture.read("src/also-bad.js"), "let b = 2;\nfoo({;\n");
 }
 
 #[test]
@@ -464,9 +477,9 @@ fn an_unsupported_legacy_fs_operation_points_to_v1_without_running_it() {
     fixture.package_file(
         "scripts/codemod.ts",
         r#"
-import { mkdirSync } from "node:fs";
+import { unlinkSync } from "node:fs";
 export default function transform(root) {
-  if (root.root().text().startsWith("var")) mkdirSync("extra");
+  if (root.root().text().startsWith("var")) unlinkSync("extra");
   return null;
 }
 "#,
@@ -484,7 +497,7 @@ export default function transform(root) {
     let message = text(&output);
     assert_eq!(output.status.code(), Some(2), "{message}");
     assert!(
-        message.contains("fs.mkdirSync is not available in workflow callbacks"),
+        message.contains("fs.unlinkSync is not available in workflow callbacks"),
         "{message}"
     );
     assert_eq!(message.matches("codemod run --v1").count(), 1, "{message}");

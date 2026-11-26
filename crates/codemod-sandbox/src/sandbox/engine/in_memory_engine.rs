@@ -488,6 +488,7 @@ where
         primary,
         secondary: vec![],
         data,
+        recovered_syntax: false,
     })
 }
 

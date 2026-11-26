@@ -1547,6 +1547,8 @@ export type FileEffect =
   | { op: "delete" };
 
 /** The `file` a `forEachFile` callback gets. */
+export const MARK_SYNTAX_RECOVERY = Symbol.for("codemod.markSyntaxRecovery");
+
 export interface WorkflowFile {
   readonly path: string;
   readonly text: string;
@@ -1564,9 +1566,10 @@ export function fileHandle(
   path: string,
   text: string,
   language?: string,
-): { file: WorkflowFile; effects: FileEffect[]; close(): void } {
+): { file: WorkflowFile; effects: FileEffect[]; recoveredSyntax(): boolean; close(): void } {
   const effects: FileEffect[] = [];
   let open = true;
+  let recoveredSyntax = false;
   const guard = (name: string) => {
     if (!open) throw new Error(`file.${name}() was called after the callback finished`);
   };
@@ -1574,6 +1577,10 @@ export function fileHandle(
     path,
     text,
     language,
+    [MARK_SYNTAX_RECOVERY]() {
+      guard("markSyntaxRecovery");
+      recoveredSyntax = true;
+    },
     write(next: string) {
       guard("write");
       if (typeof next !== "string") throw new TypeError("file.write(text) expects a string");
@@ -1594,6 +1601,7 @@ export function fileHandle(
   return {
     file,
     effects,
+    recoveredSyntax: () => recoveredSyntax,
     close() {
       open = false;
     },

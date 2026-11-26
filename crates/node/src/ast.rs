@@ -111,12 +111,9 @@ impl SgRoot {
         self.inner.grep.source().to_string()
     }
 
-    #[napi(js_name = "_jssgParseError")]
-    pub fn jssg_parse_error(&self) -> Option<String> {
-        codemod_sandbox::utils::js_syntax::parse_error(
-            *self.inner.grep.lang(),
-            self.inner.grep.source(),
-        )
+    #[napi(js_name = "_jssgHasSyntaxErrors")]
+    pub fn jssg_has_syntax_errors(&self) -> bool {
+        self.inner.grep.root().get_inner_node().has_error()
     }
 
     #[napi]

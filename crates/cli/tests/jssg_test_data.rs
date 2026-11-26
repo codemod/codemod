@@ -44,21 +44,30 @@ fn output(run: &std::process::Output) -> String {
 }
 
 #[test]
-fn jssg_test_rejects_malformed_fixture_input_even_when_the_snapshot_matches() {
+fn jssg_test_rewrites_malformed_fixture_input_with_error_recovery() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     write(
         &root.join("scripts/codemod.ts"),
-        "export default () => null;",
+        r#"export default (root) => root.root().text().replace("OLD", "NEW");"#,
     );
-    write(&root.join("tests/basic/input.ts"), "foo({;\n");
-    write(&root.join("tests/basic/expected.ts"), "foo({;\n");
+    write(
+        &root.join("tests/basic/input.ts"),
+        "const OLD = 1;\nfoo({;\n",
+    );
+    write(
+        &root.join("tests/basic/expected.ts"),
+        "const NEW = 1;\nfoo({;\n",
+    );
     let run = jssg_test(root, &[]);
     let shown = output(&run);
-    assert_eq!(run.status.code(), Some(1), "{shown}");
-    assert!(
-        shown.contains("input.ts") && shown.contains("Cannot parse"),
-        "{shown}"
+    assert!(run.status.success(), "{shown}");
+    assert_eq!(
+        shown
+            .matches("1 files had syntax errors; transformed with error recovery")
+            .count(),
+        1,
+        "{shown}",
     );
 }
 

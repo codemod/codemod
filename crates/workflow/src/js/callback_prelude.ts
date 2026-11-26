@@ -26,7 +26,13 @@ export function __init(captures: string, language?: string | null): void {
 /** What became of one file. */
 type __FileOutcome =
   | { ok: false; error: string }
-  | { ok: true; effects: __FileEffect[]; output: unknown; hasOutput: boolean };
+  | {
+      ok: true;
+      effects: __FileEffect[];
+      output: unknown;
+      hasOutput: boolean;
+      recoveredSyntax: boolean;
+    };
 
 /** Run the callback for one file; never throws. */
 async function __one(path: string, text: string): Promise<__FileOutcome> {
@@ -45,6 +51,7 @@ async function __one(path: string, text: string): Promise<__FileOutcome> {
     effects: handle.effects,
     output: output === undefined ? null : output,
     hasOutput: output !== undefined,
+    recoveredSyntax: handle.recoveredSyntax(),
   };
 }
 

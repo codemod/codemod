@@ -308,6 +308,12 @@ fn directory(ctx: Ctx<'_>, path: String) -> Result<String> {
     })
 }
 
+fn mkdir(ctx: Ctx<'_>, path: String) -> Result<()> {
+    // Legacy mkdir only validates the target boundary. If a later write is
+    // recorded, its parent directories are created when the step commits.
+    with_files(&ctx, |files| files.resolve(&path).map(|_| ()))
+}
+
 async fn defer() {
     tokio::task::yield_now().await;
 }
@@ -340,6 +346,7 @@ impl ModuleDef for CompatFsHost {
         declare
             .declare("kind")?
             .declare("directory")?
+            .declare("mkdir")?
             .declare("defer")?;
         Ok(())
     }
@@ -348,6 +355,7 @@ impl ModuleDef for CompatFsHost {
         exports
             .export("kind", Func::from(kind))?
             .export("directory", Func::from(directory))?
+            .export("mkdir", Func::from(mkdir))?
             .export("defer", Func::from(Async(defer)))?;
         Ok(())
     }

@@ -263,6 +263,8 @@ Import `files` from `codemod/files` to read the target or stage a new file. Use 
 
 Paths are relative to the target, or absolute inside it. Paths that leave the target or traverse symlinks throw. Reads see pending changes, including edits and creations from earlier steps in a dry run. New files commit with the step's other edits, appear in the diff, and survive resume without rerunning a finished step.
 
+For 1.x YAML packages, legacy `fs.mkdirSync`, `fs.mkdir`, and `fs.promises.mkdir` validate that the path stays in the target but do not create empty directories. Writing a new file creates any needed parent directories when the step commits.
+
 ```ts workflow.ts
 import { files } from "codemod/files";
 import { step } from "codemod/workflow";

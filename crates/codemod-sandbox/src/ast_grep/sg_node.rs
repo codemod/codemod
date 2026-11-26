@@ -131,15 +131,11 @@ impl<'js> SgRootRjs<'js> {
         Ok(document_source(&self.inner.grep).into_owned())
     }
 
-    /// Internal JSSG compatibility check; ordinary AST queries may inspect
-    /// a recovered tree for incomplete input.
+    /// Internal JSSG compatibility diagnostic for a recovered target tree.
     #[cfg(feature = "native")]
-    #[qjs(rename = "_jssgParseError")]
-    pub fn jssg_parse_error(&self) -> Option<String> {
-        crate::utils::js_syntax::parse_error(
-            *self.inner.grep.lang(),
-            &document_source(&self.inner.grep),
-        )
+    #[qjs(rename = "_jssgHasSyntaxErrors")]
+    pub fn jssg_has_syntax_errors(&self) -> bool {
+        self.inner.grep.root().get_inner_node().has_error()
     }
 
     /// Write content to this file.

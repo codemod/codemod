@@ -1,5 +1,10 @@
 import { files } from "codemod/files";
-import { kind, directory, defer } from "codemod-internal:fs-compat-host";
+import {
+  kind,
+  directory,
+  defer,
+  mkdir as validateDirectory,
+} from "codemod-internal:fs-compat-host";
 import { Buffer } from "buffer";
 
 const encoding = (options) => (typeof options === "string" ? options : options?.encoding);
@@ -53,7 +58,7 @@ function unsupported(name) {
   };
 }
 
-export const mkdirSync = unsupported("mkdirSync");
+export const mkdirSync = validateDirectory;
 export const unlinkSync = unsupported("unlinkSync");
 
 const asyncCall =
@@ -68,7 +73,7 @@ export const promises = Object.freeze({
   readFile: asyncCall(readFileSync),
   writeFile: async (...args) => writeFileSync(...args),
   readdir: asyncCall(readdirSync),
-  mkdir: asyncCall(unsupported("mkdir")),
+  mkdir: asyncCall(mkdirSync),
   unlink: asyncCall(unsupported("unlink")),
   constants,
 });

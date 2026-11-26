@@ -607,6 +607,7 @@ async function forEachFile(
   const total = files.length;
   const every = Math.max(1, Math.floor(total / 100));
   let processed = 0;
+  let recovered = 0;
   const outputs: ({ output: Json } | undefined)[] = Array.from({ length: total });
   const failures: { path: string; error: string }[] = [];
   const effects: FileEffects[] = [];
@@ -615,7 +616,7 @@ async function forEachFile(
   const fold = task.reducer ? inOrderFold(task, outer, step, concurrency, created) : undefined;
 
   const one = async (index: number, [path, text]: [path: string, text: string]) => {
-    const { file, effects: done, close } = fileHandle(path, text, step.language);
+    const { file, effects: done, recoveredSyntax, close } = fileHandle(path, text, step.language);
     const targetFiles = run.targetFiles();
     try {
       step.failure = undefined;
@@ -634,6 +635,7 @@ async function forEachFile(
       }
       if (done.length) effects.push({ path, original: text, effects: done });
       created.push(...targetFiles.created());
+      if (recoveredSyntax()) recovered++;
     } catch (error) {
       failures.push({ path, error: describeError(error) });
     } finally {
@@ -685,6 +687,9 @@ async function forEachFile(
   const allFailures = [...failures, ...committed.failures].sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
+  if (recovered > 0) {
+    run.log(task.position, `${recovered} files had syntax errors; transformed with error recovery`);
+  }
   // As the CLI does: each file that failed, then its error.
   for (const { path, error } of allFailures) {
     run.log(task.position, path);

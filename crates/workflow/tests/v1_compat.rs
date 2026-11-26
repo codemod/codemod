@@ -355,9 +355,17 @@ export default async function transform(root: any, options: any) {
     h.bundle_file(
         "scripts/write.ts",
         r#"
-import { writeFileSync } from "fs";
-export default function transform() {
-  writeFileSync("other.txt", "x");
+import fs from "fs";
+import { mkdir } from "node:fs/promises";
+export default async function transform() {
+  fs.mkdirSync("empty");
+  if (fs.existsSync("empty")) throw new Error("mkdir changed the target");
+  await new Promise((resolve, reject) => fs.mkdir("with/callback", (error) => error ? reject(error) : resolve()));
+  await mkdir("with/promises", { recursive: true });
+  await fs.promises.mkdir("with/default");
+  try { await mkdir("../outside"); throw new Error("escaped the target"); }
+  catch (error) { if (!error.message.includes("inside the target")) throw error; }
+  fs.writeFileSync("with/promises/other.txt", "x");
   return null;
 }
 "#,
@@ -382,7 +390,7 @@ nodes:
     );
     output(&h.start_loaded(workflow, Value::Null, false)).unwrap();
     assert_eq!(h.read("src/a.ts"), "NEW\n");
-    assert_eq!(h.read("other.txt"), "x");
+    assert_eq!(h.read("with/promises/other.txt"), "x");
 
     // TypeScript workflows do not get the compatibility shim.
     let h = Harness::new();

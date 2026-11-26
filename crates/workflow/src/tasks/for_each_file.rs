@@ -78,6 +78,8 @@ pub(crate) struct FileOutcome {
     pub output: Value,
     #[serde(default)]
     pub has_output: bool,
+    #[serde(default)]
+    pub recovered_syntax: bool,
 }
 
 #[derive(Deserialize)]
@@ -119,6 +121,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> TaskResult {
     }
 
     let mut total = 0;
+    let mut recovered = 0;
     let mut outputs = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
     let mut planned = Vec::new();
@@ -132,6 +135,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> TaskResult {
             Ok(Done::Skipped) => {}
             Err(error) => failures.push((path, error)),
             Ok(Done::Ran { outcome, original }) => {
+                recovered += usize::from(outcome.recovered_syntax);
                 if outcome.has_output {
                     outputs.push(outcome.output);
                 }
@@ -161,6 +165,11 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> TaskResult {
     } else {
         None
     };
+    if recovered > 0 {
+        task.log(format!(
+            "{recovered} files had syntax errors; transformed with error recovery"
+        ));
+    }
     task.log_failures(&failures);
     if let Some((path, error)) = failures.first().filter(|_| failures.len() == total) {
         return Err(hard_file_failure(

@@ -21,6 +21,7 @@
 // are kept only if it succeeds.
 
 import { parse } from "codemod/ast-grep";
+import { MARK_SYNTAX_RECOVERY } from "codemod-internal:orchestrator";
 
 /** A jssg transform module, imported as a namespace. */
 export interface JssgModule {
@@ -48,6 +49,7 @@ interface CallbackFile {
   readonly language?: string;
   write(text: string): void;
   rename(path: string): void;
+  [MARK_SYNTAX_RECOVERY]?(): void;
 }
 
 export interface JssgOptions {
@@ -97,8 +99,6 @@ async function apply(
   }
   const language = options.language ?? file.language;
   const root: Root = language ? parse(file, { language }) : parse(file);
-  const parseError = root._jssgParseError();
-  if (parseError) throw new SyntaxError(`Cannot parse ${file.path}: ${parseError}`);
   const params = options.params ?? {};
   const transformOptions: Record<string, unknown> = {
     params,
@@ -137,6 +137,7 @@ async function apply(
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
+  if (root._jssgHasSyntaxErrors()) file[MARK_SYNTAX_RECOVERY]?.();
   const result: unknown = await (transform as (root: unknown, options: unknown) => unknown)(
     view,
     transformOptions,
@@ -227,6 +228,7 @@ function begin(file: CallbackFile, discard: boolean): CallbackFile {
     language: file.language,
     write: (next) => file.write(next),
     rename: (to) => file.rename(to),
+    [MARK_SYNTAX_RECOVERY]: () => file[MARK_SYNTAX_RECOVERY]?.(),
   };
 }
 

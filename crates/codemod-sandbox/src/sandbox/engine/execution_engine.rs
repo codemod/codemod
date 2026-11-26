@@ -168,6 +168,8 @@ pub struct CodemodOutput {
     pub secondary: Vec<FileChange>,
     /// The `data` the transform returned for this file, as JSON.
     pub data: Option<serde_json::Value>,
+    /// The transform ran on a target tree that contains syntax errors.
+    pub recovered_syntax: bool,
 }
 
 /// Shared accumulator for file changes produced by `jssgTransform`.
@@ -376,11 +378,6 @@ pub async fn execute_codemod_with_quickjs<'a, R>(
 where
     R: ModuleResolver + 'static,
 {
-    if let Some(error) = crate::utils::js_syntax::parse_error(options.language, options.content) {
-        return Err(ExecutionError::Configuration {
-            message: format!("Cannot parse {}: {error}", options.file_path.display()),
-        });
-    }
     let script_name = options
         .script_path
         .file_name()
@@ -678,7 +675,7 @@ where
                     .collect();
 
                 if ast_matches.is_empty() {
-                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![], data: None });
+                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![], data: None, recovered_syntax: false });
                 }
 
                 Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
@@ -731,7 +728,8 @@ where
                 .map(|guard| guard.clone())
                 .unwrap_or_default();
 
-            Ok(CodemodOutput { primary, secondary, data })
+            let recovered_syntax = sg_root_inner.grep.root().get_inner_node().has_error();
+            Ok(CodemodOutput { primary, secondary, data, recovered_syntax })
         };
         execution.await
     })
