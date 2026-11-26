@@ -76,6 +76,10 @@ impl Fixture {
     }
 
     fn run(&self, extra: &[&str]) -> Output {
+        self.run_with_threads("8", extra)
+    }
+
+    fn run_with_threads(&self, threads: &str, extra: &[&str]) -> Output {
         let script = self.package.path().join("codemod.ts");
         let mut args = vec![
             "jssg",
@@ -88,7 +92,7 @@ impl Fixture {
             "--allow-dirty",
             "--no-interactive",
             "--max-threads",
-            "8",
+            threads,
         ];
         args.extend_from_slice(extra);
         Command::new(env!("CARGO_BIN_EXE_codemod"))
@@ -117,6 +121,26 @@ fn touched_by_all() -> Vec<String> {
     lines.push("export {};".to_string());
     lines.sort();
     lines
+}
+
+#[test]
+fn jssg_run_drives_async_transforms_from_file_workers() {
+    let fixture = Fixture::new(&[]);
+    write(
+        fixture.package.path(),
+        "codemod.ts",
+        r#"
+export default async function transform(root: any) {
+  await new Promise(resolve => setTimeout(resolve, 1));
+  return root.root().text().replace("OLD", "NEW");
+}
+"#,
+    );
+    for threads in ["1", "8"] {
+        let output = fixture.run_with_threads(threads, &["--dry-run", "--no-color"]);
+        assert!(output.status.success(), "{}", text(&output));
+        assert_eq!(text(&output).matches("+const v").count(), FILES);
+    }
 }
 
 /// Many files changing one shared file with `jssgTransform` all keep their
