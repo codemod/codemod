@@ -34,9 +34,18 @@ use ty_python_semantic::{HasType, SemanticModel};
 /// snapshot: a file reads the same however often ty reads it, and a write
 /// the step makes is not seen until the next step.
 #[derive(Debug, Clone)]
-struct SnapshotSystem {
+pub(crate) struct SnapshotSystem {
     os: OsSystem,
     snapshot: Arc<FileSnapshot>,
+}
+
+impl SnapshotSystem {
+    pub(crate) fn new(root: &SystemPath, snapshot: Arc<FileSnapshot>) -> Self {
+        SnapshotSystem {
+            os: OsSystem::new(root),
+            snapshot,
+        }
+    }
 }
 
 impl System for SnapshotSystem {
@@ -176,10 +185,7 @@ impl TySession {
     fn build(&self) -> anyhow::Result<ProjectDatabase> {
         let root = SystemPathBuf::from_path_buf(self.root.clone())
             .map_err(|path| anyhow::anyhow!("not a UTF-8 path: {}", path.display()))?;
-        let system = SnapshotSystem {
-            os: OsSystem::new(&root),
-            snapshot: Arc::clone(&self.snapshot),
-        };
+        let system = SnapshotSystem::new(&root, Arc::clone(&self.snapshot));
         // The workspace's own pyproject.toml / ty.toml (Python version,
         // source roots); without one, defaults rooted at the workspace.
         let metadata = ProjectMetadata::discover(&root, &system)

@@ -1,9 +1,9 @@
 //! Database wrapper for ty_ide integration.
 //!
-//! This module provides functions to create and use ty_project's database
-//! for semantic analysis operations. The database is created per-operation
-//! to ensure thread safety, but file contents are cached to support cross-file
-//! analysis.
+//! This module provides ty_project's database for the definition and
+//! references questions: over the workspace on disk, read through the step's
+//! snapshot, or over an in-memory file system holding the files the run told
+//! the provider about.
 
 use ruff_db::files::{system_path_to_file, File, FileRootKind, Files};
 use ruff_db::system::{System, SystemPath, SystemPathBuf, TestSystem};
@@ -11,6 +11,7 @@ use ruff_db::vendored::VendoredFileSystem;
 use ruff_db::Db as SourceDb;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use ty_project::{Db, Project, ProjectMetadata};
 use ty_python_semantic::lint::{LintRegistry, RuleSelection};
 use ty_python_semantic::{
@@ -26,20 +27,18 @@ use ty_python_semantic::{
 pub struct PythonSemanticDb {
     storage: salsa::Storage<Self>,
     files: Files,
-    system: TestSystem,
+    system: Arc<dyn System>,
     vendored: VendoredFileSystem,
     project: Option<Project>,
 }
 
 impl PythonSemanticDb {
-    /// Create a new database for a workspace with given files.
+    /// A database for a workspace whose files are only `file_contents`.
     pub fn new_with_files(
         workspace_root: &Path,
         file_contents: &HashMap<PathBuf, String>,
     ) -> anyhow::Result<Self> {
         let root = SystemPathBuf::from(workspace_root.to_string_lossy().to_string());
-        let metadata = ProjectMetadata::new("project".into(), root.clone());
-
         let system = TestSystem::default();
 
         system
@@ -69,6 +68,14 @@ impl PythonSemanticDb {
                 .ok();
         }
 
+        Self::over(&root, Arc::new(system))
+    }
+
+    /// A database for the workspace at `root` as `system` shows it: every
+    /// Python file under `root` is part of the project.
+    pub fn over(root: &SystemPath, system: Arc<dyn System>) -> anyhow::Result<Self> {
+        let root = root.to_path_buf();
+        let metadata = ProjectMetadata::new("project".into(), root.clone());
         let mut db = Self {
             storage: salsa::Storage::new(None),
             system,
@@ -83,7 +90,7 @@ impl PythonSemanticDb {
         // Initialize the program
         let search_paths = SearchPathSettings::new(vec![root.clone()])
             .to_search_paths(db.system(), db.vendored())
-            .expect("Valid search path settings");
+            .map_err(|error| anyhow::anyhow!("search paths: {error}"))?;
 
         Program::from_settings(
             &db,
@@ -114,7 +121,7 @@ impl SourceDb for PythonSemanticDb {
     }
 
     fn system(&self) -> &dyn System {
-        &self.system
+        &*self.system
     }
 
     fn files(&self) -> &Files {

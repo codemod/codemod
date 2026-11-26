@@ -101,8 +101,9 @@ impl RuffSemanticProvider {
         let fs_root = filesystem::physical_path(&canonical_root);
         let snapshot = Arc::new(FileSnapshot::new());
         Self {
-            analyzer: AnalyzerKind::WorkspaceScope(WorkspaceScopeAnalyzer::new(
+            analyzer: AnalyzerKind::WorkspaceScope(WorkspaceScopeAnalyzer::over_snapshot(
                 canonical_root.clone(),
+                Arc::clone(&snapshot),
             )),
             fs_root,
             physical_root: Some(canonical_root.clone()),

@@ -4,17 +4,20 @@
 //! to Ruff's ty_ide crate, which provides battle-tested goto-definition
 //! and find-references functionality.
 
-use crate::db::create_db_with_files;
+use crate::db::{create_db_with_files, PythonSemanticDb};
 use crate::error::{PySemanticError, PySemanticResult};
+use crate::ty::SnapshotSystem;
 use language_core::{
-    ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences,
+    ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences, FileSnapshot,
     ReferencesResult, SymbolKind, SymbolLocation,
 };
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use ruff_db::source::source_text;
+use ruff_db::system::SystemPathBuf;
 use ruff_text_size::TextSize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use ty_ide::{goto_definition, goto_references};
 
 /// Convert ruff's TextRange to our ByteRange.
@@ -177,20 +180,39 @@ impl FileScopeAnalyzer {
 
 /// Workspace-scope analyzer using ty_ide.
 ///
-/// This analyzer stores file contents and creates a database with all
-/// known files for each operation, enabling cross-file analysis.
+/// One ty database per step, built on the first question and shared by every
+/// later one (clones share its caches), so a references query reads and
+/// indexes each file once per step instead of once per query. On a real file
+/// system it holds every Python file under the workspace root, read through
+/// the step's snapshot, so a file the run did not tell the provider about
+/// (the file a step is running on, say) is still searched. On a virtual file
+/// system it holds the files the run told the provider about.
 pub struct WorkspaceScopeAnalyzer {
     workspace_root: PathBuf,
-    /// Cached file contents for cross-file analysis.
+    /// The texts the run told the analyzer about, or a query passed in.
     file_contents: RwLock<HashMap<PathBuf, String>>,
+    /// The step's file texts, on a real file system.
+    snapshot: Option<Arc<FileSnapshot>>,
+    /// Built on first use; dropped when a text it may have read changes.
+    db: Mutex<Option<Box<PythonSemanticDb>>>,
 }
 
 impl WorkspaceScopeAnalyzer {
-    /// Create a new workspace-scope analyzer.
+    /// An analyzer over the files the run tells it about.
     pub fn new(workspace_root: PathBuf) -> Self {
         Self {
             workspace_root,
             file_contents: RwLock::new(HashMap::new()),
+            snapshot: None,
+            db: Mutex::new(None),
+        }
+    }
+
+    /// An analyzer over the workspace on disk, read through `snapshot`.
+    pub fn over_snapshot(workspace_root: PathBuf, snapshot: Arc<FileSnapshot>) -> Self {
+        Self {
+            snapshot: Some(snapshot),
+            ..Self::new(workspace_root)
         }
     }
 
@@ -203,16 +225,72 @@ impl WorkspaceScopeAnalyzer {
     /// Clear the cache.
     pub fn clear(&self) {
         self.file_contents.write().clear();
+        *self.db.lock() = None;
     }
 
     /// Process a file (store content for cross-file analysis).
     pub fn process_file(&self, path: &Path, content: &str) -> PySemanticResult<()> {
         // Canonicalize the path to handle symlinks (e.g., /var -> /private/var on macOS)
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        self.file_contents
-            .write()
-            .insert(canonical, content.to_string());
+        self.see(canonical, content);
         Ok(())
+    }
+
+    /// Record `content` as `path`'s text; a database that may have read
+    /// another text for it is dropped.
+    fn see(&self, path: PathBuf, content: &str) {
+        let changed = {
+            let mut contents = self.file_contents.write();
+            if contents.get(&path).is_some_and(|known| known == content) {
+                false
+            } else {
+                contents.insert(path.clone(), content.to_string());
+                true
+            }
+        };
+        if let Some(snapshot) = &self.snapshot {
+            snapshot.pin(&path, content);
+        }
+        if changed {
+            *self.db.lock() = None;
+        }
+    }
+
+    /// The step's database, with `path` at `content` (the text the question
+    /// is about).
+    fn db_for(&self, path: &Path, content: &str) -> PySemanticResult<PythonSemanticDb> {
+        let current = match &self.snapshot {
+            Some(snapshot) => snapshot
+                .get_or_read(path, || std::fs::read_to_string(path))
+                .ok()
+                .is_some_and(|text| &*text == content),
+            None => self
+                .file_contents
+                .read()
+                .get(path)
+                .is_some_and(|known| known == content),
+        };
+        if !current {
+            self.see(path.to_path_buf(), content);
+        }
+        let mut slot = self.db.lock();
+        if let Some(db) = slot.as_deref() {
+            return Ok(db.clone());
+        }
+        let db = match &self.snapshot {
+            Some(snapshot) => {
+                let root =
+                    SystemPathBuf::from_path_buf(self.workspace_root.clone()).map_err(|path| {
+                        PySemanticError::Other(format!("not a UTF-8 path: {}", path.display()))
+                    })?;
+                let system = SnapshotSystem::new(&root, Arc::clone(snapshot));
+                PythonSemanticDb::over(&root, Arc::new(system))
+            }
+            None => create_db_with_files(&self.workspace_root, &self.file_contents.read()),
+        }
+        .map_err(|e| PySemanticError::Other(e.to_string()))?;
+        *slot = Some(Box::new(db.clone()));
+        Ok(db)
     }
 
     /// Get definition for a symbol at the given range.
@@ -227,11 +305,7 @@ impl WorkspaceScopeAnalyzer {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         // add current file to contents
-        let mut file_contents = self.file_contents.read().clone();
-        file_contents.insert(canonical.clone(), content.to_string());
-
-        let db = create_db_with_files(&self.workspace_root, &file_contents)
-            .map_err(|e| PySemanticError::Other(e.to_string()))?;
+        let db = self.db_for(&canonical, content)?;
 
         let file = db
             .get_file(&canonical)
@@ -283,11 +357,7 @@ impl WorkspaceScopeAnalyzer {
         // Canonicalize the path to handle symlinks (e.g., /var -> /private/var on macOS)
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
-        let mut file_contents = self.file_contents.read().clone();
-        file_contents.insert(canonical.clone(), content.to_string());
-
-        let db = create_db_with_files(&self.workspace_root, &file_contents)
-            .map_err(|e| PySemanticError::Other(e.to_string()))?;
+        let db = self.db_for(&canonical, content)?;
 
         let file = db
             .get_file(&canonical)

@@ -17,6 +17,16 @@ jssg_test! {
     preprocess: ["main.py"],
 }
 
+// The run tells the provider about no file: references still reach the
+// importing module the step is running on.
+jssg_test! {
+    name: cross_file_with_nothing_preprocessed,
+    fixture: "python/cross_file",
+    codemod: "py_cross_file.js",
+    targets: ["main.py"],
+    scope: workspace,
+}
+
 jssg_test! {
     name: references_only_through_imports,
     fixture: "python/false_positive_references",

@@ -1,5 +1,6 @@
 // The definition and references lookups across Python modules, in
-// workspace scope, with the importing module processed first.
+// workspace scope: run with the importing module processed first, and run
+// with nothing processed first, where the workspace on disk still answers.
 import { symbols } from "codemod:ast-grep";
 import { equal, test } from "./spec.js";
 export { run as default } from "./spec.js";
@@ -22,8 +23,7 @@ test("definition of a call to an imported function lands on it in its module", (
 });
 
 // ty_ide counts the definition among the references. (Class references are
-// covered in py_one_file.js: each Python references query costs a few
-// hundred milliseconds.)
+// covered in py_one_file.js.)
 test("references of a function are its definition, import and calls in every module", (root) => {
   equal(referencesOf(definitionOf(root, "calculate(2, 3)")), [
     "main.py:calculate",
