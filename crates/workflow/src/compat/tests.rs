@@ -766,6 +766,40 @@ fn templates_used_many_times_over_are_walked_once() {
     );
 }
 
+#[test]
+fn a_container_runtime_is_refused_by_run_and_upgrade() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workflow.yaml");
+    std::fs::write(
+        &path,
+        r#"
+version: "1"
+nodes:
+  - id: where
+    name: Where
+    runtime:
+      type: docker
+      image: alpine
+    steps:
+      - name: uname
+        run: uname -s
+"#,
+    )
+    .unwrap();
+    for error in [
+        translate_file(&path).unwrap_err(),
+        upgrade_file(&path).unwrap_err(),
+    ] {
+        assert!(
+            error.contains(
+                "step 'Where' uses runtime: docker, which codemod 2.0 doesn't support yet"
+            ),
+            "{error}"
+        );
+        assert!(error.contains("npx codemod@1"), "{error}");
+    }
+}
+
 // ---- `codemod workflow upgrade`: plain callbacks ----
 
 /// `upgrade_file` on a package of `files`, checking the result builds.

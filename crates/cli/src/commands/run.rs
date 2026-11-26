@@ -15,7 +15,6 @@ use butterflow_core::registry::{RegistryError, RegistryPackageMetadata};
 use butterflow_core::report::{convert_diffs, ExecutionReport};
 use butterflow_core::structured_log::OutputFormat;
 use butterflow_core::utils::generate_execution_id;
-use butterflow_core::utils::parse_params;
 use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
 use console::{strip_ansi_codes, style};
@@ -190,11 +189,19 @@ pub async fn handler(
     let download_progress_bar = Some(download_progress_bar());
     let registry_client = create_registry_client(args.registry.clone())?;
     let registry_url = registry_client.config.default_registry.clone();
-    println!(
-        "{} 🔍 Resolving package from registry: {} ...",
-        style("[1/2]").bold().dim(),
-        registry_url
-    );
+    if butterflow_core::registry::is_local_source(&args.package) {
+        println!(
+            "{} 📁 Using local package: {}",
+            style("[1/2]").bold().dim(),
+            args.package
+        );
+    } else {
+        println!(
+            "{} 🔍 Resolving package from registry: {} ...",
+            style("[1/2]").bold().dim(),
+            registry_url
+        );
+    }
     let resolved_package = match registry_client
         .resolve_package(
             &args.package,
@@ -274,8 +281,10 @@ pub async fn handler(
         return Err(error);
     }
 
-    let mut params = parse_params(args.params.as_deref().unwrap_or(&[]))
-        .map_err(|e| anyhow::anyhow!("Failed to parse parameters: {}", e))?;
+    let mut params = crate::commands::workflow::run::parse_workflow_params(
+        &workflow_path,
+        args.params.as_deref().unwrap_or(&[]),
+    )?;
 
     let dry_run_only_dependency = if resolved_package.dry_run_only {
         Some(args.package.clone())
@@ -533,9 +542,7 @@ fn select_workflow_for_run(
         return Ok((path, Some(entry.name)));
     }
 
-    let stdin_is_tty = io::stdin().is_terminal();
-    let stdout_is_tty = io::stdout().is_terminal();
-    if no_interactive || !stdin_is_tty || !stdout_is_tty {
+    if !crate::utils::interactive::is_interactive(no_interactive) || !io::stdout().is_terminal() {
         let entry = manifest.default_workflow()?;
         return Ok((package_dir.join(&entry.path), Some(entry.name)));
     }

@@ -55,10 +55,38 @@ pub struct Command {
     /// wrote (a run that already wrote is not checked again)
     #[arg(long)]
     allow_dirty: bool,
+
+    /// Removed in 2.0 (refused with what replaced it): approvals have question ids
+    #[arg(long = "tasks_ids", value_name = "TASK", hide = true, action = clap::ArgAction::Append)]
+    tasks_ids: Vec<String>,
+
+    /// Removed in 2.0 (refused with what replaced it): dry runs are not saved
+    #[arg(long, hide = true)]
+    dry_run: bool,
+}
+
+/// Why a 1.x flag `resume` no longer takes is refused, and what to use.
+fn removed_flag(args: &Command) -> Option<String> {
+    if !args.tasks_ids.is_empty() {
+        return Some(format!(
+            "--tasks_ids was removed in codemod 2.0. Approvals now have question ids: see them with `codemod workflow status --id {id}`, then resume with `--approve <question-id>` (or `--approve` to give every approval).",
+            id = args.id
+        ));
+    }
+    if args.dry_run {
+        return Some(
+            "--dry-run was removed from resume in codemod 2.0: a dry run is not saved, so there is nothing to resume. Start a new one with `codemod workflow run --dry-run`."
+                .to_string(),
+        );
+    }
+    None
 }
 
 /// Resume a failed, paused or waiting workflow run
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+    if let Some(message) = removed_flag(args) {
+        anyhow::bail!(message);
+    }
     let approve_all = args.trigger_all || args.approve.iter().any(|id| id == ALL);
     let approve_ids = args
         .approve

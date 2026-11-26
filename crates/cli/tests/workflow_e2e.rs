@@ -160,6 +160,80 @@ fn a_dry_run_changes_nothing() {
     let output = fixture.run(&["--dry-run"]);
     assert!(output.status.success(), "{}", text(&output));
     assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
+    // It is not saved, so no run id to look up.
+    assert!(
+        text(&output).contains("Dry run (not saved)"),
+        "{}",
+        text(&output)
+    );
+    assert!(!text(&output).contains("Run "), "{}", text(&output));
+}
+
+#[test]
+fn a_container_runtime_is_refused_before_anything_runs() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: where
+    name: Where
+    runtime:
+      type: docker
+      image: alpine
+    steps:
+      - name: Touch
+        run: touch ran.txt
+"#,
+    );
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("step 'Where' uses runtime: docker")
+            && text(&output).contains("npx codemod@1"),
+        "{}",
+        text(&output)
+    );
+    assert!(!fixture.target.path().join("ran.txt").exists());
+
+    let package = fixture.package.path().to_str().unwrap();
+    let output = fixture.codemod(&["workflow", "upgrade", package]);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(!fixture.package.path().join("workflow.ts").exists());
+}
+
+#[test]
+fn a_param_declared_as_string_arrives_as_text() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import type { WorkflowContext } from "codemod/workflow";
+interface Params {
+  version: string;
+  count?: number;
+}
+export default async function main({ params }: WorkflowContext<Params>) {
+  return { version: params.version, count: params.count, extra: params.extra };
+}
+"#,
+    );
+    let output = fixture.run(&[
+        "--format",
+        "jsonl",
+        "--param",
+        "version=4",
+        "--param",
+        "count=4",
+        "--param",
+        "extra=true",
+    ]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        run_finished(&output)["output"],
+        serde_json::json!({ "version": "4", "count": 4, "extra": true })
+    );
 }
 
 #[test]
@@ -361,6 +435,45 @@ fn codemod_run_where_some_files_failed_exits_2() {
         "{}",
         text(&output)
     );
+    // A local directory is not looked up in the registry.
+    assert!(
+        text(&output).contains(&format!("Using local package: {package}"))
+            && !text(&output).contains("from registry"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn resume_refuses_removed_1x_flags_with_what_replaced_them() {
+    let fixture = Fixture::new();
+    let resume = |extra: &[&str]| {
+        let mut args = vec!["workflow", "resume", "--id", "some-run"];
+        args.extend_from_slice(extra);
+        fixture.codemod(&args)
+    };
+
+    let output = resume(&["--tasks_ids", "abc"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("--tasks_ids was removed")
+            && text(&output).contains("--approve <question-id>"),
+        "{}",
+        text(&output)
+    );
+
+    let output = resume(&["--dry-run"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(
+        text(&output).contains("workflow run --dry-run"),
+        "{}",
+        text(&output)
+    );
+
+    // The run remembers its workflow and target: these still parse.
+    let output = resume(&["-w", "workflow.yaml", "-t", "."]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(text(&output).contains("not found"), "{}", text(&output));
 }
 
 #[test]
@@ -848,6 +961,18 @@ export default async function main() {
     assert_eq!(output.status.code(), Some(1), "{}", text(&output));
     assert!(
         text(&output).contains("uncommitted changes") && text(&output).contains("--allow-dirty"),
+        "{}",
+        text(&output)
+    );
+    // Said once, on the step's line; the run's ending only names the step.
+    assert_eq!(
+        text(&output).matches("uncommitted changes").count(),
+        1,
+        "{}",
+        text(&output)
+    );
+    assert!(
+        text(&output).contains("The run failed: step 'Replace var' failed (see above)"),
         "{}",
         text(&output)
     );

@@ -419,8 +419,19 @@ fn dfs_cycle_detect<'a>(
     None
 }
 
-/// Parse parameters from command line arguments
+/// Parse parameters from command line arguments: each value is read as JSON
+/// when it parses as JSON, else kept as text.
 pub fn parse_params(params: &[String]) -> Result<HashMap<String, serde_json::Value>> {
+    parse_params_keeping_text(params, |_| false)
+}
+
+/// Like [`parse_params`], but the values of keys `is_text` accepts (the
+/// parameters a workflow declares as `string`) are always kept as text, so
+/// `version=4` gives `"4"`, not `4`.
+pub fn parse_params_keeping_text(
+    params: &[String],
+    is_text: impl Fn(&str) -> bool,
+) -> Result<HashMap<String, serde_json::Value>> {
     let mut result = HashMap::new();
 
     for param in params {
@@ -431,8 +442,12 @@ pub fn parse_params(params: &[String]) -> Result<HashMap<String, serde_json::Val
             )));
         }
 
-        let value = serde_json::from_str(parts[1])
-            .unwrap_or_else(|_| serde_json::Value::String(parts[1].to_string()));
+        let value = if is_text(parts[0]) {
+            serde_json::Value::String(parts[1].to_string())
+        } else {
+            serde_json::from_str(parts[1])
+                .unwrap_or_else(|_| serde_json::Value::String(parts[1].to_string()))
+        };
 
         result.insert(parts[0].to_string(), value);
     }

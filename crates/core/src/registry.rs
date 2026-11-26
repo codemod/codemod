@@ -222,8 +222,7 @@ impl RegistryClient {
         force_download: bool,
         progress_bar: Option<ProgressBarCallback>,
     ) -> Result<ResolvedPackage> {
-        // Check if it's a local path
-        if source.starts_with("./") || source.starts_with("../") || source.starts_with("/") {
+        if is_local_source(source) {
             return self.resolve_local_package(source);
         }
 
@@ -737,6 +736,12 @@ impl Default for RegistryClient {
     fn default() -> Self {
         Self::new(RegistryConfig::default(), None)
     }
+}
+
+/// Whether `source` names a package directory on this machine (`./x`,
+/// `../x`, `/x`) rather than a registry package.
+pub fn is_local_source(source: &str) -> bool {
+    source.starts_with("./") || source.starts_with("../") || source.starts_with('/')
 }
 
 pub fn parse_package_spec(package: &str) -> Result<PackageSpec> {

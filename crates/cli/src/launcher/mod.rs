@@ -3,9 +3,10 @@
 //! capabilities, coding agent and decision model; a run screen shows the
 //! steps live, their logs and diffs, and answers approvals in place.
 //!
-//! Only `workflow_exec` and the run commands call in here, and only when
-//! [`enabled`] says so: `--no-interactive`, `--format jsonl`, a pipe, `CI`
-//! or `CODEMOD_LAUNCHER=0` keep the plain output.
+//! Experimental and opt-in: only `CODEMOD_LAUNCHER=1` turns it on. Only
+//! `workflow_exec` and the run commands call in here, and only when
+//! [`enabled`] says so: without the opt-in, and with `--no-interactive`,
+//! `--format jsonl`, a pipe or `CI`, runs keep the plain output and prompts.
 
 mod render;
 mod setup;
@@ -46,15 +47,21 @@ use view::{Action, RunView, StepState};
 
 /// Whether runs with these flags show the launcher.
 pub fn enabled(flags: &RunFlags) -> bool {
-    let opted_out = std::env::var("CODEMOD_LAUNCHER")
-        .map(|value| matches!(value.trim(), "0" | "false" | "off" | "no"))
-        .unwrap_or(false);
-    flags.format == OutputFormat::Text
+    opted_in(std::env::var("CODEMOD_LAUNCHER").ok().as_deref())
+        && flags.format == OutputFormat::Text
         && flags.control.is_none()
-        && !opted_out
-        && std::env::var_os("CI").is_none()
         && crate::utils::interactive::is_interactive(flags.no_interactive)
         && std::io::stdout().is_terminal()
+}
+
+/// Whether `CODEMOD_LAUNCHER` asks for the launcher: it is off by default.
+fn opted_in(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "on" | "yes"
+        )
+    })
 }
 
 // ------------------------------------------------------------ terminal ---
@@ -601,4 +608,19 @@ fn print_record(view: &RunView) {
         lines.push(style("Done").green().bold().to_string());
     }
     eprintln!("{}", lines.join("\n"));
+}
+
+#[cfg(test)]
+mod opt_in_tests {
+    use super::opted_in;
+
+    #[test]
+    fn the_launcher_is_off_unless_asked_for() {
+        for value in ["1", "true", "ON", " yes "] {
+            assert!(opted_in(Some(value)), "{value}");
+        }
+        for value in [None, Some(""), Some("0"), Some("false"), Some("off")] {
+            assert!(!opted_in(value), "{value:?}");
+        }
+    }
 }

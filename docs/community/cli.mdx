@@ -63,7 +63,7 @@ For logged-in sessions only, the CLI may also send a separate PostHog `$set` wit
 Scarf), deduped locally, and skipped when you opt out.
 
 Disable all of this for a single invocation with `--disable-analytics`, or by setting
-`DISABLE_ANALYTICS=true` / `DISABLE_ANALYTICS=1` in the environment. The flag works on explicit
+`DISABLE_ANALYTICS=true` / `DISABLE_ANALYTICS=1` in the environment. `DO_NOT_TRACK=1` (any value but empty, `0` or `false`) does the same. The flag works on explicit
 commands and on implicit package runs such as `npx codemod @org/package --disable-analytics`.
 
 More detail: [Telemetry compliance](https://codemod.com/telemetry-compliance).
@@ -414,9 +414,9 @@ A registry run (`npx codemod <package-name>`, or `npx codemod run <package-name>
   The decision model `assess()` uses, e.g. `openai/gpt-6-luna`; a bare model name is System One's (`systemone/jev-latest`). It comes before the model saved in the launcher (`"decisionModel"` in the CLI's `config.json`) and the `DECISION_PROVIDER` / `DECISION_MODEL` variables; a `decision_model` in the package's `codemod.yaml`, or a model named in the `assess()` call, still comes first.
 </ResponseField>
 
-**The launcher.** In an interactive terminal, `workflow run`, `codemod <package>` and `workflow resume` open a terminal UI. A new run starts on a setup screen (target, dry run, params, capabilities, coding agent, decision model; your agent and model are saved for next time); then the screen shows the run's steps, logs and diffs, with approvals answered in place (`y` approves, `n` rejects, which ends the run, and `l` stops it there to resume later). After a dry run, `a` runs it for real. It does not open with `--no-interactive`, `--format jsonl`, in CI, when input or output is piped, or with `CODEMOD_LAUNCHER=0`; those runs print the plain output.
+**The launcher (experimental, opt-in).** By default a run in a terminal prints plain lines and asks with plain prompts. With `CODEMOD_LAUNCHER=1`, `workflow run`, `codemod <package>` and `workflow resume` open a full-screen terminal UI instead. A new run starts on a setup screen (target, dry run, params, capabilities, coding agent, decision model; your agent and model are saved for next time); then the screen shows the run's steps, logs and diffs, with approvals answered in place (`y` approves, `n` rejects, which ends the run, and `l` stops it there to resume later). After a dry run, `a` runs it for real. Even with `CODEMOD_LAUNCHER=1` it does not open with `--no-interactive`, `--format jsonl`, in CI, or when input or output is piped; those runs print the plain output.
 
-A run is unattended when you pass `--no-interactive`, and also when there is no terminal to ask on (in CI, or with input piped in). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something.
+A run is unattended when you pass `--no-interactive`, when there is no terminal to ask on (input piped in), and when the `CI` environment variable is set (to anything but empty, `0` or `false`). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something.
 
 <ResponseField name="--managed-git" type="boolean">
   Let `branch`, `commit` and `pullRequest` steps (or `branch_name`, `commit` and `pull_request` in `workflow.yaml`) change the repository. Without it, those steps are recorded as skipped.
@@ -460,6 +460,8 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 
 <ResponseField name="--param <KEY=VALUE>" type="string">
   Pass key=value pairs to your workflow. Parameters reach the workflow as `params` (and the jssg transforms of a `workflow.yaml` as `options.params`).
+
+  A value that parses as JSON arrives as that value (`strict=true` is `true`, `level=4` is `4`), and anything else as text. A parameter your workflow's `Params` type declares as `string` (or as string literals) always arrives as text: `version=4` is `"4"`.
 
   ```bash
   # Single parameter:
@@ -590,7 +592,7 @@ For `workflow.yaml`:
 | Matrix validation           | Every matrix has `values` or `from_state`        |
 | Translation                 | The workflow translates to TypeScript that builds |
 
-It also lists features the translation drops (for example `state.schema` or `runtime: docker`) and suggests `workflow upgrade`.
+It also lists features the translation drops (for example `state.schema`), refuses features 2.0 does not support yet (`runtime: docker`), and suggests `workflow upgrade`.
 
 <Info>
   Why validate?
@@ -950,7 +952,7 @@ Initialize a new Codemod package project.
 npx codemod init [PATH] [options]
 ```
 
-In interactive mode, `codemod init` prompts you to choose between a `jssg codemod`, `multi-step workflow`, or `agent skill codemod`.
+In interactive mode, `codemod init` prompts you to choose between a `jssg codemod`, `multi-step workflow`, or `agent skill codemod`. Without a terminal to ask on, or in CI, it behaves as `--no-interactive`: the values come from flags.
 
 An `ast-grep-js` or `hybrid` package keeps its workflow in `src/workflow.ts`, with its transform there as a [`forEachFile`](/community/workflows/reference#foreachfileselector-callback) callback that parses each file with `parse(file, { language })` and rewrites it. A `hybrid` package also has shell scripts in `src/scripts/`, which the workflow runs as ``shell`${import.meta.dirname}/scripts/setup.sh` ``, and ast-grep rules in `src/rules/`. Its tests are in `tests/workflow.test.ts`, which runs the workflow on each fixture in `tests/fixtures` with `node:test`; the `test` script runs them.
 
@@ -1148,8 +1150,12 @@ npx codemod unpublish <PACKAGE> [options]
   Show what would be removed without actually unpublishing.
 </ResponseField>
 
+<ResponseField name="--yes, -y" type="boolean">
+  Unpublish without asking for confirmation. Without a terminal to ask on (in CI, or with input piped in), `unpublish` refuses to run unless you pass it.
+</ResponseField>
+
 <Tip>
-  The CLI always prompts for confirmation when `--version` or `--force` is used. This interactive step cannot be bypassed programmatically.
+  In a terminal, the CLI asks for confirmation when `--version` or `--force` is used, unless you pass `--yes`.
 </Tip>
 
 <Accordion title="Examples">
@@ -1162,6 +1168,9 @@ npx codemod unpublish <PACKAGE> [options]
   
   # Remove all versions (will prompt)
   npx codemod unpublish my-codemod --force
+
+  # Remove a single version from a script or CI job (no prompt)
+  npx codemod unpublish my-codemod --version 0.1.0 --yes
   
   # Unpublish from a custom registry
   npx codemod unpublish my-codemod --force --registry https://registry.example.com
